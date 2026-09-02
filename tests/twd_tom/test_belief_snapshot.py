@@ -1,0 +1,233 @@
+from copy import deepcopy
+
+import pytest
+
+from werewolf.agents.llm_agent import LLMAgent
+from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
+from werewolf.models.twd_tom.belief_snapshot import (
+    PlayingAgentBeliefSnapshotCollector,
+)
+from werewolf.models.twd_tom.samples import freeze_public_snapshot
+from tests.twd_tom.public_event_fixtures import make_speech_annotations
+from werewolf.speech.private_belief_perceiver import (
+    PlayingAgentBeliefReporter,
+)
+from werewolf.trajectory import serialize_json_value
+
+
+class FakeAgent:
+    def __init__(self, backend_id):
+        self.backend_id = backend_id
+        self.messages = ["unchanged"]
+        self.memory = {"private": backend_id}
+        self.state = {"turn": 1}
+
+
+class FakeEnv:
+    def __init__(self):
+        self.private = {
+            player_id: {
+                "observer_id": player_id,
+                "identity": "Villager",
+                "game_log": [f"private-{player_id}"],
+                "current_act_idx": 3,
+                "phase": "1_day_speech_pk",
+            }
+            for player_id in range(1, 8)
+        }
+
+    def get_observation_for(self, player_id):
+        return deepcopy(self.private[player_id])
+
+    def get_twd_tom_hard_knowledge_for(self, player_id):
+        return [], [f"player{player_id}"]
+
+
+class FakeReporter:
+    def __init__(self, mutate=False):
+        self.calls = []
+        self.mutate = mutate
+
+    def report(self, **kwargs):
+        self.calls.append(deepcopy({
+            "observer_id": kwargs["observer_id"],
+            "observation": kwargs["observation"],
+            "backend_id": kwargs["agent_backend_id"],
+            "snapshot_id": id(kwargs["public_snapshot"]),
+        }))
+        if self.mutate:
+            kwargs["agent"].memory["changed"] = True
+        return {
+            "observer": kwargs["observer_id"],
+            "status": "ok",
+            "suspected_werewolves": [],
+            "known_werewolves": kwargs["known_werewolves"],
+            "known_non_werewolves": kwargs["known_non_werewolves"],
+            "error": None,
+            "agent_backend_id": kwargs["agent_backend_id"],
+        }
+
+
+def _snapshot(observers=(1, 3, 7)):
+    events = [
+        {
+            "event_idx": 0,
+            "event_type": "phase_change",
+            "phase": "1_day_speech_pk",
+        },
+        {
+            "event_idx": 1,
+            "event_type": "public_speech",
+            "speaker": "player7",
+            "raw_text": "earlier speech",
+        },
+        {
+            "event_idx": 2,
+            "event_type": "turn_start",
+            "speaker": "player3",
+        },
+    ]
+    return freeze_public_snapshot(
+        game_id="game_001",
+        step_idx=4,
+        phase="1_day_speech_pk",
+        speaker_id=3,
+        report_trigger="pre_public_speech_pk",
+        observer_ids=observers,
+        public_events=events,
+        speech_annotations=make_speech_annotations(
+            events,
+            [["player7", "oppose", "player3"]],
+        ),
+    )
+
+
+def test_all_observers_use_one_snapshot_and_only_their_private_view():
+    agents = [FakeAgent(f"backend_{i}") for i in range(1, 8)]
+    before = deepcopy([vars(agent) for agent in agents])
+    reporter = FakeReporter()
+    reports = PlayingAgentBeliefSnapshotCollector(reporter, agents).collect(
+        _snapshot(), env=FakeEnv()
+    )
+
+    assert set(reports) == {"player1", "player3", "player7"}
+    assert len({call["snapshot_id"] for call in reporter.calls}) == 1
+    for call in reporter.calls:
+        player_id = int(call["observer_id"][6:])
+        assert call["observation"]["game_log"] == [f"private-{player_id}"]
+        assert call["backend_id"] == f"backend_{player_id}"
+    assert [vars(agent) for agent in agents] == before
+
+
+def test_pre_collector_receives_same_sanitized_observation_as_gameplay():
+    env = WerewolfTextEnvV0(log_save_path=None)
+    env.reset(
+        roles=[
+            "Werewolf",
+            "Werewolf",
+            "Seer",
+            "Witch",
+            "Villager",
+            "Villager",
+            "Villager",
+        ]
+    )
+    env.step(("kill", 7))
+    env.step(("kill", 7))
+    env.step(("check", 1))
+    gameplay_observation, _, _, _ = env.step(("witch_pass", 0))
+    speaker_id = gameplay_observation["current_act_idx"]
+    snapshot = freeze_public_snapshot(
+        game_id="game_sanitized",
+        step_idx=0,
+        phase=gameplay_observation["phase"],
+        speaker_id=speaker_id,
+        report_trigger="pre_public_speech",
+        observer_ids=(speaker_id,),
+        public_events=env.public_events,
+        speech_annotations=(),
+    )
+    reporter = FakeReporter()
+    agents = [FakeAgent(f"backend_{i}") for i in range(1, 8)]
+
+    PlayingAgentBeliefSnapshotCollector(reporter, agents).collect(
+        snapshot,
+        env=env,
+    )
+
+    reporter_observation = reporter.calls[0]["observation"]
+    assert serialize_json_value(reporter_observation) == serialize_json_value(
+        gameplay_observation
+    )
+    assert all(
+        not hasattr(log, "viewer")
+        for log in reporter_observation["game_log"]
+    )
+
+
+def test_readonly_state_mutation_is_detected_and_not_written_as_success():
+    agents = [FakeAgent(f"backend_{i}") for i in range(1, 8)]
+    collector = PlayingAgentBeliefSnapshotCollector(FakeReporter(mutate=True), agents)
+    with pytest.raises(RuntimeError, match="mutated player1 agent state"):
+        collector.collect(_snapshot((1,)), env=FakeEnv())
+
+
+def test_reporter_mutates_only_detached_observation_and_context():
+    response = '{"suspected_werewolves":[]}'
+
+    class MutatingContextBackend:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, **kwargs):
+            self.calls.append(deepcopy(kwargs))
+            kwargs["messages"][0]["content"] = "mutated detached context"
+            kwargs["messages"].append({"role": "user", "content": "detached"})
+            return response
+
+    class MutatingDetachedObservationAgent(LLMAgent):
+        def _build_readonly_belief_context(self, observation):
+            observation["detached_probe"] = "mutated"
+            self.detached_probe = "mutated"
+            return super()._build_readonly_belief_context(observation)
+
+    backend = MutatingContextBackend()
+    agent = MutatingDetachedObservationAgent(
+        backend=backend,
+        model_name="fake-model",
+    )
+    agent.backend_id = "backend_1"
+    agent.notes = ["original memory"]
+    observation = {
+        "observer_id": 1,
+        "current_act_idx": 3,
+        "identity": "Villager",
+        "game_log": [],
+        "phase": "1_day_speech_pk",
+        "valid_action": [],
+    }
+    observation_before = deepcopy(observation)
+    snapshot = _snapshot((1,))
+
+    result = PlayingAgentBeliefReporter().report(
+        agent=agent,
+        observation=observation,
+        observer_id="player1",
+        public_snapshot=snapshot,
+        agent_backend_id="backend_1",
+        known_werewolves=[],
+        known_non_werewolves=["player1"],
+    )
+
+    assert result["status"] == "ok"
+    assert observation == observation_before
+    assert agent.notes == ["original memory"]
+    assert not hasattr(agent, "detached_probe")
+    assert snapshot == _snapshot((1,))
+    current_speaker_prompt = agent.format_observation(observation)
+    assert response not in current_speaker_prompt
+
+
+def test_snapshot_collector_requires_exactly_seven_playing_agents():
+    with pytest.raises(ValueError, match="exactly seven"):
+        PlayingAgentBeliefSnapshotCollector(FakeReporter(), [FakeAgent("x")])

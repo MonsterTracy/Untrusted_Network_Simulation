@@ -1,0 +1,297 @@
+"""Audit canonical tom-v2 belief data before dataset materialization."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import Counter
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from script.twd_tom.collect_canonical_trajectories import (
+    validate_canonical_belief_batch,
+)
+from werewolf.models.twd_tom.action_features import PublicEventFeatureBuilder
+from werewolf.models.twd_tom.dataset import TWDToMDataset
+from werewolf.models.twd_tom.public_events import (
+    completed_pre_speech_public_events,
+    structured_event_tokens,
+)
+from werewolf.models.twd_tom.samples import SAMPLE_SCHEMA_VERSION
+from werewolf.models.twd_tom.schema import LABEL_PROMPT_VERSION, LABEL_PROVENANCE
+from werewolf.trajectory import canonical_digest, canonical_json
+
+
+AUDIT_SCHEMA_VERSION = "classic7_canonical_belief_data_audit_v3"
+BELIEF_SNAPSHOTS_FILENAME = "belief_snapshots.jsonl"
+
+
+def _positive_integer(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                raise ValueError(f"blank JSONL line at {path}:{line_number}")
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"invalid JSON at {path}:{line_number}: {exc}"
+                ) from exc
+            if not isinstance(record, dict):
+                raise TypeError(
+                    f"JSONL record must be an object: {path}:{line_number}"
+                )
+            records.append(record)
+    if not records:
+        raise ValueError(f"canonical belief file cannot be empty: {path}")
+    return records
+
+
+def _write_json_new(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8", newline="") as handle:
+        handle.write(canonical_json(value) + "\n")
+
+
+def audit_canonical_belief_data(
+    *,
+    canonical_root: str | Path,
+    max_seq_len: int = 256,
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Fail closed on invalid labels and report sequence/support statistics."""
+
+    max_seq_len = _positive_integer(max_seq_len, field_name="max_seq_len")
+    canonical_root = Path(canonical_root).resolve()
+    verified_batch = validate_canonical_belief_batch(canonical_root)
+
+    records_by_game: dict[str, list[dict[str, Any]]] = {}
+    source_files: list[dict[str, Any]] = []
+    status_counts: Counter[str] = Counter()
+    support_size_counts: Counter[int] = Counter()
+    failed_reports: list[dict[str, Any]] = []
+
+    for verified_game in verified_batch["games"]:
+        path = canonical_root / verified_game["relative_path"]
+        records = _load_jsonl(path)
+        if len(records) != verified_game["belief_snapshot_count"]:
+            raise ValueError(
+                "canonical belief snapshot count differs from game summary: "
+                f"{verified_game['game_id']}"
+            )
+        game_ids = {record.get("game_id") for record in records}
+        if len(game_ids) != 1:
+            raise ValueError(
+                "one canonical belief file must contain exactly one game_id: "
+                f"{path}"
+            )
+        game_id = next(iter(game_ids))
+        if not isinstance(game_id, str) or not game_id.strip():
+            raise ValueError(f"canonical game_id must be non-empty text: {path}")
+        if game_id != verified_game["game_id"]:
+            raise ValueError("canonical belief file game_id differs from game summary")
+        if game_id in records_by_game:
+            raise ValueError(f"duplicate canonical game_id: {game_id}")
+        step_indices = [record.get("step_idx") for record in records]
+        if any(
+            isinstance(step, bool) or not isinstance(step, int)
+            for step in step_indices
+        ):
+            raise TypeError(f"every canonical step_idx must be an integer: {path}")
+        if len(step_indices) != len(set(step_indices)):
+            raise ValueError(f"duplicate canonical (game_id, step_idx): {game_id}")
+        records.sort(key=lambda record: record["step_idx"])
+
+        for record in records:
+            if record.get("schema_version") != SAMPLE_SCHEMA_VERSION:
+                raise ValueError("canonical raw sample schema version mismatch")
+            if record.get("label_prompt_version") != LABEL_PROMPT_VERSION:
+                raise ValueError("canonical label prompt version mismatch")
+            if record.get("label_provenance") != LABEL_PROVENANCE:
+                raise ValueError("canonical label provenance mismatch")
+            observer_ids = record.get("observer_ids")
+            statuses = record.get("belief_status")
+            suspicions = record.get("suspected_werewolves")
+            errors = record.get("belief_errors")
+            if not isinstance(observer_ids, list):
+                raise TypeError("canonical observer_ids must be a list")
+            if not all(
+                isinstance(value, Mapping)
+                for value in (statuses, suspicions, errors)
+            ):
+                raise TypeError("canonical belief row fields must be mappings")
+            subjects = {f"player{observer_id}" for observer_id in observer_ids}
+            if any(set(value) != subjects for value in (statuses, suspicions, errors)):
+                raise ValueError("canonical belief row observer sets differ")
+            for subject in sorted(subjects):
+                status = statuses[subject]
+                status_counts[str(status)] += 1
+                if status != "ok":
+                    failed_reports.append(
+                        {
+                            "game_id": game_id,
+                            "step_idx": record["step_idx"],
+                            "observer": subject,
+                            "status": status,
+                            "error": errors[subject],
+                        }
+                    )
+                    continue
+                if errors[subject] is not None:
+                    raise ValueError("status=ok belief report must have a null error")
+                suspected = suspicions[subject]
+                if not isinstance(suspected, list):
+                    raise TypeError(
+                        "status=ok suspected_werewolves row must be a list"
+                    )
+                support_size_counts[len(suspected)] += 1
+        records_by_game[game_id] = records
+        source_files.append(
+            {
+                "game_id": game_id,
+                "relative_path": verified_game["relative_path"],
+                "sha256": verified_game["belief_snapshots_sha256"],
+                "snapshot_count": len(records),
+            }
+        )
+
+    if failed_reports:
+        raise ValueError(
+            "canonical audit requires status=ok for every alive observer; "
+            f"failed_report_count={len(failed_reports)} first={failed_reports[0]}"
+        )
+
+    all_records = [
+        record
+        for game_id in sorted(records_by_game)
+        for record in records_by_game[game_id]
+    ]
+    collector_raw_token_counts = [
+        len(
+            structured_event_tokens(
+                record.get("public_events"),
+                record.get("speech_annotations"),
+            )
+        )
+        for record in all_records
+    ]
+    model_input_token_counts = [
+        len(
+            structured_event_tokens(
+                completed_pre_speech_public_events(
+                    record.get("public_events"),
+                    speaker_id=record.get("speaker_id"),
+                ),
+                record.get("speech_annotations"),
+            )
+        )
+        for record in all_records
+    ]
+    terminal_removed_token_counts = [
+        collector_raw - model_input
+        for collector_raw, model_input in zip(
+            collector_raw_token_counts,
+            model_input_token_counts,
+        )
+    ]
+    if any(count != 1 for count in terminal_removed_token_counts):
+        raise RuntimeError(
+            "strict PRE model input must remove exactly one terminal "
+            "turn_start token per sample"
+        )
+    feature_builder = PublicEventFeatureBuilder(max_seq_len=max_seq_len)
+    dataset = TWDToMDataset(all_records, feature_builder=feature_builder)
+    retained_token_counts = [
+        int(dataset[index]["attention_mask"].sum().item())
+        for index in range(len(dataset))
+    ]
+    length_truncated_sample_count = sum(
+        retained < model_input
+        for retained, model_input in zip(
+            retained_token_counts,
+            model_input_token_counts,
+        )
+    )
+    sample_count = len(all_records)
+    observer_report_count = sum(status_counts.values())
+    report = {
+        "schema_version": AUDIT_SCHEMA_VERSION,
+        "status": "PASS",
+        "canonical_root": str(canonical_root),
+        "canonical_batch_summary_digest": verified_batch[
+            "batch_summary_digest"
+        ],
+        "canonical_batch_summary_sha256": verified_batch[
+            "batch_summary_sha256"
+        ],
+        "raw_schema_version": SAMPLE_SCHEMA_VERSION,
+        "label_prompt_version": LABEL_PROMPT_VERSION,
+        "label_provenance": LABEL_PROVENANCE,
+        "max_seq_len": max_seq_len,
+        "game_count": len(records_by_game),
+        "sample_count": sample_count,
+        "observer_report_count": observer_report_count,
+        "status_counts": dict(sorted(status_counts.items())),
+        "suspicion_support_size_counts": {
+            str(size): count
+            for size, count in sorted(support_size_counts.items())
+        },
+        "collector_raw_structured_token_count": {
+            "min": min(collector_raw_token_counts),
+            "max": max(collector_raw_token_counts),
+            "mean": sum(collector_raw_token_counts) / sample_count,
+        },
+        "model_input_structured_token_count": {
+            "min": min(model_input_token_counts),
+            "max": max(model_input_token_counts),
+            "mean": sum(model_input_token_counts) / sample_count,
+        },
+        "retained_structured_token_count": {
+            "min": min(retained_token_counts),
+            "max": max(retained_token_counts),
+            "mean": sum(retained_token_counts) / sample_count,
+        },
+        "terminal_turn_start_removed_sample_count": sample_count,
+        "length_truncated_sample_count": length_truncated_sample_count,
+        "length_truncated_sample_fraction": (
+            length_truncated_sample_count / sample_count
+        ),
+        "source_files": source_files,
+    }
+    report["audit_digest"] = canonical_digest(report)
+    if output_path is not None:
+        _write_json_new(Path(output_path).resolve(), report)
+    return report
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Audit canonical tom-v2 belief snapshots before materialization."
+    )
+    parser.add_argument("--canonical-root", required=True)
+    parser.add_argument("--max-seq-len", type=int, default=256)
+    parser.add_argument("--output")
+    return parser
+
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
+    report = audit_canonical_belief_data(
+        canonical_root=args.canonical_root,
+        max_seq_len=args.max_seq_len,
+        output_path=args.output,
+    )
+    print(canonical_json(report))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

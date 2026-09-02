@@ -1,0 +1,81 @@
+# OS / IDE / local tooling
+.DS_Store
+.vscode/
+.idea/
+.codegraph/
+
+# Python / test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Python packaging
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+/dist/
+/build/
+
+# Secrets / local environments
+.env
+.env.*
+!.env.example
+.envrc
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# External runtime storage.  These patterns intentionally also match
+# same-name symlinks used by the server checkout.
+/data
+/datasets
+/logs
+/outputs
+/review
+/checkpoints
+/models
+/canonical_data
+/smoke_data
+/cache
+
+# Experiment services and generated artifacts
+wandb/
+mlruns/
+tensorboard/
+lightning_logs/
+runs/
+artifacts/
+
+# Model weights
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+
+# Generated archives
+/archive/
+*.tar.gz
+*.bundle
+twd_tom_legacy_projection_source.zip
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.bak
+*.swp
+
+# Presentation working files
+/docs/ppt_assets/
+
+# Unused frontend build roots, if created locally
+/node_modules/

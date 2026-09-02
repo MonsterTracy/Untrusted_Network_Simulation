@@ -1,0 +1,331 @@
+"""Train-only empirical baselines for dense belief prediction."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import torch
+
+from werewolf.models.twd_tom.dense_dataset import DenseTWDToMDataset
+from werewolf.models.twd_tom.metrics import compute_belief_metrics
+from werewolf.models.twd_tom.schema import NUM_PLAYERS
+
+
+EMPIRICAL_PRIOR_VERSION = "train_only_observer_phase_prior_v1"
+EMPIRICAL_PRIOR_SMOOTHING = 1.0
+
+
+class _MetricMean:
+    def __init__(self) -> None:
+        self.count = 0
+        self.weighted_sums: dict[str, float] = {}
+        self.direct_sums: dict[str, float] = {}
+        self.count_sums: dict[str, int] = {}
+        self.max_values: dict[str, float] = {}
+
+    def update(self, metrics: Mapping[str, int | float | str]) -> None:
+        count = int(metrics["valid_observer_count"])
+        self.count += count
+        if count == 0:
+            for name in (
+                "scope_observer_count",
+                "observed_label_row_count_in_scope",
+                "unobserved_label_row_count_in_scope",
+            ):
+                if name in metrics:
+                    self.count_sums[name] = self.count_sums.get(
+                        name, 0
+                    ) + int(metrics[name])
+            return
+        for name, value in metrics.items():
+            if name in {"valid_observer_count", "total_row_count"}:
+                continue
+            if name.endswith("_row_count"):
+                self.count_sums[name] = self.count_sums.get(name, 0) + int(value)
+            elif name.endswith("_sum"):
+                self.direct_sums[name] = self.direct_sums.get(name, 0.0) + float(value)
+            elif name.startswith("max_"):
+                self.max_values[name] = max(
+                    self.max_values.get(name, float("-inf")),
+                    float(value),
+                )
+            elif name not in {
+                "normalized_reducible_gap_improvement",
+                "private_admissible_normalized_reducible_gap_improvement",
+                "uniform_non_self_baseline_mean_kl_divergence",
+                "private_admissible_uniform_baseline_mean_kl_divergence",
+            }:
+                self.weighted_sums[name] = self.weighted_sums.get(
+                    name, 0.0
+                ) + float(value) * count
+
+    def finalize(self) -> dict[str, int | float]:
+        if self.count <= 0:
+            raise ValueError("baseline evaluation has no valid observers")
+        result: dict[str, int | float] = {
+            "total_row_count": self.count,
+            "valid_observer_count": self.count,
+            **self.count_sums,
+            **self.direct_sums,
+            **self.max_values,
+            **{
+                name: value / self.count
+                for name, value in self.weighted_sums.items()
+            },
+        }
+        result["mean_loss"] = result["mean_belief_cross_entropy"]
+        uniform_kl_sum = float(result["uniform_non_self_baseline_kl_sum"])
+        uniform_kl = uniform_kl_sum / self.count
+        result["uniform_non_self_baseline_mean_kl_divergence"] = uniform_kl
+        result["normalized_reducible_gap_improvement"] = (
+            1.0 - float(result["model_kl_sum"]) / uniform_kl_sum
+            if uniform_kl_sum > 0.0
+            else 0.0
+        )
+        private_cross_entropy = result.get(
+            "private_admissible_uniform_baseline_mean_cross_entropy"
+        )
+        if private_cross_entropy is not None:
+            private_kl_sum = float(
+                result["private_admissible_uniform_baseline_kl_sum"]
+            )
+            private_kl = private_kl_sum / self.count
+            result[
+                "private_admissible_uniform_baseline_mean_kl_divergence"
+            ] = private_kl
+            result[
+                "private_admissible_normalized_reducible_gap_improvement"
+            ] = (
+                1.0 - float(result["model_kl_sum"]) / private_kl_sum
+                if private_kl_sum > 0.0
+                else 0.0
+            )
+        return result
+
+
+def _uniform_non_self(*, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+    mask = ~torch.eye(NUM_PLAYERS, dtype=torch.bool)
+    probabilities = mask.to(dtype=dtype)
+    return probabilities / probabilities.sum(dim=-1, keepdim=True)
+
+
+def _smoothed_prior(
+    sums: torch.Tensor,
+    counts: torch.Tensor,
+    *,
+    fallback: torch.Tensor,
+) -> torch.Tensor:
+    if sums.shape != (NUM_PLAYERS, NUM_PLAYERS):
+        raise ValueError("prior sums must have shape [7, 7]")
+    if counts.shape != (NUM_PLAYERS,):
+        raise ValueError("prior counts must have shape [7]")
+    smoothed = (
+        sums + EMPIRICAL_PRIOR_SMOOTHING * fallback
+    ) / (counts.unsqueeze(-1) + EMPIRICAL_PRIOR_SMOOTHING)
+    return smoothed / smoothed.sum(dim=-1, keepdim=True)
+
+
+def fit_dense_empirical_priors(
+    dataset: DenseTWDToMDataset,
+) -> dict[str, Any]:
+    """Fit observer and observer+phase priors using training labels only."""
+
+    if not isinstance(dataset, DenseTWDToMDataset):
+        raise TypeError("empirical priors require DenseTWDToMDataset")
+    if dataset.enable_cyclic_rotation:
+        raise ValueError("fit empirical priors on an unaugmented training dataset")
+    global_sums = torch.zeros(
+        (NUM_PLAYERS, NUM_PLAYERS), dtype=torch.float64
+    )
+    global_counts = torch.zeros(NUM_PLAYERS, dtype=torch.float64)
+    phase_sums: dict[str, torch.Tensor] = {}
+    phase_counts: dict[str, torch.Tensor] = {}
+    for item_index in range(len(dataset)):
+        item = dataset[item_index]
+        targets = item["belief_targets"].to(dtype=torch.float64)
+        supervision = item["observer_supervision_mask"]
+        global_sums += (targets * supervision.unsqueeze(-1)).sum(dim=0)
+        global_counts += supervision.sum(dim=0)
+        for boundary_index, phase in enumerate(item["metadata"]["phase"]):
+            phase_sums.setdefault(
+                phase,
+                torch.zeros_like(global_sums),
+            )
+            phase_counts.setdefault(
+                phase,
+                torch.zeros_like(global_counts),
+            )
+            phase_sums[phase] += (
+                targets[boundary_index]
+                * supervision[boundary_index].unsqueeze(-1)
+            )
+            phase_counts[phase] += supervision[boundary_index]
+
+    uniform = _uniform_non_self()
+    global_prior = _smoothed_prior(
+        global_sums,
+        global_counts,
+        fallback=uniform,
+    )
+    return {
+        "version": EMPIRICAL_PRIOR_VERSION,
+        "smoothing": EMPIRICAL_PRIOR_SMOOTHING,
+        "training_game_count": len(dataset),
+        "training_boundary_count": dataset.boundary_count,
+        "global": global_prior,
+        "by_phase": {
+            phase: _smoothed_prior(
+                phase_sums[phase],
+                phase_counts[phase],
+                fallback=global_prior,
+            )
+            for phase in sorted(phase_sums)
+        },
+    }
+
+
+def _prior_logits(probabilities: torch.Tensor) -> torch.Tensor:
+    return probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny).log()
+
+
+def _evaluate_prior_for_game(
+    item: Mapping[str, Any],
+    *,
+    global_prior: torch.Tensor,
+    phase_priors: Mapping[str, torch.Tensor] | None,
+) -> dict[str, int | float | str]:
+    phases = item["metadata"]["phase"]
+    probabilities = torch.stack(
+        [
+            global_prior
+            if phase_priors is None
+            else phase_priors.get(phase, global_prior)
+            for phase in phases
+        ]
+    ).to(dtype=item["belief_targets"].dtype)
+    return compute_belief_metrics(
+        _prior_logits(probabilities),
+        item["belief_targets"],
+        item["observer_alive_mask"],
+        item["diagonal_target_mask"],
+        observer_supervision_mask=item["observer_supervision_mask"],
+        observer_scope_mask=item["observer_scope_mask"],
+        label_observed_mask=item["label_observed_mask"],
+    )
+
+
+def _evaluate_private_uniform_for_game(
+    item: Mapping[str, Any],
+) -> dict[str, int | float | str]:
+    known_non_wolves = item.get("known_non_werewolf_mask")
+    if not isinstance(known_non_wolves, torch.Tensor):
+        raise ValueError("private uniform baseline requires private features")
+    admissible = item["diagonal_target_mask"] & ~known_non_wolves
+    probabilities = admissible.to(dtype=item["belief_targets"].dtype)
+    probabilities /= admissible.sum(dim=-1, keepdim=True).clamp_min(1)
+    return compute_belief_metrics(
+        _prior_logits(probabilities),
+        item["belief_targets"],
+        item["observer_alive_mask"],
+        item["diagonal_target_mask"],
+        observer_supervision_mask=item["observer_supervision_mask"],
+        observer_scope_mask=item["observer_scope_mask"],
+        label_observed_mask=item["label_observed_mask"],
+        known_non_werewolf_mask=known_non_wolves,
+    )
+
+
+def evaluate_dense_empirical_priors(
+    dataset: DenseTWDToMDataset,
+    priors: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Evaluate train-only global and phase priors on a disjoint dataset."""
+
+    if not isinstance(dataset, DenseTWDToMDataset):
+        raise TypeError("empirical prior evaluation requires DenseTWDToMDataset")
+    if dataset.enable_cyclic_rotation:
+        raise ValueError("evaluate empirical priors on an unaugmented dataset")
+    if priors.get("version") != EMPIRICAL_PRIOR_VERSION:
+        raise ValueError("empirical prior version mismatch")
+    global_prior = priors.get("global")
+    phase_priors = priors.get("by_phase")
+    if not isinstance(global_prior, torch.Tensor) or not isinstance(
+        phase_priors, Mapping
+    ):
+        raise TypeError("empirical priors are incomplete")
+
+    reports: dict[str, Any] = {
+        "version": EMPIRICAL_PRIOR_VERSION,
+        "smoothing": float(priors["smoothing"]),
+    }
+    for name, selected_phase_priors in {
+        "train_global_prior": None,
+        "train_phase_prior": phase_priors,
+    }.items():
+        aggregate = _MetricMean()
+        by_game: dict[str, dict[str, int | float | str]] = {}
+        for item_index in range(len(dataset)):
+            item = dataset[item_index]
+            game_id = item["metadata"]["game_id"]
+            metrics = _evaluate_prior_for_game(
+                item,
+                global_prior=global_prior,
+                phase_priors=selected_phase_priors,
+            )
+            aggregate.update(metrics)
+            game_report = dict(metrics)
+            if int(game_report["valid_observer_count"]) > 0:
+                game_report["mean_loss"] = game_report[
+                    "mean_belief_cross_entropy"
+                ]
+            by_game[game_id] = game_report
+        unscored_game_ids = sorted(
+            game_id
+            for game_id, game_report in by_game.items()
+            if int(game_report["valid_observer_count"]) == 0
+        )
+        reports[name] = {
+            "aggregate": aggregate.finalize(),
+            "by_game": dict(sorted(by_game.items())),
+            "game_count": len(by_game),
+            "scored_game_count": len(by_game) - len(unscored_game_ids),
+            "unscored_game_count": len(unscored_game_ids),
+            "unscored_game_ids": unscored_game_ids,
+        }
+    if dataset.include_private_features:
+        aggregate = _MetricMean()
+        by_game = {}
+        for item_index in range(len(dataset)):
+            item = dataset[item_index]
+            game_id = item["metadata"]["game_id"]
+            metrics = _evaluate_private_uniform_for_game(item)
+            aggregate.update(metrics)
+            game_report = dict(metrics)
+            if int(game_report["valid_observer_count"]) > 0:
+                game_report["mean_loss"] = game_report[
+                    "mean_belief_cross_entropy"
+                ]
+            by_game[game_id] = game_report
+        unscored_game_ids = sorted(
+            game_id
+            for game_id, game_report in by_game.items()
+            if int(game_report["valid_observer_count"]) == 0
+        )
+        reports["private_admissible_uniform"] = {
+            "aggregate": aggregate.finalize(),
+            "by_game": dict(sorted(by_game.items())),
+            "game_count": len(by_game),
+            "scored_game_count": len(by_game) - len(unscored_game_ids),
+            "unscored_game_count": len(unscored_game_ids),
+            "unscored_game_ids": unscored_game_ids,
+        }
+    return reports
+
+
+__all__ = [
+    "EMPIRICAL_PRIOR_SMOOTHING",
+    "EMPIRICAL_PRIOR_VERSION",
+    "evaluate_dense_empirical_priors",
+    "fit_dense_empirical_priors",
+]
