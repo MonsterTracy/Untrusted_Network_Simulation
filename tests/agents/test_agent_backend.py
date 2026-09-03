@@ -40,11 +40,10 @@ from werewolf.agents.prompt_template_v0 import (
 )
 from werewolf.backends import BackendError
 from werewolf.helper.log_utils import Log
-from werewolf.models.twd_tom.samples import (
-    SAMPLE_SCHEMA_VERSION,
-    SpeakerPreSpeechBelief,
+from werewolf.canonical_collection.pre import (
+    SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
+    SpeakerPREBeliefHandoff,
 )
-from werewolf.models.twd_tom.schema import LABEL_PROMPT_VERSION, LABEL_PROVENANCE
 from werewolf.registry import Registry
 
 
@@ -328,16 +327,16 @@ def _parse_day_cognition(raw_response, observation):
 
 def _pre_speech_belief(observation, *, suspected_werewolves=()):
     player_id = observation["current_act_idx"]
-    return SpeakerPreSpeechBelief(
+    return SpeakerPREBeliefHandoff(
+        schema_version=SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
+        boundary_id="test-pre-boundary",
+        prefix_digest="a" * 64,
+        observation_id="test-pre-observation",
+        observation_digest="b" * 64,
         observer_id=f"player{player_id}",
-        suspected_werewolves=tuple(suspected_werewolves),
-        known_werewolves=(),
-        known_non_werewolves=(f"player{player_id}",),
-        source_schema_version=SAMPLE_SCHEMA_VERSION,
-        label_prompt_version=LABEL_PROMPT_VERSION,
-        label_provenance=LABEL_PROVENANCE,
-        step_idx=0,
-        structured_input_digest="test-pre-boundary",
+        suspicion_support=tuple(suspected_werewolves),
+        source="realized_pre_belief_observation",
+        handoff_digest="c" * 64,
     )
 
 
@@ -1172,16 +1171,16 @@ class GameplayCognitionTest(unittest.TestCase):
         observation = _observation()
         backend = MetadataBackend([_day_cognition(observation)])
         agent = self._agent(backend)
-        pre_speech_belief = SpeakerPreSpeechBelief(
+        pre_speech_belief = SpeakerPREBeliefHandoff(
+            schema_version=SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
+            boundary_id="boundary-4",
+            prefix_digest="a" * 64,
+            observation_id="observation-4",
+            observation_digest="b" * 64,
             observer_id="player1",
-            suspected_werewolves=("player3", "player7"),
-            known_werewolves=(),
-            known_non_werewolves=("player1",),
-            source_schema_version=SAMPLE_SCHEMA_VERSION,
-            label_prompt_version=LABEL_PROMPT_VERSION,
-            label_provenance=LABEL_PROVENANCE,
-            step_idx=4,
-            structured_input_digest="digest-4",
+            suspicion_support=("player3", "player7"),
+            source="realized_pre_belief_observation",
+            handoff_digest="c" * 64,
         )
 
         agent.act_with_pre_speech_belief(
@@ -1201,7 +1200,7 @@ class GameplayCognitionTest(unittest.TestCase):
         backend = MetadataBackend([_day_cognition()])
         agent = self._agent(backend)
 
-        with self.assertRaisesRegex(TypeError, "SpeakerPreSpeechBelief"):
+        with self.assertRaisesRegex(TypeError, "SpeakerPREBeliefHandoff"):
             agent.act(_observation())
 
         self.assertEqual(backend.calls, [])

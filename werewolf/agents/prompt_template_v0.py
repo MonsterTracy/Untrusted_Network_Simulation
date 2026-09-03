@@ -1009,15 +1009,15 @@ def build_day_cognition_prompt(
 ):
     """Select public discussion intent from one frozen PRE belief."""
 
-    from werewolf.models.twd_tom.samples import SpeakerPreSpeechBelief
+    from werewolf.canonical_collection.pre import SpeakerPREBeliefHandoff
 
     if not isinstance(candidate_snapshot, tuple) or not candidate_snapshot:
         raise ValueError("candidate_snapshot must be a non-empty tuple")
     if any(not isinstance(act, DiscussionAct) for act in candidate_snapshot):
         raise TypeError("candidate_snapshot must contain DiscussionAct values")
-    if not isinstance(pre_speech_belief, SpeakerPreSpeechBelief):
+    if not isinstance(pre_speech_belief, SpeakerPREBeliefHandoff):
         raise TypeError(
-            "day cognition requires immutable SpeakerPreSpeechBelief"
+            "day cognition requires immutable SpeakerPREBeliefHandoff"
         )
     context = _build_gameplay_context(
         observation,

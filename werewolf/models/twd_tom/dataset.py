@@ -29,7 +29,6 @@ from werewolf.models.twd_tom.belief_labels import (
 )
 from werewolf.models.twd_tom.public_events import (
     PUBLIC_EVENT_SCHEMA_VERSION,
-    completed_pre_speech_public_events,
     normalize_public_events,
     parse_public_phase,
     public_event_digest,
@@ -71,9 +70,7 @@ from werewolf.speech.private_belief_perceiver import (
 )
 
 
-MODEL_INPUT_SCOPE = (
-    "completed_structured_public_events_without_terminal_turn_start_v1"
-)
+MODEL_INPUT_SCOPE = "authoritative_pre_prefix_with_terminal_turn_start_v2"
 PRIVATE_MODEL_INPUT_SCOPE = (
     "completed_structured_public_events_plus_observer_hard_knowledge_v1"
 )
@@ -400,10 +397,16 @@ def _normalize_sample(sample: Any) -> dict[str, Any]:
             raise ValueError(f"{subject} has unsupported belief status")
 
     public_events = normalize_public_events(sample.get("public_events"))
-    completed_pre_speech_public_events(
-        public_events,
-        speaker_id=speaker_id,
-    )
+    if not public_events:
+        raise ValueError("pre-speech public_events cannot be empty")
+    terminal = public_events[-1]
+    if (
+        terminal["event_type"] != "turn_start"
+        or terminal["speaker"] != normalize_player(speaker_id)
+    ):
+        raise ValueError(
+            "pre-speech public_events must end with matching turn_start"
+        )
 
     step_idx = sample.get("step_idx")
     if isinstance(step_idx, bool) or not isinstance(step_idx, int) or step_idx < 0:
@@ -715,10 +718,7 @@ class TWDToMDataset(Dataset):
         observer_roles = self.observer_roles_by_game.get(sample["game_id"])
         if observer_roles is not None and shift:
             observer_roles = rotate_observer_roles(observer_roles, shift=shift)
-        model_public_events = completed_pre_speech_public_events(
-            sample["public_events"],
-            speaker_id=sample["speaker_id"],
-        )
+        model_public_events = normalize_public_events(sample["public_events"])
         features = self.feature_builder.encode_events(
             model_public_events,
             sample["speech_annotations"],

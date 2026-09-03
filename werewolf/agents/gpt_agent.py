@@ -30,8 +30,8 @@ from werewolf.agents.prompt_template_v0 import (
     freeze_discussion_candidates,
 )
 from werewolf.backends import BackendError
+from werewolf.canonical_collection.pre import SpeakerPREBeliefHandoff
 from werewolf.models.twd_tom.schema import normalize_player
-from werewolf.models.twd_tom.samples import SpeakerPreSpeechBelief
 from . import agent_registry as AgentRegistry
 
 
@@ -83,9 +83,9 @@ class GPTAgent(LLMAgent):
     ):
         """Generate speech from the exact immutable PRE self-report."""
 
-        if not isinstance(pre_speech_belief, SpeakerPreSpeechBelief):
+        if not isinstance(pre_speech_belief, SpeakerPREBeliefHandoff):
             raise TypeError(
-                "pre_speech_belief must be SpeakerPreSpeechBelief"
+                "pre_speech_belief must be SpeakerPREBeliefHandoff"
             )
         if self.gameplay_prompt_profile != STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE:
             raise ValueError(
@@ -112,10 +112,10 @@ class GPTAgent(LLMAgent):
         if (
             is_speech
             and is_strict
-            and not isinstance(pre_speech_belief, SpeakerPreSpeechBelief)
+            and not isinstance(pre_speech_belief, SpeakerPREBeliefHandoff)
         ):
             raise TypeError(
-                "strict day cognition requires SpeakerPreSpeechBelief"
+                "strict day cognition requires SpeakerPREBeliefHandoff"
             )
 
         time.sleep(self.rate_limit)

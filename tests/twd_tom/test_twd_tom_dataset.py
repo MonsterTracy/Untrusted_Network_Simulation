@@ -31,7 +31,7 @@ from werewolf.models.twd_tom.dense_dataset import (
     collate_dense_twd_tom_games,
 )
 from werewolf.models.twd_tom.public_events import (
-    completed_pre_speech_public_events,
+    normalize_public_events,
     public_event_digest,
     structured_input_digest,
 )
@@ -474,16 +474,13 @@ def test_public_cutoff_and_digest_validation_remain_strict(
         TWDToMDataset([broken])
 
 
-def test_model_features_exclude_only_the_terminal_pre_speech_turn_start(
+def test_model_features_include_the_terminal_pre_speech_turn_start(
     suspicion_sample_factory,
 ):
     sample = suspicion_sample_factory()
     item = TWDToMDataset([sample])[0]
     expected = PublicEventFeatureBuilder().encode_events(
-        completed_pre_speech_public_events(
-            sample["public_events"],
-            speaker_id=sample["speaker_id"],
-        ),
+        normalize_public_events(sample["public_events"]),
         sample["speech_annotations"],
     )
     complete = PublicEventFeatureBuilder().encode_events(
@@ -492,7 +489,7 @@ def test_model_features_exclude_only_the_terminal_pre_speech_turn_start(
     )
     for field_name in PublicEventFeatureBuilder.FEATURE_FIELDS:
         assert torch.equal(item[field_name], expected[field_name])
-    assert item["subject_ids"].shape[0] < complete["subject_ids"].shape[0]
+    assert torch.equal(item["subject_ids"], complete["subject_ids"])
 
 
 def test_jsonl_loading_and_dataset_materialization_are_deterministic(

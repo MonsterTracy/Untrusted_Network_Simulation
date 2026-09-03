@@ -39,6 +39,22 @@ class PlayerObservationTest(unittest.TestCase):
             roles=ROLES,
         )
 
+    def enter_public_vote_phase(self, *, pk=False):
+        self.env._append_public_event("death_announcement", dead_players=[])
+        self.env.day = 1
+        self.env.day_or_night = "day"
+        self.env.phase = "speech"
+        self.env._append_public_phase()
+        self.env.phase = "vote"
+        self.env._append_public_phase()
+        if pk:
+            self.env._append_public_event("vote_result", votes=[])
+            self.env._append_public_event("exile_result", exiled_players=[])
+            self.env.phase = "speech_pk"
+            self.env._append_public_phase()
+            self.env.phase = "vote_pk"
+            self.env._append_public_phase()
+
     def test_observation_for_arbitrary_player(self):
         observation = self.env.get_observation_for(
             3
@@ -291,9 +307,7 @@ class PlayerObservationTest(unittest.TestCase):
         self.assertEqual(self.env.game_log[-1].target, 5)
 
     def test_normal_vote_tie_schedules_all_living_players_for_pk_vote(self):
-        self.env.phase = "vote"
-        self.env.day = 1
-        self.env.day_or_night = "day"
+        self.enter_public_vote_phase()
         phase_key = self.env.get_phase(1, "day", "vote")
         votes = [1, 0, 1, 0, -1, -1, -1]
         self.env.vote_target = [
@@ -308,9 +322,7 @@ class PlayerObservationTest(unittest.TestCase):
         self.assertEqual(self.env.phase, "speech_pk")
 
     def test_normal_vote_without_abstentions_exiles_unique_maximum(self):
-        self.env.phase = "vote"
-        self.env.day = 1
-        self.env.day_or_night = "day"
+        self.enter_public_vote_phase()
         phase_key = self.env.get_phase(1, "day", "vote")
         votes = [4, 4, 4, 4, 5, 4, 4]
         self.env.vote_target = [
@@ -325,9 +337,7 @@ class PlayerObservationTest(unittest.TestCase):
         self.assertEqual(self.env.day_or_night, "night")
 
     def test_normal_vote_without_abstentions_enters_pk_on_tie(self):
-        self.env.phase = "vote"
-        self.env.day = 1
-        self.env.day_or_night = "day"
+        self.enter_public_vote_phase()
         phase_key = self.env.get_phase(1, "day", "vote")
         votes = [1, 0, 0, 0, 1, 1, 2]
         self.env.vote_target = [
@@ -344,9 +354,7 @@ class PlayerObservationTest(unittest.TestCase):
         self.assertEqual(self.env.phase, "speech_pk")
 
     def test_pk_vote_without_abstentions_exiles_unique_maximum(self):
-        self.env.phase = "vote_pk"
-        self.env.day = 1
-        self.env.day_or_night = "day"
+        self.enter_public_vote_phase(pk=True)
         self.env.vote_pk_players = [0, 1]
         phase_key = self.env.get_phase(1, "day", "vote_pk")
         votes = [1, 0, 0, 0, 1, 1, 1]
@@ -362,9 +370,7 @@ class PlayerObservationTest(unittest.TestCase):
         self.assertEqual(self.env.day_or_night, "night")
 
     def test_pk_vote_without_abstentions_has_no_exile_on_tie(self):
-        self.env.phase = "vote_pk"
-        self.env.day = 1
-        self.env.day_or_night = "day"
+        self.enter_public_vote_phase(pk=True)
         self.env.vote_pk_players = [0, 1, 2]
         phase_key = self.env.get_phase(1, "day", "vote_pk")
         votes = [1, 0, 0, 0, 1, 1, 2]

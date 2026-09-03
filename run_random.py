@@ -14,7 +14,6 @@ from typing import Any
 import yaml
 
 from werewolf.agents import agent_registry
-from werewolf.agents.llm_agent import GameplayGenerationExhausted
 from werewolf.backends import (
     create_backend,
     load_named_backends,
@@ -22,76 +21,10 @@ from werewolf.backends import (
 )
 from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
 from werewolf.models import SpeechPerceiver
-from werewolf.models.twd_tom.belief_snapshot import (
-    BeliefSnapshotCollectionError,
-    PlayingAgentBeliefSnapshotCollector,
-)
-from werewolf.models.twd_tom.collector import (
-    TWDToMSampleCollector,
-)
-from werewolf.models.twd_tom.samples import (
-    PUBLIC_SPEECH_EVENTS,
-    speaker_pre_speech_belief_from_sample,
-)
 from werewolf.runtime_config import normalize_runtime_config
-from werewolf.speech.private_belief_perceiver import (
-    PlayingAgentBeliefReporter,
-)
 
 
-def _alive_observer_ids(env) -> list[int]:
-    """Return public 1-based IDs for currently alive players."""
-
-    alive = getattr(env, "alive", None)
-
-    if not isinstance(alive, (list, tuple)):
-        raise TypeError(
-            "environment must provide an alive sequence"
-        )
-
-    observer_ids = [
-        index + 1
-        for index, is_alive in enumerate(alive)
-        if is_alive == 1
-    ]
-
-    if not observer_ids:
-        raise RuntimeError(
-            "cannot collect a belief snapshot "
-            "with no alive players"
-        )
-
-    return observer_ids
-
-
-def _deterministic_legal_fallback_action(observation):
-    """Choose one auditable legal action after gameplay generation exhaustion."""
-
-    phase = observation.get("phase")
-    if not isinstance(phase, str) or not phase:
-        raise ValueError("fallback observation requires a non-empty phase")
-    if "speech" in phase:
-        speech_kind = "speech_pk" if "speech_pk" in phase else "speech"
-        return (
-            speech_kind,
-            "我本轮暂不作任何身份、查验、技能或投票表态。",
-        )
-
-    valid_actions = observation.get("valid_action")
-    if not isinstance(valid_actions, (list, tuple)) or not valid_actions:
-        raise ValueError("fallback observation has no legal action candidates")
-    for candidate in valid_actions:
-        if (
-            isinstance(candidate, (list, tuple))
-            and len(candidate) >= 2
-            and (
-                candidate[1] == 0
-                or "pass" in str(candidate[0]).lower()
-            )
-        ):
-            return tuple(candidate)
-    candidate = valid_actions[0]
-    return tuple(candidate) if isinstance(candidate, (list, tuple)) else candidate
+PUBLIC_SPEECH_RUNTIME_PHASES = frozenset({"speech", "speech_pk"})
 
 
 def _act_with_optional_pre_speech_belief(
@@ -120,26 +53,15 @@ def eval(
     env,
     agent_list,
     roles_,
-    sample_collector=None,
+    canonical_recorder=None,
     call_audit=None,
-    trajectory_recorder=None,
-    allow_gameplay_fallback=False,
 ):
-    """Run one game and optionally collect subjective ToM samples.
+    """Run one game, optionally through the sole Canonical Collection recorder.
 
     The environment needs the hidden role assignment to simulate the
-    game, but that assignment is never passed to the ToM collector.
-
-    Playing-agent belief labels are collected immediately before each public
-    ``speech`` or ``speech_pk`` from each alive observer's legal observation.
-    The optional trajectory recorder materializes PRE views before collection
-    and POST views immediately after a successful environment step.
+    game. The recorder owns PRE construction and evidence; no trained ToM
+    output is accepted by this runtime interface.
     """
-
-    if not isinstance(allow_gameplay_fallback, bool):
-        raise TypeError("allow_gameplay_fallback must be boolean")
-    if allow_gameplay_fallback and call_audit is None:
-        raise ValueError("gameplay fallback requires a call audit")
 
     for agent in agent_list:
         agent.reset()
@@ -148,8 +70,8 @@ def eval(
     obs = env.reset(
         roles=roles_,
     )
-    if trajectory_recorder is not None:
-        trajectory_recorder.start(
+    if canonical_recorder is not None:
+        canonical_recorder.start(
             env,
             roles=roles_,
         )
@@ -160,142 +82,60 @@ def eval(
         current_act_idx = obs[
             "current_act_idx"
         ]
-        action_phase = obs["phase"]
         trigger = getattr(env, "phase", None)
         pre_speech_belief = None
-        action = None
-        if trajectory_recorder is not None:
-            trajectory_recorder.before_agent_act(
-                env,
-                step_idx=step_idx,
-                acting_player_id=current_act_idx,
-                delivered_observation=obs,
-                speech_kind=(
-                    trigger
-                    if trigger in PUBLIC_SPEECH_EVENTS
-                    else None
-                ),
-            )
-
-        if (
-            trigger in PUBLIC_SPEECH_EVENTS
-        ):
-            if sample_collector is not None:
-                try:
-                    collected_sample = sample_collector.record(
-                        env,
-                        step_idx=step_idx,
-                        trigger=trigger,
-                        phase=action_phase,
-                        speaker_id=current_act_idx,
-                        observer_ids=(
-                            _alive_observer_ids(env)
-                        ),
-                    )
-                except BeliefSnapshotCollectionError as exc:
-                    if not allow_gameplay_fallback:
-                        if trajectory_recorder is not None:
-                            trajectory_recorder.fail(
-                                failure_stage="belief_snapshot",
-                                exception=exc,
-                            )
-                        raise
-                    call_audit.record_label_snapshot_failure(
-                        step_idx=step_idx,
-                        acting_player_id=current_act_idx,
-                        phase=action_phase,
-                        observer_id=exc.observer_id,
-                        status=exc.status,
-                        error=exc.error,
-                        generation_attempt_count=(
-                            exc.generation_attempt_count
-                        ),
-                    )
-                    try:
-                        action = _deterministic_legal_fallback_action(obs)
-                        call_audit.record_gameplay_fallback(
-                            step_idx=step_idx,
-                            acting_player_id=current_act_idx,
-                            phase=action_phase,
-                            action=action,
-                            exception=exc,
-                        )
-                    except Exception as fallback_exc:
-                        if trajectory_recorder is not None:
-                            trajectory_recorder.fail(
-                                failure_stage="belief_snapshot_fallback",
-                                exception=fallback_exc,
-                            )
-                        raise
-                    collected_sample = None
-                if collected_sample is not None:
-                    pre_speech_belief = speaker_pre_speech_belief_from_sample(
-                        collected_sample,
-                        speaker_id=current_act_idx,
-                        step_idx=step_idx,
-                    )
-
-        if action is None:
-            audit_context = (
-                call_audit.gameplay_context(
-                    acting_player_id=current_act_idx,
-                    observation=obs,
-                    public_events=env.public_events,
-                )
-                if call_audit is not None
-                else nullcontext()
-            )
+        if canonical_recorder is not None:
             try:
-                with audit_context:
-                    action = _act_with_optional_pre_speech_belief(
-                        agent_list[current_act_idx - 1],
-                        obs,
-                        pre_speech_belief,
-                    )
-            except GameplayGenerationExhausted as exc:
-                if not allow_gameplay_fallback:
-                    if trajectory_recorder is not None:
-                        trajectory_recorder.fail(
-                            failure_stage="agent_act",
-                            exception=exc,
-                        )
-                    raise
-                try:
-                    action = _deterministic_legal_fallback_action(obs)
-                    call_audit.record_gameplay_fallback(
-                        step_idx=step_idx,
-                        acting_player_id=current_act_idx,
-                        phase=action_phase,
-                        action=action,
-                        exception=exc,
-                    )
-                except Exception as fallback_exc:
-                    if trajectory_recorder is not None:
-                        trajectory_recorder.fail(
-                            failure_stage="agent_act",
-                            exception=fallback_exc,
-                        )
-                    raise
+                pre_speech_belief = canonical_recorder.before_agent_act(
+                    env,
+                    step_idx=step_idx,
+                    acting_player_id=current_act_idx,
+                    delivered_observation=obs,
+                    speech_kind=(
+                        trigger
+                        if trigger in PUBLIC_SPEECH_RUNTIME_PHASES
+                        else None
+                    ),
+                )
             except Exception as exc:
-                if trajectory_recorder is not None:
-                    if action is not None:
-                        trajectory_recorder.after_agent_act(action)
-                    trajectory_recorder.fail(
-                        failure_stage="agent_act",
-                        exception=exc,
-                    )
-                raise
+                raise canonical_recorder.failure_from_exception(exc) from exc
 
-        if trajectory_recorder is not None:
-            trajectory_recorder.after_agent_act(action)
-
-        env_audit_context = (
-            call_audit.gameplay_context(
+        audit_context = (
+            call_audit.action_context(
                 acting_player_id=current_act_idx,
-                observation=obs,
-                public_events=env.public_events,
+                boundary_id=(
+                    None
+                    if pre_speech_belief is None
+                    else pre_speech_belief.boundary_id
+                ),
+                is_public_speech=(trigger in PUBLIC_SPEECH_RUNTIME_PHASES),
             )
             if call_audit is not None
+            else nullcontext()
+        )
+        try:
+            with audit_context:
+                action = _act_with_optional_pre_speech_belief(
+                    agent_list[current_act_idx - 1],
+                    obs,
+                    pre_speech_belief,
+                )
+        except Exception as exc:
+            if canonical_recorder is not None:
+                raise canonical_recorder.failure_from_exception(exc) from exc
+            raise
+
+        if canonical_recorder is not None:
+            canonical_recorder.after_agent_act(action)
+
+        is_speech = trigger in PUBLIC_SPEECH_RUNTIME_PHASES
+        env_audit_context = (
+            call_audit.speech_perception_context(
+                event_id=f"event-{len(env.public_events):06d}",
+                boundary_id=pre_speech_belief.boundary_id,
+                speaker_id=current_act_idx,
+            )
+            if call_audit is not None and is_speech
             else nullcontext()
         )
         try:
@@ -304,15 +144,12 @@ def eval(
                     action
                 )
         except Exception as exc:
-            if trajectory_recorder is not None:
-                trajectory_recorder.fail(
-                    failure_stage="env_step",
-                    exception=exc,
-                )
+            if canonical_recorder is not None:
+                raise canonical_recorder.failure_from_exception(exc) from exc
             raise
 
-        if trajectory_recorder is not None:
-            trajectory_recorder.after_env_step(
+        if canonical_recorder is not None:
+            canonical_recorder.after_env_step(
                 env,
                 observation_after=obs,
                 terminal_after=done,
@@ -326,16 +163,16 @@ def eval(
         )
 
     if info.get("Werewolf") == 1:
-        if trajectory_recorder is not None:
-            trajectory_recorder.complete(
+        if canonical_recorder is not None:
+            canonical_recorder.finish(
                 env,
                 winner="Werewolf",
             )
         return "Werewolf win"
 
     if info.get("Werewolf") == -1:
-        if trajectory_recorder is not None:
-            trajectory_recorder.complete(
+        if canonical_recorder is not None:
+            canonical_recorder.finish(
                 env,
                 winner="Villager",
             )
@@ -823,28 +660,6 @@ def build_runtime(
     )
 
 
-def build_twd_tom_sample_collector(
-    *,
-    agent_list,
-    output_path,
-    game_id,
-    report_audit=None,
-):
-    """Build the sole playing-agent readonly belief collection stack."""
-
-    snapshot_collector = PlayingAgentBeliefSnapshotCollector(
-        PlayingAgentBeliefReporter(
-            audit_hook=report_audit,
-        ),
-        agent_list,
-    )
-    return TWDToMSampleCollector(
-        output_path=output_path,
-        snapshot_collector=snapshot_collector,
-        game_id=game_id,
-    )
-
-
 def _write_role_assignment(
     *,
     log_save_path,
@@ -1024,9 +839,7 @@ def build_arg_parser() -> (
     parser.add_argument(
         "--config",
         type=str,
-        default=(
-            "configs/twd_tom_server_qwen35_9b.yaml"
-        ),
+        required=True,
         help=(
             "path to the game runtime config"
         ),

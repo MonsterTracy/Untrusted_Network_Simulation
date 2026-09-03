@@ -1,4 +1,11 @@
-"""Frozen contracts used by the future authoritative Canonical Collection."""
+"""Authoritative contracts for the production Canonical Collection."""
+
+from werewolf.canonical_collection.collector import (
+    CanonicalAttemptFailure,
+    CanonicalGameProduct,
+    CollectionResult,
+    collect,
+)
 
 from werewolf.canonical_collection.attempt_ledger import (
     ATTEMPT_CLAIM_SCHEMA_VERSION,
@@ -162,9 +169,12 @@ __all__ = [
     "CanonicalFailureAttempt",
     "CanonicalFailureStage",
     "CanonicalFailureSummary",
+    "CanonicalAttemptFailure",
+    "CanonicalGameProduct",
     "CanonicalGameEvidence",
     "CanonicalPartialEvidence",
     "CollectionPlan",
+    "CollectionResult",
     "CollectionSeedPoolExhausted",
     "CollectionTargetReached",
     "DeterministicReplayExecutor",
@@ -211,6 +221,7 @@ __all__ = [
     "construct_private_replay_evidence",
     "construct_speaker_pre_belief_handoff",
     "construct_v1_speech_annotation",
+    "collect",
     "construct_submitted_gameplay_action",
     "freeze_public_event_history",
     "initialize_attempt_ledger",

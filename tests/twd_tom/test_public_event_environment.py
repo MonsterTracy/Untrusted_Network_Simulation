@@ -1,7 +1,7 @@
 import pytest
 
 from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
-from werewolf.models.twd_tom.public_events import normalize_public_events
+from werewolf.canonical_collection import freeze_public_event_history
 from werewolf.speech.speech_perceiver import SpeechParseAuditResult
 
 
@@ -32,6 +32,15 @@ class Parser:
             parse_status="ok",
             error_type=None,
             error_message=None,
+            generation_attempts=(
+                {
+                    "generation_attempt": 1,
+                    "status": "ok",
+                    "raw_response": "synthetic parser response",
+                    "error_type": None,
+                    "error_message": None,
+                },
+            ),
         )
 
 
@@ -56,25 +65,36 @@ def test_first_snapshot_has_death_phase_and_turn_before_speech():
     _finish_first_night(env, 5)
     speaker = f"player{env.current_act_idx + 1}"
     assert [event["event_type"] for event in env.public_events] == [
+        "phase_change",
         "death_announcement",
         "phase_change",
         "turn_start",
     ]
-    assert env.public_events[0]["dead_players"] == ["player5"]
+    assert env.public_events[0] == {
+        "event_id": "event-000000",
+        "event_index": 0,
+        "event_type": "phase_change",
+        "day": 0,
+        "phase": "night",
+    }
+    assert env.public_events[1]["dead_players"] == ["player5"]
     assert env.public_events[-1]["speaker"] == speaker
-    normalize_public_events(env.public_events)
+    freeze_public_event_history(env.public_events)
 
     before = list(env.public_events)
     env.step(("speech", "final public text"))
     assert env.public_events[: len(before)] == before
     speech = env.public_events[len(before)]
     assert speech == {
-        "event_idx": len(before),
+        "event_id": f"event-{len(before):06d}",
+        "event_index": len(before),
         "event_type": "public_speech",
         "speaker": speaker,
         "raw_text": "final public text",
     }
-    assert env.speech_annotations[-1]["actions"] == [
+    assert [
+        action.to_record() for action in env.speech_annotations[-1].actions
+    ] == [
         [speaker, "support", "player2"],
         [speaker, "oppose", "player3"],
     ]
@@ -108,12 +128,22 @@ def test_empty_death_and_empty_speech_remain_explicit_events():
                 parse_status="ok",
                 error_type=None,
                 error_message=None,
+                generation_attempts=(
+                    {
+                        "generation_attempt": 1,
+                        "status": "ok",
+                        "raw_response": "NONE",
+                        "error_type": None,
+                        "error_message": None,
+                    },
+                ),
             )
 
     env = _env(EmptyParser())
     _finish_first_night(env, 0)
-    assert env.public_events[0] == {
-        "event_idx": 0,
+    assert env.public_events[1] == {
+        "event_id": "event-000001",
+        "event_index": 1,
         "event_type": "death_announcement",
         "dead_players": [],
     }
@@ -124,15 +154,19 @@ def test_empty_death_and_empty_speech_remain_explicit_events():
         if event["event_type"] == "public_speech"
     )
     assert speech["raw_text"] == ""
-    assert env.speech_annotations[-1]["actions"] == []
-    assert env.speech_annotations[-1]["status"] == "no_action"
+    assert env.speech_annotations[-1].actions == ()
+    assert env.speech_annotations[-1].status.value == "no_action"
 
 
 def test_public_vote_records_canonical_ballots_exile_and_night_transition():
     env = _env()
+    env._append_public_event("death_announcement", dead_players=[])
     env.day = 1
     env.day_or_night = "day"
+    env.phase = "speech"
+    env._append_public_phase()
     env.phase = "vote"
+    env._append_public_phase()
     phase_id = env.get_phase(env.day, env.day_or_night, env.phase)
     env.vote_target = [
         {phase_id: 1},
@@ -144,21 +178,24 @@ def test_public_vote_records_canonical_ballots_exile_and_night_transition():
         {phase_id: 1},
     ]
     env.end_vote()
-    vote, exile, night = env.public_events
+    vote, exile, night = env.public_events[-3:]
     assert vote["event_type"] == "vote_result"
     assert [item["voter"] for item in vote["votes"]] == [
         f"player{index}" for index in range(1, 8)
     ]
     assert vote["votes"][3]["target"] is None
     assert exile == {
-        "event_idx": 1,
+        "event_id": exile["event_id"],
+        "event_index": exile["event_index"],
         "event_type": "exile_result",
         "exiled_players": ["player2"],
     }
     assert night == {
-        "event_idx": 2,
+        "event_id": night["event_id"],
+        "event_index": night["event_index"],
         "event_type": "phase_change",
-        "phase": "1_night_skill_wolf",
+        "day": 1,
+        "phase": "night",
     }
     assert all(
         "role" not in event and "death_reason" not in event
@@ -168,14 +205,19 @@ def test_public_vote_records_canonical_ballots_exile_and_night_transition():
 
 def test_all_abstention_has_explicit_empty_exile():
     env = _env()
+    env._append_public_event("death_announcement", dead_players=[])
     env.day = 1
     env.day_or_night = "day"
+    env.phase = "speech"
+    env._append_public_phase()
     env.phase = "vote"
+    env._append_public_phase()
     phase_id = env.get_phase(env.day, env.day_or_night, env.phase)
     env.vote_target = [{phase_id: -1} for _ in range(7)]
     env.end_vote()
-    assert env.public_events[1] == {
-        "event_idx": 1,
-        "event_type": "exile_result",
-        "exiled_players": [],
-    }
+    exile = next(
+        event
+        for event in reversed(env.public_events)
+        if event["event_type"] == "exile_result"
+    )
+    assert exile["exiled_players"] == []

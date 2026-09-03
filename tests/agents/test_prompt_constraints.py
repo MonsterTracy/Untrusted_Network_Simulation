@@ -16,11 +16,10 @@ from werewolf.agents.prompt_template_v0 import (
     project_discussion_vote_stances,
 )
 from werewolf.helper.log_utils import Log
-from werewolf.models.twd_tom.samples import (
-    SAMPLE_SCHEMA_VERSION,
-    SpeakerPreSpeechBelief,
+from werewolf.canonical_collection.pre import (
+    SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
+    SpeakerPREBeliefHandoff,
 )
-from werewolf.models.twd_tom.schema import LABEL_PROMPT_VERSION, LABEL_PROVENANCE
 
 
 def _observation(*, identity="Villager", phase="1_day_speech"):
@@ -71,16 +70,16 @@ BELIEF = {
 
 def _pre_speech_belief(observation):
     player_id = observation["current_act_idx"]
-    return SpeakerPreSpeechBelief(
+    return SpeakerPREBeliefHandoff(
+        schema_version=SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
+        boundary_id="prompt-test-boundary",
+        prefix_digest="a" * 64,
+        observation_id="prompt-test-observation",
+        observation_digest="b" * 64,
         observer_id=f"player{player_id}",
-        suspected_werewolves=("player5",),
-        known_werewolves=(),
-        known_non_werewolves=(f"player{player_id}",),
-        source_schema_version=SAMPLE_SCHEMA_VERSION,
-        label_prompt_version=LABEL_PROMPT_VERSION,
-        label_provenance=LABEL_PROVENANCE,
-        step_idx=0,
-        structured_input_digest="prompt-test-pre-boundary",
+        suspicion_support=("player5",),
+        source="realized_pre_belief_observation",
+        handoff_digest="c" * 64,
     )
 
 

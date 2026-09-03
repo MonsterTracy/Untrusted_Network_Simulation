@@ -14,9 +14,7 @@ STATUS_PARSE_ERROR = "parse_error"
 STATUS_SEMANTIC_ERROR = "semantic_error"
 STATUS_REPORTER_ERROR = "reporter_error"
 
-from werewolf.models.twd_tom.public_events import (
-    copy_public_events,
-)
+from werewolf.canonical_collection.pre import AuthoritativePREPrefix
 from werewolf.models.twd_tom.schema import (
     LABEL_PROMPT_VERSION,
     PLAYER_NAMES,
@@ -112,7 +110,8 @@ class PlayingAgentBeliefReporter:
         agent,
         observation: Mapping[str, Any],
         observer_id: int | str,
-        public_snapshot,
+        pre_prefix: AuthoritativePREPrefix,
+        observation_id: str,
         agent_backend_id: str,
         known_werewolves: list[str],
         known_non_werewolves: list[str],
@@ -136,20 +135,22 @@ class PlayingAgentBeliefReporter:
                 known_werewolves=known_werewolves,
                 known_non_werewolves=known_non_werewolves,
             )
-        if observation.get("current_act_idx") != public_snapshot.speaker_id:
+        if not isinstance(pre_prefix, AuthoritativePREPrefix):
             return self._result(
                 observer=observer,
                 status=STATUS_REPORTER_ERROR,
-                error="observation and public snapshot speaker mismatch",
+                error="pre_prefix must be an AuthoritativePREPrefix",
                 agent_backend_id=agent_backend_id,
                 known_werewolves=known_werewolves,
                 known_non_werewolves=known_non_werewolves,
             )
-        if observation.get("phase") != public_snapshot.phase:
+        if normalize_player(observation.get("current_act_idx")) != (
+            pre_prefix.current_speaker
+        ):
             return self._result(
                 observer=observer,
                 status=STATUS_REPORTER_ERROR,
-                error="observation and public snapshot phase mismatch",
+                error="observation and PRE Prefix speaker mismatch",
                 agent_backend_id=agent_backend_id,
                 known_werewolves=known_werewolves,
                 known_non_werewolves=known_non_werewolves,
@@ -168,7 +169,7 @@ class PlayingAgentBeliefReporter:
         try:
             report_prompt = self.build_prompt(
                 observer_id=observer,
-                public_snapshot=public_snapshot,
+                pre_prefix=pre_prefix,
                 known_werewolves=known_werewolves,
                 known_non_werewolves=known_non_werewolves,
             )
@@ -191,8 +192,9 @@ class PlayingAgentBeliefReporter:
                 )
             if self.audit_hook is not None:
                 report_id, report_prompt = self.audit_hook.prepare_report(
+                    observation_id=observation_id,
                     observer_id=observer,
-                    public_snapshot=public_snapshot,
+                    pre_prefix=pre_prefix,
                     agent_backend_id=agent_backend_id,
                     agent_model_id=getattr(agent, "model_name", None),
                     report_prompt=report_prompt,
@@ -208,6 +210,7 @@ class PlayingAgentBeliefReporter:
             )
 
         validation_error = None
+        attempt_records: list[dict[str, Any]] = []
         for generation_attempt in range(1, LABEL_GENERATION_MAX_ATTEMPTS + 1):
             raw_response = None
             try:
@@ -232,6 +235,15 @@ class PlayingAgentBeliefReporter:
                         required_candidates=required_candidates,
                     )
             except Exception as exc:
+                attempt_record = {
+                    "attempt_index": generation_attempt,
+                    "call_id": f"{observation_id}-attempt-{generation_attempt:02d}",
+                    "status": STATUS_REPORTER_ERROR,
+                    "raw_response": None,
+                    "error_category": type(exc).__name__,
+                    "error_message": str(exc) or type(exc).__name__,
+                }
+                attempt_records.append(attempt_record)
                 self._record_generation_attempt(
                     report_id=report_id,
                     observer_id=observer,
@@ -240,9 +252,7 @@ class PlayingAgentBeliefReporter:
                     error=str(exc),
                     raw_response=None,
                 )
-                if self.audit_hook is not None and report_id is not None:
-                    self.audit_hook.complete_report(report_id, None)
-                return self._result(
+                result = self._result(
                     observer=observer,
                     status=STATUS_REPORTER_ERROR,
                     error=str(exc),
@@ -250,7 +260,14 @@ class PlayingAgentBeliefReporter:
                     known_werewolves=known_werewolves,
                     known_non_werewolves=known_non_werewolves,
                     generation_attempt_count=generation_attempt,
+                    generation_attempts=attempt_records,
                 )
+                if generation_attempt == LABEL_GENERATION_MAX_ATTEMPTS:
+                    if self.audit_hook is not None and report_id is not None:
+                        self.audit_hook.complete_report(report_id, None)
+                    return result
+                validation_error = result["error"]
+                continue
 
             try:
                 suspected = self.parse_response(raw_response)
@@ -302,6 +319,21 @@ class PlayingAgentBeliefReporter:
                 error=result["error"],
                 raw_response=raw_response,
             )
+            attempt_records.append(
+                {
+                    "attempt_index": generation_attempt,
+                    "call_id": f"{observation_id}-attempt-{generation_attempt:02d}",
+                    "status": result["status"],
+                    "raw_response": raw_response,
+                    "error_category": (
+                        None
+                        if result["status"] == STATUS_OK
+                        else result["status"]
+                    ),
+                    "error_message": result["error"],
+                }
+            )
+            result["generation_attempts"] = list(attempt_records)
             if result["status"] == STATUS_OK or (
                 generation_attempt == LABEL_GENERATION_MAX_ATTEMPTS
             ):
@@ -356,15 +388,15 @@ class PlayingAgentBeliefReporter:
     def build_prompt(
         *,
         observer_id: int | str,
-        public_snapshot,
+        pre_prefix: AuthoritativePREPrefix,
         known_werewolves: list[str],
         known_non_werewolves: list[str],
     ) -> str:
         """Render the frozen private self-report instruction."""
 
         observer = normalize_player(observer_id)
-        digest = getattr(public_snapshot, "public_history_digest", None)
-        action_count = getattr(public_snapshot, "public_action_count", None)
+        digest = getattr(pre_prefix, "public_event_digest", None)
+        action_count = len(pre_prefix.public_event_history.events)
         if not isinstance(digest, str) or not digest:
             raise ValueError("public snapshot requires a history digest")
         if isinstance(action_count, bool) or not isinstance(action_count, int):
@@ -394,9 +426,7 @@ class PlayingAgentBeliefReporter:
         forbidden_text = ", ".join(forbidden)
         legal_candidates_text = ", ".join(legal_candidates)
         public_history = json.dumps(
-            copy_public_events(
-                public_snapshot.public_events
-            ),
+            pre_prefix.public_event_history.to_records(),
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -493,6 +523,7 @@ Return only this JSON structure:
         known_werewolves: list[str],
         known_non_werewolves: list[str],
         generation_attempt_count: int = 0,
+        generation_attempts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(agent_backend_id, str) or not agent_backend_id.strip():
             raise ValueError("agent_backend_id must be non-empty text")
@@ -505,6 +536,7 @@ Return only this JSON structure:
             "error": error,
             "agent_backend_id": agent_backend_id,
             "generation_attempt_count": generation_attempt_count,
+            "generation_attempts": list(generation_attempts or ()),
         }
 
 

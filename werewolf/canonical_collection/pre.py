@@ -93,6 +93,11 @@ class SpeakerPREBeliefHandoff:
             "handoff_digest": self.handoff_digest,
         }
 
+    def prompt_payload(self) -> dict[str, Any]:
+        """Expose only the immutable realized belief needed by speech cognition."""
+
+        return {"suspected_werewolves": list(self.suspicion_support)}
+
 
 def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():

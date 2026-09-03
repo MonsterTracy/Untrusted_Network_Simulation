@@ -46,16 +46,16 @@ def test_audit_reports_label_and_length_truncation_statistics(
         "mean": 5.0,
     }
     assert report["model_input_structured_token_count"] == {
-        "min": 4,
-        "max": 4,
-        "mean": 4.0,
+        "min": 5,
+        "max": 5,
+        "mean": 5.0,
     }
     assert report["retained_structured_token_count"] == {
         "min": 1,
         "max": 1,
         "mean": 1.0,
     }
-    assert report["terminal_turn_start_removed_sample_count"] == 2
+    assert report["terminal_turn_start_removed_sample_count"] == 0
     assert report["length_truncated_sample_count"] == 2
     assert report["length_truncated_sample_fraction"] == 1.0
     assert "raw_structured_token_count" not in report
@@ -87,16 +87,16 @@ def test_audit_does_not_count_terminal_pre_marker_as_length_truncation(
         "mean": 5.0,
     }
     assert report["model_input_structured_token_count"] == {
-        "min": 4,
-        "max": 4,
-        "mean": 4.0,
+        "min": 5,
+        "max": 5,
+        "mean": 5.0,
     }
     assert report["retained_structured_token_count"] == {
-        "min": 4,
-        "max": 4,
-        "mean": 4.0,
+        "min": 5,
+        "max": 5,
+        "mean": 5.0,
     }
-    assert report["terminal_turn_start_removed_sample_count"] == 1
+    assert report["terminal_turn_start_removed_sample_count"] == 0
     assert report["length_truncated_sample_count"] == 0
     assert report["length_truncated_sample_fraction"] == 0.0
 

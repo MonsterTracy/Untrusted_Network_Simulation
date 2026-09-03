@@ -3,13 +3,24 @@ import json
 
 import pytest
 
-from script.twd_tom.collection_budget import GameCallBudgetAudit
+from tests.canonical_collection.test_game_bundle import _plan
 from werewolf.agents.llm_agent import LLMAgent
+from werewolf.canonical_collection import (
+    V1_SPEECH_PARSER_VERSION,
+    V1_SPEECH_PROMPT_VERSION,
+    V1AnnotationStatus,
+    V1PerceptionAttempt,
+    V1SpeechAction,
+    construct_authoritative_pre_prefix,
+    construct_v1_speech_annotation,
+    freeze_public_event_history,
+)
+from werewolf.canonical_collection.call_audit import (
+    AuditedBackend,
+    CanonicalCallAudit,
+)
 from werewolf.helper.log_utils import Log
-from werewolf.models.twd_tom.public_events import copy_public_events
 from werewolf.models.twd_tom.schema import LABEL_PROMPT_VERSION
-from werewolf.models.twd_tom.samples import freeze_public_snapshot
-from tests.twd_tom.public_event_fixtures import make_speech_annotations
 from werewolf.speech.private_belief_perceiver import (
     LABEL_GENERATION_MAX_ATTEMPTS,
     PRIVATE_BELIEF_JSON_SCHEMA,
@@ -43,39 +54,84 @@ class CapturingBackend:
 def _snapshot():
     events = [
         {
-            "event_idx": 0,
+            "event_id": "event-0",
+            "event_index": 0,
             "event_type": "phase_change",
-            "phase": "1_day_speech",
+            "day": 0,
+            "phase": "night",
         },
         {
-            "event_idx": 1,
+            "event_id": "event-1",
+            "event_index": 1,
+            "event_type": "death_announcement",
+            "dead_players": [],
+        },
+        {
+            "event_id": "event-2",
+            "event_index": 2,
+            "event_type": "phase_change",
+            "day": 1,
+            "phase": "discussion",
+        },
+        {
+            "event_id": "event-3",
+            "event_index": 3,
             "event_type": "turn_start",
             "speaker": "player2",
         },
         {
-            "event_idx": 2,
+            "event_id": "event-4",
+            "event_index": 4,
             "event_type": "public_speech",
             "speaker": "player2",
             "raw_text": "earlier public speech",
         },
         {
-            "event_idx": 3,
+            "event_id": "event-5",
+            "event_index": 5,
             "event_type": "turn_start",
             "speaker": "player3",
         },
     ]
-    return freeze_public_snapshot(
-        game_id="game_001",
-        step_idx=2,
-        phase="1_day_speech",
-        speaker_id=3,
-        report_trigger="pre_public_speech",
-        observer_ids=[1, 2, 3],
-        public_events=events,
-        speech_annotations=make_speech_annotations(
-            events,
-            [["player2", "point_as_werewolf", "player6"]],
+    annotated_history = freeze_public_event_history(events[:5])
+    annotation = construct_v1_speech_annotation(
+        annotated_history,
+        status=V1AnnotationStatus.OK,
+        actions=(
+            V1SpeechAction(
+                "player2",
+                "point_as_werewolf",
+                "player6",
+            ),
         ),
+        attempts=(
+            V1PerceptionAttempt(
+                attempt_index=1,
+                call_id="perception-call-1",
+                backend_id="parser-backend",
+                model_id="parser-model",
+                prompt_version=V1_SPEECH_PROMPT_VERSION,
+                parser_version=V1_SPEECH_PARSER_VERSION,
+                status=V1AnnotationStatus.OK,
+                raw_response="player2,point_as_werewolf,player6",
+                error_category=None,
+                error_message=None,
+            ),
+        ),
+    )
+    return construct_authoritative_pre_prefix(
+        game_id="game_001",
+        boundary_id="boundary-005",
+        step_index=5,
+        report_trigger_id="pre-public-speech-005",
+        current_speaker="player3",
+        alive_observer_ids=("player1", "player2", "player3"),
+        public_event_history=freeze_public_event_history(events),
+        v1_annotations=(annotation,),
+        belief_observation_ids_by_observer={
+            f"player{seat}": f"boundary-005-belief-player{seat}"
+            for seat in range(1, 4)
+        },
     )
 
 
@@ -105,7 +161,12 @@ def _report(
         response,
         supports_json_schema=supports_json_schema,
     )
-    agent = LLMAgent(backend=backend, model_name="fake")
+    agent_backend = (
+        AuditedBackend(backend, audit_hook)
+        if isinstance(audit_hook, CanonicalCallAudit)
+        else backend
+    )
+    agent = LLMAgent(backend=agent_backend, model_name="fake")
     result = PlayingAgentBeliefReporter(audit_hook=audit_hook).report(
         agent=agent,
         observation=(
@@ -114,7 +175,8 @@ def _report(
             else _observation(player_id, identity)
         ),
         observer_id=player_id,
-        public_snapshot=_snapshot(),
+        pre_prefix=_snapshot(),
+        observation_id=f"boundary-005-belief-player{player_id}",
         agent_backend_id="backend_a",
         known_werewolves=list(known_werewolves or []),
         known_non_werewolves=list(
@@ -127,7 +189,7 @@ def _report(
 def test_prompt_defines_hard_knowledge_consistent_player_suspicion():
     prompt = PlayingAgentBeliefReporter.build_prompt(
         observer_id="player3",
-        public_snapshot=_snapshot(),
+        pre_prefix=_snapshot(),
         known_werewolves=["player1"],
         known_non_werewolves=["player3", "player6"],
     )
@@ -541,9 +603,7 @@ def test_reporter_uses_public_history_once_and_only_role_private_logs():
         .split("\n\n", 1)[0]
     )
     public_history = json.loads(public_history_text)
-    assert public_history == copy_public_events(
-        _snapshot().public_events
-    )
+    assert public_history == _snapshot().public_event_history.to_records()
 
     messages = json.dumps(
         request_messages,
@@ -667,12 +727,9 @@ def test_full_candidate_report_succeeds_once_without_retry():
 
 
 def test_semantic_generation_retries_until_third_valid_response():
-    audit = GameCallBudgetAudit(
-        game_id="label-retry",
-        max_gameplay_calls=1,
-        max_belief_calls=3,
-        max_total_calls=4,
-        max_wall_seconds=60,
+    audit = CanonicalCallAudit(
+        plan=_plan(),
+        configured_call_limit=4,
     )
     result, backend, _ = _report(
         [
@@ -688,11 +745,10 @@ def test_semantic_generation_retries_until_third_valid_response():
     assert result["suspected_werewolves"] == ["player3"]
     assert result["generation_attempt_count"] == 3
     assert len(backend.calls) == LABEL_GENERATION_MAX_ATTEMPTS == 3
-    attempt_events = audit.snapshot()["label_generation_attempt_events"]
-    assert [event["status"] for event in attempt_events] == [
-        STATUS_SEMANTIC_ERROR,
-        STATUS_SEMANTIC_ERROR,
-        STATUS_OK,
+    assert [record.status.value for record in audit.records] == [
+        "error",
+        "error",
+        "success",
     ]
     assert "上一次输出未通过" not in backend.calls[0]["messages"][1]["content"]
     assert "cannot contain the observer" in backend.calls[1]["messages"][1][
@@ -705,12 +761,9 @@ def test_semantic_generation_retries_until_third_valid_response():
 
 
 def test_required_known_werewolf_retry_uses_validation_feedback():
-    audit = GameCallBudgetAudit(
-        game_id="known-wolf-label-retry",
-        max_gameplay_calls=1,
-        max_belief_calls=2,
-        max_total_calls=3,
-        max_wall_seconds=60,
+    audit = CanonicalCallAudit(
+        plan=_plan(),
+        configured_call_limit=3,
     )
     result, backend, _ = _report(
         [
@@ -736,8 +789,10 @@ def test_required_known_werewolf_retry_uses_validation_feedback():
     assert result["generation_attempt_count"] == 2
     assert len(backend.calls) == 2
     assert "missing=['player3']" in backend.calls[1]["messages"][1]["content"]
-    attempt_events = audit.snapshot()["label_generation_attempt_events"]
-    assert [event["raw_response"] for event in attempt_events] == [
+    assert [
+        record.private_payload.to_value()["response"]
+        for record in audit.records
+    ] == [
         '{"suspected_werewolves":[]}',
         '{"suspected_werewolves":["player3"]}',
     ]
@@ -786,7 +841,8 @@ def test_reporter_distinguishes_parse_backend_and_context_failures():
         agent=BrokenAgent(),
         observation=_observation(),
         observer_id=1,
-        public_snapshot=_snapshot(),
+        pre_prefix=_snapshot(),
+        observation_id="boundary-005-belief-player1",
         agent_backend_id="backend_a",
         known_werewolves=[],
         known_non_werewolves=["player1"],
@@ -799,7 +855,8 @@ def test_reporter_distinguishes_parse_backend_and_context_failures():
         agent=BrokenAgent(),
         observation=mismatch,
         observer_id=1,
-        public_snapshot=_snapshot(),
+        pre_prefix=_snapshot(),
+        observation_id="boundary-005-belief-player1",
         agent_backend_id="backend_a",
         known_werewolves=[],
         known_non_werewolves=["player1"],

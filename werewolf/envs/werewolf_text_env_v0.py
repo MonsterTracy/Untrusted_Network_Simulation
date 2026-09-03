@@ -7,18 +7,33 @@ from collections import Counter
 import json
 
 from werewolf.helper.log_utils import Log
+from werewolf.canonical_collection.public_history import (
+    freeze_public_event_history,
+)
+from werewolf.canonical_collection.speech import (
+    V1_SPEECH_PARSER_VERSION,
+    V1_SPEECH_PROMPT_VERSION,
+    V1AnnotationStatus,
+    V1PerceptionAttempt,
+    V1SpeechAction,
+    construct_v1_speech_annotation,
+)
 from werewolf.speech.speech_perceiver import (
     SpeechPerceiver,
 )
 from werewolf.models.twd_tom.belief_labels import close_hard_knowledge
-from werewolf.models.twd_tom.public_events import normalize_public_event
 from werewolf.models.twd_tom.schema import normalize_player
-from werewolf.models.twd_tom.speech_annotations import (
-    STATUS_ERROR,
-    STATUS_NO_ACTION,
-    STATUS_OK,
-    make_speech_annotation,
-)
+
+
+class V1SpeechPerceptionExhausted(RuntimeError):
+    """The sole V1 perception path exhausted its bounded attempts."""
+
+    def __init__(self, annotation):
+        self.annotation = annotation
+        super().__init__(
+            "V1 speech perception exhausted bounded attempts: "
+            f"event_id={annotation.event_id}"
+        )
 
 
 class WerewolfTextEnvV0(gym.Env):
@@ -165,6 +180,7 @@ class WerewolfTextEnvV0(gym.Env):
         self.current_act_idx = self.WOLF_IDX[0]
         self.phase = 'skill_wolf'
         self.day_or_night = 'night'
+        self._append_public_phase()
         observation = self.get_observation()
         return observation
 
@@ -172,25 +188,36 @@ class WerewolfTextEnvV0(gym.Env):
         """Append the sole canonical public-event record for this game."""
 
         event = {
-            "event_idx": len(self.public_events),
+            "event_id": f"event-{len(self.public_events):06d}",
+            "event_index": len(self.public_events),
             "event_type": event_type,
             **payload,
         }
-        normalized = normalize_public_event(
-            event,
-            expected_idx=len(self.public_events),
-        )
-        self.public_events.append(normalized)
-        return normalized
+        self.public_events.append(event)
+        freeze_public_event_history(self.public_events)
+        return deepcopy(event)
 
     def _append_public_phase(self):
+        public_phase_by_runtime_phase = {
+            "skill_wolf": "night",
+            "skill_seer": "night",
+            "skill_guard": "night",
+            "skill_witch": "night",
+            "speech": "discussion",
+            "vote": "vote",
+            "speech_pk": "pk_discussion",
+            "vote_pk": "pk_vote",
+        }
+        try:
+            public_phase = public_phase_by_runtime_phase[self.phase]
+        except KeyError as error:
+            raise ValueError(
+                f"runtime phase has no public temporal state: {self.phase!r}"
+            ) from error
         self._append_public_event(
             "phase_change",
-            phase=self.get_phase(
-                self.day,
-                self.day_or_night,
-                self.phase,
-            ),
+            day=self.day,
+            phase=public_phase,
         )
 
     def _append_turn_start(self):
@@ -353,7 +380,6 @@ class WerewolfTextEnvV0(gym.Env):
             reward, done, info = self.end_night()
         elif self.phase == 'speech' or self.phase == 'speech_pk':
             assert action_type == 'speech' or action_type == 'speech_pk'
-            event_idx = len(self.public_events)
             speaker = normalize_player(self.current_act_idx + 1)
             if not isinstance(action_content, str):
                 raise TypeError("speech content must be text")
@@ -366,38 +392,86 @@ class WerewolfTextEnvV0(gym.Env):
             )
             if audit.parse_status == "ok":
                 sp_actions = audit.normalized_actions
-                status = STATUS_OK if sp_actions else STATUS_NO_ACTION
-                error_type = None
-                error_message = None
+                status = (
+                    V1AnnotationStatus.OK
+                    if sp_actions
+                    else V1AnnotationStatus.NO_ACTION
+                )
             else:
                 sp_actions = []
-                status = STATUS_ERROR
-                error_type = audit.error_type or "SpeechParserError"
-                error_message = audit.error_message or "speech parser failed"
-            annotation = make_speech_annotation(
-                event_idx=event_idx,
-                speaker=speaker,
-                raw_text=raw_text,
-                parser_model_id=(
-                    getattr(self.speech_perceiver, "model_name", None)
-                    or type(self.speech_perceiver).__name__
-                ),
-                parser_call_id=f"speech_parser_event_{event_idx:06d}",
-                annotation_source="llm_parser",
-                status=status,
-                actions=sp_actions,
-                generation_attempts=audit.generation_attempts,
-                raw_response=audit.raw_response,
-                error_type=error_type,
-                error_message=error_message,
-            )
+                status = V1AnnotationStatus.ERROR
 
             speech_event = self._append_public_event(
                 "public_speech",
                 speaker=speaker,
                 raw_text=raw_text,
             )
+            event_id = speech_event["event_id"]
+            attempts = []
+            for raw_attempt in audit.generation_attempts:
+                attempt_index = raw_attempt["generation_attempt"]
+                is_final_success = (
+                    status is not V1AnnotationStatus.ERROR
+                    and attempt_index == len(audit.generation_attempts)
+                )
+                attempt_status = status if is_final_success else V1AnnotationStatus.ERROR
+                attempts.append(
+                    V1PerceptionAttempt(
+                        attempt_index=attempt_index,
+                        call_id=f"{event_id}-attempt-{attempt_index:02d}",
+                        backend_id=(
+                            getattr(self.speech_perceiver, "backend_id", None)
+                            or getattr(
+                                getattr(self.speech_perceiver, "backend", None),
+                                "canonical_backend_identity",
+                                None,
+                            )
+                            or type(self.speech_perceiver).__name__
+                        ),
+                        model_id=(
+                            getattr(self.speech_perceiver, "model_name", None)
+                            or type(self.speech_perceiver).__name__
+                        ),
+                        prompt_version=V1_SPEECH_PROMPT_VERSION,
+                        parser_version=V1_SPEECH_PARSER_VERSION,
+                        status=attempt_status,
+                        raw_response=raw_attempt.get("raw_response"),
+                        error_category=(
+                            None
+                            if attempt_status is not V1AnnotationStatus.ERROR
+                            else raw_attempt.get("error_type") or "SpeechParserError"
+                        ),
+                        error_message=(
+                            None
+                            if attempt_status is not V1AnnotationStatus.ERROR
+                            else raw_attempt.get("error_message")
+                            or "speech parser failed"
+                        ),
+                    )
+                )
+            annotation = construct_v1_speech_annotation(
+                freeze_public_event_history(self.public_events),
+                status=status,
+                actions=tuple(V1SpeechAction(*action) for action in sp_actions),
+                attempts=tuple(attempts),
+            )
             self.speech_annotations.append(annotation)
+            mark_semantic_attempt = getattr(
+                getattr(self.speech_perceiver, "backend", None),
+                "mark_semantic_attempt",
+                None,
+            )
+            if callable(mark_semantic_attempt):
+                for attempt in annotation.attempts:
+                    mark_semantic_attempt(
+                        attempt.call_id,
+                        success=attempt.status is not V1AnnotationStatus.ERROR,
+                        error_category=attempt.error_category,
+                        error_message=attempt.error_message,
+                    )
+
+            if status is V1AnnotationStatus.ERROR:
+                raise V1SpeechPerceptionExhausted(annotation)
 
             self.game_log.append(
                 Log(

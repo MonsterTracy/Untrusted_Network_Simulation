@@ -15,7 +15,7 @@ from script.twd_tom.collect_canonical_trajectories import (
 from werewolf.models.twd_tom.action_features import PublicEventFeatureBuilder
 from werewolf.models.twd_tom.dataset import TWDToMDataset
 from werewolf.models.twd_tom.public_events import (
-    completed_pre_speech_public_events,
+    normalize_public_events,
     structured_event_tokens,
 )
 from werewolf.models.twd_tom.samples import SAMPLE_SCHEMA_VERSION
@@ -186,10 +186,7 @@ def audit_canonical_belief_data(
     model_input_token_counts = [
         len(
             structured_event_tokens(
-                completed_pre_speech_public_events(
-                    record.get("public_events"),
-                    speaker_id=record.get("speaker_id"),
-                ),
+                normalize_public_events(record.get("public_events")),
                 record.get("speech_annotations"),
             )
         )
@@ -202,10 +199,10 @@ def audit_canonical_belief_data(
             model_input_token_counts,
         )
     ]
-    if any(count != 1 for count in terminal_removed_token_counts):
+    if any(count != 0 for count in terminal_removed_token_counts):
         raise RuntimeError(
-            "strict PRE model input must remove exactly one terminal "
-            "turn_start token per sample"
+            "strict PRE model input must preserve the terminal turn_start "
+            "token in every sample"
         )
     feature_builder = PublicEventFeatureBuilder(max_seq_len=max_seq_len)
     dataset = TWDToMDataset(all_records, feature_builder=feature_builder)
@@ -259,7 +256,7 @@ def audit_canonical_belief_data(
             "max": max(retained_token_counts),
             "mean": sum(retained_token_counts) / sample_count,
         },
-        "terminal_turn_start_removed_sample_count": sample_count,
+        "terminal_turn_start_removed_sample_count": 0,
         "length_truncated_sample_count": length_truncated_sample_count,
         "length_truncated_sample_fraction": (
             length_truncated_sample_count / sample_count

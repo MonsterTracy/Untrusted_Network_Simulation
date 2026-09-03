@@ -31,9 +31,7 @@ from werewolf.models.twd_tom.checkpoint import (
 )
 from werewolf.models.twd_tom.dataset import load_twd_tom_jsonl
 from werewolf.models.twd_tom.losses import masked_belief_probabilities
-from werewolf.models.twd_tom.public_events import (
-    completed_pre_speech_public_events,
-)
+from werewolf.models.twd_tom.public_events import normalize_public_events
 from werewolf.models.twd_tom.schema import NUM_PLAYERS
 
 
@@ -248,10 +246,7 @@ def export_belief_worst_cases(
                         "next_boundary_target": None,
                         "next_boundary_label_observed": None,
                         "public_history": deepcopy(
-                            completed_pre_speech_public_events(
-                                sample["public_events"],
-                                speaker_id=sample["speaker_id"],
-                            )
+                            normalize_public_events(sample["public_events"])
                         ),
                         "speech_annotations": deepcopy(
                             sample["speech_annotations"]
