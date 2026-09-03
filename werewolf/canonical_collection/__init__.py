@@ -1,0 +1,63 @@
+"""Frozen contracts used by the future authoritative Canonical Collection."""
+
+from werewolf.canonical_collection.pre import (
+    AUTHORITATIVE_PRE_PREFIX_SCHEMA_VERSION,
+    SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
+    AuthoritativePREPrefix,
+    SpeakerPREBeliefHandoff,
+    construct_authoritative_pre_prefix,
+    construct_speaker_pre_belief_handoff,
+    validate_authoritative_pre_prefix,
+)
+from werewolf.canonical_collection.public_history import (
+    PUBLIC_EVENT_SCHEMA_VERSION,
+    PUBLIC_PHASES,
+    FrozenPublicEvent,
+    PublicEventHistory,
+    PublicPhase,
+    PublicTemporalState,
+    freeze_public_event_history,
+    validate_public_event_history,
+)
+from werewolf.canonical_collection.speech import (
+    V1_ANNOTATION_SCHEMA_VERSION,
+    V1_ANNOTATION_STATUSES,
+    V1_SPEECH_ONTOLOGY_VERSION,
+    V1_SPEECH_PARSER_VERSION,
+    V1_SPEECH_PROMPT_VERSION,
+    V1AnnotationStatus,
+    V1PerceptionAttempt,
+    V1SpeechAction,
+    V1SpeechAnnotation,
+    construct_v1_speech_annotation,
+    validate_v1_annotation_binding,
+)
+
+__all__ = [
+    "AUTHORITATIVE_PRE_PREFIX_SCHEMA_VERSION",
+    "PUBLIC_EVENT_SCHEMA_VERSION",
+    "PUBLIC_PHASES",
+    "SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION",
+    "AuthoritativePREPrefix",
+    "FrozenPublicEvent",
+    "PublicEventHistory",
+    "PublicPhase",
+    "PublicTemporalState",
+    "SpeakerPREBeliefHandoff",
+    "V1_ANNOTATION_SCHEMA_VERSION",
+    "V1_ANNOTATION_STATUSES",
+    "V1_SPEECH_ONTOLOGY_VERSION",
+    "V1_SPEECH_PARSER_VERSION",
+    "V1_SPEECH_PROMPT_VERSION",
+    "V1AnnotationStatus",
+    "V1PerceptionAttempt",
+    "V1SpeechAction",
+    "V1SpeechAnnotation",
+    "construct_authoritative_pre_prefix",
+    "construct_speaker_pre_belief_handoff",
+    "construct_v1_speech_annotation",
+    "freeze_public_event_history",
+    "validate_authoritative_pre_prefix",
+    "validate_public_event_history",
+    "validate_v1_annotation_binding",
+]
