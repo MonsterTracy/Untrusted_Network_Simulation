@@ -37,13 +37,18 @@ class ArtifactPublishUnsupportedError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class VerifiedArtifact:
-    """A fully validated immutable artifact directory."""
+class ArtifactEnvelope:
+    """Verified manifest and inventory; payload reads still require digest gates."""
 
     path: Path
     manifest_name: str
     manifest: dict[str, Any]
     manifest_digest: str
+
+
+@dataclass(frozen=True)
+class VerifiedArtifact(ArtifactEnvelope):
+    """An immutable artifact whose complete payload has also been verified."""
 
 
 def _json_value(value: Any) -> Any:
@@ -204,6 +209,21 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def ensure_durable_directory(path: Path) -> None:
+    """Create/confirm a directory chain and persist every containing entry."""
+    path = Path(path).absolute()
+    chain = [*reversed(path.parents), path]
+    for directory in chain:
+        if directory.is_symlink():
+            raise ArtifactValidationError("symbolic link in durable directory chain")
+        directory.mkdir(exist_ok=True)
+        if not directory.is_dir():
+            raise ArtifactValidationError("durable parent is not a directory")
+        _fsync_directory(directory)
+        if directory.parent != directory:
+            _fsync_directory(directory.parent)
+
+
 def _fsync_tree(root: Path) -> None:
     directories = [path for path in root.rglob("*") if path.is_dir()]
     directories.sort(key=lambda path: len(path.parts), reverse=True)
@@ -291,6 +311,9 @@ def _reuse_or_conflict(
             f"immutable artifact destination has a different identity: "
             f"{destination}"
         )
+    ensure_durable_directory(destination.parent)
+    _fsync_directory(destination)
+    _fsync_directory(destination.parent)
     return verified
 
 
@@ -318,7 +341,7 @@ def publish_artifact(
             manifest_name=manifest_name,
         )
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    ensure_durable_directory(destination.parent)
     staging = Path(
         tempfile.mkdtemp(
             prefix=f".{destination.name}.staging-",
@@ -420,13 +443,13 @@ def _expected_directories(relative_paths: Iterable[str]) -> set[str]:
     return directories
 
 
-def _verify_artifact(
+def _open_artifact_envelope(
     path: Path,
     *,
     expected_artifact_type: str,
     expected_schema_version: str,
     manifest_name: str,
-) -> VerifiedArtifact:
+) -> ArtifactEnvelope:
     _validate_manifest_name(manifest_name)
     if path.is_symlink() or not path.is_dir():
         raise ArtifactValidationError(f"artifact is not a directory: {path}")
@@ -473,18 +496,7 @@ def _verify_artifact(
             "artifact directories do not exactly match the manifest file table"
         )
 
-    for relative_path, entry in file_table.items():
-        payload = (path / relative_path).read_bytes()
-        if len(payload) != entry["byte_size"]:
-            raise ArtifactValidationError(
-                f"artifact file size mismatch: {relative_path}"
-            )
-        if sha256_bytes(payload) != entry["sha256"]:
-            raise ArtifactValidationError(
-                f"artifact file digest mismatch: {relative_path}"
-            )
-
-    return VerifiedArtifact(
+    return ArtifactEnvelope(
         path=path,
         manifest_name=manifest_name,
         manifest=manifest,
@@ -492,17 +504,17 @@ def _verify_artifact(
     )
 
 
-def verify_artifact(
+def open_artifact_envelope(
     path: Path | str,
     *,
     expected_artifact_type: str,
     expected_schema_version: str,
     manifest_name: str = "manifest.json",
-) -> VerifiedArtifact:
-    """Validate the exact schema, canonical bytes, tree, sizes, and digests."""
+) -> ArtifactEnvelope:
+    """Validate manifest and inventory without opening gated data partitions."""
 
     try:
-        return _verify_artifact(
+        return _open_artifact_envelope(
             Path(path),
             expected_artifact_type=expected_artifact_type,
             expected_schema_version=expected_schema_version,
@@ -512,3 +524,31 @@ def verify_artifact(
         raise
     except (OSError, UnicodeError, TypeError, ValueError) as error:
         raise ArtifactValidationError(f"invalid artifact: {error}") from error
+
+
+def read_artifact_file(envelope: ArtifactEnvelope, relative_path: str) -> bytes:
+    """Open exactly one listed file and verify its complete canonical bytes."""
+    if relative_path not in envelope.manifest["file_table"]:
+        raise ArtifactValidationError("unlisted artifact payload")
+    path = envelope.path / relative_path
+    if path.is_symlink():
+        raise ArtifactValidationError("symbolic link in artifact payload")
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        raise ArtifactValidationError("missing artifact payload") from error
+    entry = envelope.manifest["file_table"][relative_path]
+    if len(payload) != entry["byte_size"]:
+        raise ArtifactValidationError(f"artifact file size mismatch: {relative_path}")
+    if sha256_bytes(payload) != entry["sha256"]:
+        raise ArtifactValidationError(f"artifact file digest mismatch: {relative_path}")
+    return payload
+
+
+def verify_artifact(path, *, expected_artifact_type, expected_schema_version, manifest_name="manifest.json") -> VerifiedArtifact:
+    """Validate the exact schema, canonical bytes, tree, sizes, and digests."""
+    envelope = open_artifact_envelope(path, expected_artifact_type=expected_artifact_type,
+        expected_schema_version=expected_schema_version, manifest_name=manifest_name)
+    for relative_path in envelope.manifest["file_table"]:
+        read_artifact_file(envelope, relative_path)
+    return VerifiedArtifact(**vars(envelope))

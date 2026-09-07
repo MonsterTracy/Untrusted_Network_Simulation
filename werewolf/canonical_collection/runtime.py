@@ -35,7 +35,7 @@ from werewolf.canonical_collection.trajectory_evidence import (
     construct_submitted_gameplay_action,
 )
 from werewolf.envs.werewolf_text_env_v0 import V1SpeechPerceptionExhausted
-from werewolf.models.twd_tom.schema import normalize_player
+from werewolf.speech.validation import normalize_player
 
 
 _EXTERNAL_AGENT_FIELDS = {
@@ -117,8 +117,8 @@ class PlayingAgentBeliefObservationCollector:
                 pre_prefix=prefix,
                 observation_id=link.observation_id,
                 agent_backend_id=backend_id,
-                known_werewolves=env.get_twd_tom_hard_knowledge_for(seat)[0],
-                known_non_werewolves=env.get_twd_tom_hard_knowledge_for(seat)[1],
+                known_werewolves=env.observer_private_knowledge(seat)[0],
+                known_non_werewolves=env.observer_private_knowledge(seat)[1],
             )
             state_after = _snapshot_agent_state(agent)
             self.reporter.record_agent_state(

@@ -1,6 +1,6 @@
 import unittest
 
-from werewolf.models import SpeechPerceiver
+from werewolf.speech.speech_perceiver import SpeechPerceiver
 from werewolf.speech.speech_perceiver import (
     SPEECH_PARSER_GENERATION_MAX_ATTEMPTS,
     SPEECH_PARSER_MAX_TOKENS,

@@ -9,6 +9,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from werewolf.canonical_collection.speech import V1_ACTIONS, V1SpeechAction
+
 
 SPEECH_PARSER_MAX_TOKENS = 256
 SPEECH_PARSER_GENERATION_MAX_ATTEMPTS = 3
@@ -18,17 +20,6 @@ _PIPE_TRIPLET_PATTERN = re.compile(
     r"(?P<action>[a-z_]+) \| "
     r"(?P<object>player[1-7]|NONE)$"
 )
-
-
-def _load_tom_schema():
-    """Load the ToM schema lazily to avoid package import cycles."""
-
-    from werewolf.models.twd_tom.schema import (
-        ACTION_NAMES,
-        SpeechAction,
-    )
-
-    return ACTION_NAMES, SpeechAction
 
 
 class SpeechActionValidationError(ValueError):
@@ -340,10 +331,9 @@ class SpeechPerceiver:
     ) -> str:
         """Build the formal public-speech parsing prompt."""
 
-        action_names, _ = _load_tom_schema()
         allowed_actions = "\n".join(
             f"- {action_name}"
-            for action_name in action_names
+            for action_name in V1_ACTIONS
         )
 
         prompt = f"""你是狼人杀公开发言的结构化动作解析器。
@@ -560,7 +550,6 @@ player{speaker}: {speech}"""
     ) -> list[list[str | None]]:
         """Validate exact triplets without repairing their subject or object."""
 
-        _, speech_action_type = _load_tom_schema()
         if not isinstance(parsed, list):
             raise TypeError("parsed speech actions must be a list")
 
@@ -581,10 +570,10 @@ player{speaker}: {speech}"""
                 )
                 continue
             try:
-                action = speech_action_type.from_values(
+                action = V1SpeechAction(
                     subject=item[0],
                     action=item[1],
-                    object_=item[2],
+                    object=item[2],
                 )
                 if action.subject != f"player{speaker}":
                     raise ValueError(
@@ -599,7 +588,7 @@ player{speaker}: {speech}"""
                 )
                 continue
 
-            normalized = action.to_list()
+            normalized = action.to_record()
             key = tuple(normalized)
             if key not in seen:
                 seen.add(key)

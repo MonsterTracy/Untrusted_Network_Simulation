@@ -20,6 +20,6 @@ jobs:
       - name: Install project and test dependencies
         run: python -m pip install -e ".[tom,dev]"
       - name: Compile Python sources
-        run: python -m compileall script werewolf tests
+        run: python -m compileall run_random.py werewolf tests
       - name: Run self-contained test suite
         run: python -m pytest -q

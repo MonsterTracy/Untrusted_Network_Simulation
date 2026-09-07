@@ -120,6 +120,25 @@ def publish_tensor_state(
 
     if "tensor_container" in manifest_fields:
         raise ValueError("tensor_container is owned by the tensor-state writer")
+    container, payload = encode_tensor_container(tensors, payload_path=_TENSOR_PAYLOAD_PATH)
+    artifact = publish_artifact(
+        destination,
+        manifest_fields={**manifest_fields, "tensor_container": container},
+        files={_TENSOR_PAYLOAD_PATH: payload},
+        manifest_name=manifest_name,
+    )
+    return verify_tensor_state(
+        artifact.path,
+        expected_artifact_type=artifact.manifest["artifact_type"],
+        expected_schema_version=artifact.manifest["schema_version"],
+        manifest_name=manifest_name,
+    )
+
+
+def encode_tensor_container(tensors: Mapping[str, TensorValue], *, payload_path: str):
+    """One canonical codec for initial, terminal, model/optimizer/RNG recovery bytes."""
+    if Path(payload_path).name != payload_path or not payload_path.endswith(".bin"):
+        raise ValueError("tensor payload must be a local .bin file")
     if not tensors:
         raise ValueError("tensor state must contain at least one tensor")
 
@@ -148,23 +167,12 @@ def publish_tensor_state(
     payload = b"".join(payload_parts)
     container = {
         "format_version": _TENSOR_CONTAINER_VERSION,
-        "payload_path": _TENSOR_PAYLOAD_PATH,
+        "payload_path": payload_path,
         "payload_byte_length": len(payload),
         "payload_sha256": sha256_bytes(payload),
         "tensors": entries,
     }
-    artifact = publish_artifact(
-        destination,
-        manifest_fields={**manifest_fields, "tensor_container": container},
-        files={_TENSOR_PAYLOAD_PATH: payload},
-        manifest_name=manifest_name,
-    )
-    return verify_tensor_state(
-        artifact.path,
-        expected_artifact_type=artifact.manifest["artifact_type"],
-        expected_schema_version=artifact.manifest["schema_version"],
-        manifest_name=manifest_name,
-    )
+    return container, payload
 
 
 def _require_nonnegative_integer(value: Any, field: str) -> int:
@@ -282,15 +290,19 @@ def verify_tensor_state(
         expected_schema_version=expected_schema_version,
         manifest_name=manifest_name,
     )
-    container = artifact.manifest.get("tensor_container")
+    tensors = decode_tensor_container(artifact.manifest.get("tensor_container"),
+        (artifact.path / _TENSOR_PAYLOAD_PATH).read_bytes(), payload_path=_TENSOR_PAYLOAD_PATH)
+    return VerifiedTensorState(artifact=artifact, tensors=tensors)
+
+
+def decode_tensor_container(container, payload: bytes, *, payload_path: str):
     if not isinstance(container, dict) or set(container) != _CONTAINER_FIELDS:
         raise ArtifactValidationError("invalid tensor_container manifest")
     if container["format_version"] != _TENSOR_CONTAINER_VERSION:
         raise ArtifactValidationError("unsupported tensor container version")
-    if container["payload_path"] != _TENSOR_PAYLOAD_PATH:
+    if container["payload_path"] != payload_path:
         raise ArtifactValidationError("unexpected tensor payload path")
 
-    payload = (artifact.path / _TENSOR_PAYLOAD_PATH).read_bytes()
     payload_byte_length = _require_nonnegative_integer(
         container["payload_byte_length"],
         "payload_byte_length",
@@ -301,7 +313,4 @@ def verify_tensor_state(
     if not isinstance(payload_digest, str) or sha256_bytes(payload) != payload_digest:
         raise ArtifactValidationError("tensor payload digest mismatch")
 
-    return VerifiedTensorState(
-        artifact=artifact,
-        tensors=_verify_tensor_entries(container["tensors"], payload),
-    )
+    return _verify_tensor_entries(container["tensors"], payload)

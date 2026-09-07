@@ -166,7 +166,7 @@ def _annotation(full_history, plan):
     )
 
 
-def _fixture(plan=None, claim=None):
+def _fixture(plan=None, claim=None, *, game_id="game-000"):
     plan = _plan() if plan is None else plan
     claim = _claim(plan) if claim is None else claim
     full_history = freeze_public_event_history(_public_events())
@@ -175,7 +175,7 @@ def _fixture(plan=None, claim=None):
         observer: f"observation-{observer}" for observer in alive
     }
     prefix = construct_authoritative_pre_prefix(
-        game_id="game-000",
+        game_id=game_id,
         boundary_id="boundary-003",
         step_index=3,
         report_trigger_id="pre-public-speech-003",
@@ -187,7 +187,7 @@ def _fixture(plan=None, claim=None):
     )
     observations = tuple(
         construct_belief_observation(
-            game_id="game-000",
+            game_id=game_id,
             attempt_id=claim.attempt_id,
             boundary_id=prefix.boundary_id,
             prefix_digest=prefix.prefix_digest,
@@ -234,7 +234,7 @@ def _fixture(plan=None, claim=None):
         fallback_used=False,
     )
     private_replay = construct_private_replay_evidence(
-        game_id="game-000",
+        game_id=game_id,
         seed=claim.seed,
         role_assignment={
             "player1": "Werewolf",
@@ -284,7 +284,7 @@ def _fixture(plan=None, claim=None):
         ),
     )
     evidence = construct_canonical_game_evidence(
-        game_id="game-000",
+        game_id=game_id,
         public_event_stream=full_history,
         authoritative_pre_prefixes=(prefix,),
         belief_observations=observations,

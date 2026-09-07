@@ -255,19 +255,18 @@ def test_crash_after_bundle_publication_leaves_claim_for_interrupted_closure(
 
 
 def test_superseded_collection_entry_points_and_configs_are_absent():
+    import importlib.util
+
     import run_random
-    import script.twd_tom.collect_canonical_trajectories as old_batch
-    import werewolf.models.twd_tom as old_tom_package
 
     parameters = inspect.signature(run_random.eval).parameters
     assert "sample_collector" not in parameters
     assert "trajectory_recorder" not in parameters
     assert "allow_gameplay_fallback" not in parameters
     assert not hasattr(run_random, "build_twd_tom_sample_collector")
-    assert not hasattr(old_batch, "collect_canonical_trajectory_batch")
-    assert not hasattr(old_batch, "build_arg_parser")
-    assert not hasattr(old_tom_package, "TWDToMSampleCollector")
     repository = Path(__file__).resolve().parents[2]
+    assert not (repository / "werewolf" / "models" / "twd_tom" / "__init__.py").exists()
+    assert not (repository / "script" / "twd_tom" / "collect_canonical_trajectories.py").exists()
     assert not (repository / "configs" / "twd_tom_server_qwen35_9b.yaml").exists()
     assert not (
         repository / "configs" / "twd_tom_server_qwen35_9b_canonical_60.yaml"

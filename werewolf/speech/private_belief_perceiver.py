@@ -15,9 +15,9 @@ STATUS_SEMANTIC_ERROR = "semantic_error"
 STATUS_REPORTER_ERROR = "reporter_error"
 
 from werewolf.canonical_collection.pre import AuthoritativePREPrefix
-from werewolf.models.twd_tom.schema import (
+from werewolf.speech.validation import (
     LABEL_PROMPT_VERSION,
-    PLAYER_NAMES,
+    PLAYER_IDS,
     canonicalize_player_set,
     normalize_player,
     validate_player_suspicion,
@@ -61,14 +61,14 @@ def _private_belief_json_schema(
 
 
 PRIVATE_BELIEF_JSON_SCHEMA = _private_belief_json_schema(
-    PLAYER_NAMES,
+    PLAYER_IDS,
 )
 
 
 def private_belief_response_format(
     *,
     supports_json_schema: bool,
-    legal_candidates: list[str] | tuple[str, ...] = PLAYER_NAMES,
+    legal_candidates: list[str] | tuple[str, ...] = PLAYER_IDS,
     required_candidates: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build the provider request format without weakening local validation."""
@@ -401,7 +401,7 @@ class PlayingAgentBeliefReporter:
             raise ValueError("public snapshot requires a history digest")
         if isinstance(action_count, bool) or not isinstance(action_count, int):
             raise ValueError("public snapshot requires public_action_count")
-        canonical_identifiers = list(PLAYER_NAMES)
+        canonical_identifiers = list(PLAYER_IDS)
         canonical_list = ", ".join(canonical_identifiers)
         known_wolves = canonicalize_player_set(
             known_werewolves,
@@ -485,7 +485,7 @@ Return only this JSON structure:
             raise ValueError("hard knowledge sets must be disjoint")
         return [
             player
-            for player in PLAYER_NAMES
+            for player in PLAYER_IDS
             if player != observer and player not in known_non_wolves
         ]
 

@@ -23,7 +23,7 @@ def new_config():
             "all_candidates": [
                 {
                     "profile_name": "deepseek-flash-a",
-                    "agent_type": "llm_agent",
+                    "agent_type": "gpt",
                     "backend": "deepseek",
                     "model": "deepseek-v4-flash",
                     "model_params": {"temperature": 1.0},
@@ -31,7 +31,7 @@ def new_config():
                 },
                 {
                     "profile_name": "deepseek-flash-b",
-                    "agent_type": "llm_agent",
+                    "agent_type": "gpt",
                     "backend": "deepseek",
                     "model": "deepseek-v4-flash",
                     "model_params": {"temperature": 0.7},
@@ -40,31 +40,8 @@ def new_config():
             ],
         },
         "env_config": {"n_player": 7},
-        "custom_runtime_field": {"keep": True},
     }
 
-
-def legacy_config():
-    return {
-        "backend": {
-            "type": "openai_compatible",
-            "base_url": "https://api.deepseek.com",
-            "api_key": "plaintext-secret",
-            "agent_model": "deepseek-v4-flash",
-            "parser_model": "deepseek-parser",
-        },
-        "agent_config": {
-            "must_include": [],
-            "all_candidates": [
-                {
-                    "model_type": "deepseek",
-                    "model_params": {"temperature": 1.0},
-                    "sample_ratio": 1.0,
-                },
-            ],
-        },
-        "env_config": {"n_player": 7},
-    }
 
 
 class RuntimeConfigNormalizationTest(unittest.TestCase):
@@ -112,39 +89,6 @@ class RuntimeConfigNormalizationTest(unittest.TestCase):
             {"deepseek-v4-flash"},
         )
 
-    def test_legacy_schema_normalizes_successfully(self):
-        normalized = normalize_runtime_config(legacy_config())
-
-        self.assertNotIn("backend", normalized)
-        self.assertEqual(
-            normalized["backends"]["default"],
-            {
-                "type": "openai_compatible",
-                "base_url": "https://api.deepseek.com",
-                "api_key_env": "OPENAI_API_KEY",
-                "default_model": None,
-                "supports_json_schema": False,
-            },
-        )
-        self.assertEqual(
-            normalized["parser"],
-            {
-                "backend": "default",
-                "model": "deepseek-parser",
-                "model_params": {"temperature": 0.0},
-            },
-        )
-        self.assertEqual(
-            normalized["agent_config"]["all_candidates"][0],
-            {
-                "profile_name": "deepseek",
-                "agent_type": "deepseek",
-                "backend": "default",
-                "model": "deepseek-v4-flash",
-                "model_params": {"temperature": 1.0},
-                "sample_ratio": 1.0,
-            },
-        )
 
     def test_backend_and_backends_together_raise(self):
         config = new_config()
@@ -221,21 +165,10 @@ class RuntimeConfigNormalizationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "playing agent backend",
+            "unsupported runtime fields",
         ):
             normalize_runtime_config(config)
 
-    def test_legacy_plaintext_api_key_is_removed(self):
-        normalized = normalize_runtime_config(legacy_config())
-
-        self.assertNotIn(
-            "plaintext-secret",
-            repr(normalized),
-        )
-        self.assertNotIn(
-            "api_key",
-            normalized["backends"]["default"],
-        )
 
     def test_missing_parser_backend_raises(self):
         config = new_config()
@@ -283,65 +216,9 @@ class RuntimeConfigNormalizationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_runtime_config(config)
 
-    def test_legacy_model_name_is_model_fallback_and_removed(self):
-        config = legacy_config()
-        candidate = config["agent_config"]["all_candidates"][0]
-        candidate["model_params"]["model_name"] = "candidate-model"
 
-        normalized_candidate = normalize_runtime_config(config)[
-            "agent_config"
-        ]["all_candidates"][0]
 
-        self.assertEqual(
-            normalized_candidate["model"],
-            "candidate-model",
-        )
-        self.assertNotIn(
-            "model_name",
-            normalized_candidate["model_params"],
-        )
 
-    def test_legacy_llm_is_model_fallback_and_removed(self):
-        config = legacy_config()
-        candidate = config["agent_config"]["all_candidates"][0]
-        candidate["model_params"]["llm"] = "legacy-llm"
-
-        normalized_candidate = normalize_runtime_config(config)[
-            "agent_config"
-        ]["all_candidates"][0]
-
-        self.assertEqual(normalized_candidate["model"], "legacy-llm")
-        self.assertNotIn("llm", normalized_candidate["model_params"])
-
-    def test_legacy_must_include_model_type_maps_to_profile_name(self):
-        config = legacy_config()
-        candidate = config["agent_config"]["all_candidates"][0]
-        candidate["profile_name"] = "deepseek-profile"
-        config["agent_config"]["must_include"] = ["deepseek"]
-
-        normalized = normalize_runtime_config(config)
-
-        self.assertEqual(
-            normalized["agent_config"]["must_include"],
-            ["deepseek-profile"],
-        )
-
-    def test_root_fields_are_preserved_and_input_is_not_modified(self):
-        config = legacy_config()
-        config["custom_runtime_field"] = {"nested": [1, 2]}
-        original = deepcopy(config)
-
-        normalized = normalize_runtime_config(config)
-        normalized["env_config"]["n_player"] = 9
-        normalized["custom_runtime_field"]["nested"].append(3)
-
-        self.assertEqual(config, original)
-        self.assertEqual(normalized["env_config"]["n_player"], 9)
-        self.assertEqual(
-            normalized["custom_runtime_field"]["nested"],
-            [1, 2, 3],
-        )
-        self.assertNotIn("backend", normalized)
 
 
 if __name__ == "__main__":

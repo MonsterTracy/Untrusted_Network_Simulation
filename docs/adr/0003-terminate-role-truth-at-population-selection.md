@@ -1,0 +1,3 @@
+# Terminate role truth at population selection
+
+Development publication produces a provenance-bound Role Sidecar whose only semantic consumer is the Population Selector. For Primary Development OOF, the selector combines public alive state with `role != Werewolf` and emits only an Observer Eligibility Mask; every downstream Dataset, augmentation, model batch, model forward pass, loss, and metric is forbidden from knowing role identities, and cyclic rotation may only permute the already-derived eligibility rows. Primary manifests record the population identity, sidecar digest, and selector version without embedding the role map. All-Alive Identifiability Stress derives eligibility solely from public alive state and has no Role Sidecar dependency.

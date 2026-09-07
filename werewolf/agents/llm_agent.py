@@ -8,7 +8,6 @@ from pathlib import Path
 from werewolf.agents.prompt_template_v0 import (
     CON,
     DiscussionAct,
-    LEGACY_GAMEPLAY_PROMPT_PROFILE,
     STRICT_BELIEF_CONCRETE_ROLES,
     STRICT_CLASSIC7_GAME_DESCRIPTION,
     STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
@@ -16,7 +15,6 @@ from werewolf.agents.prompt_template_v0 import (
     project_discussion_content_indices,
     project_discussion_vote_stances,
 )
-from werewolf.agents.base_agent import Agent
 from werewolf.backends import BackendError
 from werewolf.helper.log_utils import JsonFormatter, CustomLoggerAdapter
 from werewolf.speech.private_belief_perceiver import (
@@ -38,15 +36,11 @@ _PRIVATE_ROLE_EVENTS = {
         "kill_decision",
         "skill_witch",
     },
-    "Guard": {
-        "skill_guard",
-    },
     "Villager": set(),
 }
 _OBSERVER_OWNED_PRIVATE_EVENTS = {
     "skill_seer",
     "skill_witch",
-    "skill_guard",
 }
 
 
@@ -769,18 +763,16 @@ def validate_gameplay_public_speech(
         )
     return content
 
-class LLMAgent(Agent):
+class LLMAgent:
     def __init__(self,
                  backend=None,
                  model_name=None,
-                 tokenizer=None,
                  temperature=1.0,
                  log_file=None,
-                 gameplay_prompt_profile=LEGACY_GAMEPLAY_PROMPT_PROFILE,
+                 gameplay_prompt_profile=STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
                  gameplay_max_tokens=None):
         self.backend = backend
         self.model_name = model_name
-        self.tokenizer = tokenizer
         self.nlp_action_to_env_action = {}
         self.temperature = temperature
         if (
@@ -795,10 +787,7 @@ class LLMAgent(Agent):
                 "gameplay_max_tokens must be a positive integer"
             )
         self.gameplay_max_tokens = gameplay_max_tokens
-        if gameplay_prompt_profile not in {
-            LEGACY_GAMEPLAY_PROMPT_PROFILE,
-            STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
-        }:
+        if gameplay_prompt_profile != STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE:
             raise ValueError(
                 "unsupported gameplay_prompt_profile: "
                 f"{gameplay_prompt_profile}"
@@ -1035,72 +1024,17 @@ class LLMAgent(Agent):
             extra_body={"thinking": {"type": "disabled"}},
         )
 
-    def format_observation(
-        self,
-        observation,
-        *,
-        action_candidates=None,
-    ):
-        phase = observation['phase']
-        if 'skill' in phase or 'vote' in phase:
-            valid_actions = observation['valid_action']
-            if action_candidates is None:
-                valid_actions_str = self.get_valid_actions_str(valid_actions)
-            else:
-                valid_actions_str = self.format_authoritative_action_candidates(
-                    action_candidates,
-                )
-            identity = observation['identity']
-            identity_info = CON.player_identity_info.format(player_idx=observation['current_act_idx'],
-                                                            identity=CON.identity_chinese[identity],
-                                                            identity_ability=CON.identity_abilities[identity])
-            logs = self.format_log(observation['game_log'])
-            if 'skill' in phase:
-                template = (
-                    CON.constrained_night_skill_prompt
-                    if action_candidates is not None
-                    else CON.skill_prompt
-                )
-                game_description = (
-                    STRICT_CLASSIC7_GAME_DESCRIPTION
-                    if self.gameplay_prompt_profile
-                    == STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE
-                    else CON.game_description
-                )
-                prompt = template.format(game_description=game_description,
-                                         player_identity_info=identity_info, logs=logs,
-                                         valid_actions=valid_actions_str)
-            else:
-                prompt = CON.vote_prompt.format(game_description=CON.game_description,
-                                                player_identity_info=identity_info, logs=logs,
-                                                valid_actions=valid_actions_str)
-        elif 'speech' in phase:
-            identity = observation['identity']
-            identity_info = CON.player_identity_info.format(
-                player_idx=observation['current_act_idx'],
-                identity=CON.identity_chinese[identity],
-                identity_ability=CON.identity_abilities[identity],
-            )
-            logs = self.format_log(observation['game_log'])
-            prompt = CON.speech_prompt.format(
-                game_description=CON.game_description,
-                player_identity_info=identity_info,
-                logs=logs,
-            )
-        else:
-            raise ValueError
-        return prompt
-
-    def _print_log(self, log):
-        print("===============")
-        print(log.event)
-        print(log.viewer)
-        print(log.source)
-        print(log.target)
-        print(log.content)
-        print(log.time)
-        print("===============\n")
-
+    def format_observation(self, observation, *, action_candidates):
+        if not any(observation["phase"].endswith(phase) for phase in ("skill_wolf", "skill_seer", "skill_witch")):
+            raise ValueError("this formatter accepts authoritative night action candidates only")
+        identity = observation["identity"]
+        identity_info = CON.player_identity_info.format(
+            player_idx=observation["current_act_idx"], identity=CON.identity_chinese[identity],
+            identity_ability=CON.identity_abilities[identity])
+        return CON.constrained_night_skill_prompt.format(
+            game_description=STRICT_CLASSIC7_GAME_DESCRIPTION,
+            player_identity_info=identity_info, logs=self.format_log(observation["game_log"]),
+            valid_actions=self.format_authoritative_action_candidates(action_candidates))
 
     def format_log(self, game_log):
         logs = ""
@@ -1118,8 +1052,6 @@ class LLMAgent(Agent):
                 log_tmp = "{}号是预言家，你在{}查验了{}号的身份是{}。\n".format(log.source, log.time, log.target,
                                                                               '狼人' if log.content[
                                                                                             'cheked_identity'] == 'bad' else '好人')
-            elif log.event == 'skill_guard':
-                log_tmp = "{}号是守卫，你在{}守护了{}号。\n".format(log.source, log.time, log.target)
             elif log.event == 'skill_witch':
                 if 'heal' in log.content:
                     log_tmp = "{}号是女巫，你在{}使用解药治疗了{}号。\n".format(log.source, log.time, log.target)
@@ -1343,13 +1275,6 @@ class LLMAgent(Agent):
                     action_text = "{'查验':'否'}"
                 else:
                     action_text = "{{'查验':'{0}'}}".format(action[1])
-                valid_actions_str += f"- {action_text}\n"
-                action_pairs.append((action_text, action))
-            elif action[0] == 'guard':
-                if action[1] == 0:
-                    action_text = "{'守卫':'否'}"
-                else:
-                    action_text = "{{'守卫':'{0}'}}".format(action[1])
                 valid_actions_str += f"- {action_text}\n"
                 action_pairs.append((action_text, action))
             elif 'witch' in action[0]:

@@ -63,6 +63,23 @@ def test_canonical_json_and_jsonl_are_byte_stable_without_string_rewriting():
     )
 
 
+def test_envelope_and_individual_file_gate_do_not_open_other_payloads(tmp_path, monkeypatch):
+    from werewolf.artifact_io import open_artifact_envelope, read_artifact_file
+
+    publish_artifact(tmp_path / "partitioned", manifest_fields=_manifest_fields(),
+                     files={"training.json": b"train", "held_out.json": b"heldout"})
+    original = Path.read_bytes
+    def guarded(path):
+        assert path.name != "held_out.json"
+        return original(path)
+    monkeypatch.setattr(Path, "read_bytes", guarded)
+    envelope = open_artifact_envelope(tmp_path / "partitioned", expected_artifact_type=ARTIFACT_TYPE, expected_schema_version=SCHEMA_VERSION)
+    assert read_artifact_file(envelope, "training.json") == b"train"
+    (tmp_path / "partitioned" / "training.json").write_bytes(b"wrong")
+    with pytest.raises(ArtifactValidationError):
+        read_artifact_file(envelope, "training.json")
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_canonical_json_rejects_non_finite_numbers(value):
     with pytest.raises(ValueError, match="finite"):

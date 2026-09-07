@@ -5,7 +5,6 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from werewolf.agents import agent_registry
 from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.agents.llm_agent import (
     BELIEF_ROLES,
@@ -32,7 +31,7 @@ from werewolf.agents.prompt_template_v0 import (
     NO_STANCE,
     STRICT_CLASSIC7_GAME_DESCRIPTION,
     build_public_claim_catalog,
-    compile_discussion_intent_v2,
+    compile_discussion_intent,
     derive_belief_constraints,
     freeze_discussion_candidates,
     project_discussion_content_indices,
@@ -44,7 +43,6 @@ from werewolf.canonical_collection.pre import (
     SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
     SpeakerPREBeliefHandoff,
 )
-from werewolf.registry import Registry
 
 
 _TEST_REALIZATIONS = {
@@ -651,7 +649,7 @@ class GameplayCognitionTest(unittest.TestCase):
             ("claim_000", "claim_001"),
         )
         self.assertEqual(
-            compile_discussion_intent_v2(
+            compile_discussion_intent(
                 snapshot,
                 public_content_action_indices=(
                     report.public_content_action_indices
@@ -1428,20 +1426,6 @@ class GameplayCognitionTest(unittest.TestCase):
         ]["properties"]["public_vote_stance_index"]
         self.assertEqual(stance_schema["enum"], [0, 1, 2, 3, 4])
 
-    def test_legacy_pk_speech_preserves_environment_action_kind(self):
-        backend = MetadataBackend(["公开发言"])
-        agent = GPTAgent(
-            backend=backend,
-            model_name="agent-model",
-            gameplay_prompt_profile="legacy",
-        )
-        agent.rate_limit = 0
-
-        self.assertEqual(
-            agent.act(_observation("2_day_speech_pk")),
-            ("speech_pk", "公开发言"),
-        )
-        self.assertEqual(len(backend.calls), 1)
 
     def test_day_logs_only_cognition_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1869,19 +1853,19 @@ class GameplayCognitionTest(unittest.TestCase):
         self.assertEqual(night_backend.calls[0]["max_tokens"], 512)
 
     def test_o1_unconfigured_limit_and_temperature_are_preserved(self):
-        backend = MetadataBackend(["公开发言"])
+        backend = MetadataBackend(['{"action_index":0}'])
         agent = GPTAgent(backend=backend, model_name="o1-test-model")
         agent.rate_limit = 0
 
         self.assertEqual(
             agent.act({
-                "phase": "1_day_speech",
-                "identity": "Villager",
+                "phase": "1_night_skill_seer",
+                "identity": "Seer",
                 "current_act_idx": 1,
                 "game_log": [],
-                "valid_action": ("speech", -1),
+                "valid_action": [("check", 2)],
             }),
-            ("speech", "公开发言"),
+            ("check", 2),
         )
         self.assertEqual(backend.calls[0]["max_tokens"], 32000)
         self.assertIsNone(backend.calls[0]["temperature"])
@@ -1905,46 +1889,8 @@ class GameplayCognitionTest(unittest.TestCase):
             _act(agent, _observation())
         self.assertEqual(backend.calls, [])
 
-    def test_registry_injects_backend_and_model(self):
-        backend = MetadataBackend([])
-        agent_type, params = agent_registry.build(
-            "gpt",
-            backend=backend,
-            default_model="agent-model",
-            gameplay_prompt_profile="strict_classic7",
-        )
-        agent = agent_registry.build_agent(
-            agent_type,
-            player_idx=0,
-            agent_param=params,
-            env_param={"n_player": 7, "n_role": 4},
-            log_file=None,
-        )
-        self.assertIs(agent.backend, backend)
-        self.assertEqual(agent.model_name, "agent-model")
 
-    def test_registry_preserves_model_override_and_llm_alias(self):
-        backend = MetadataBackend([])
-        _, explicit = agent_registry.build(
-            "gpt",
-            backend=backend,
-            default_model="default",
-            model_name="explicit",
-        )
-        _, alias = agent_registry.build(
-            "gpt",
-            backend=backend,
-            default_model="default",
-            llm="model-alias",
-        )
 
-        self.assertEqual(explicit["model_name"], "explicit")
-        self.assertEqual(alias["model_name"], "model-alias")
-
-    def test_registry_has_no_provider_or_credential_responsibility(self):
-        source = inspect.getsource(Registry)
-        for forbidden in ("openai.OpenAI", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
-            self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__":

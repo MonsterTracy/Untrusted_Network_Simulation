@@ -61,6 +61,7 @@ from werewolf.canonical_collection.trajectory_evidence import (
     construct_belief_observation,
     construct_call_budget_summary,
     construct_canonical_game_evidence,
+    construct_parser_summary,
     construct_private_replay_evidence,
     construct_submitted_gameplay_action,
     validate_canonical_game_evidence,
@@ -192,6 +193,19 @@ class VerifiedCanonicalGameBundle:
     @property
     def path(self) -> Path:
         return self.artifact.path
+
+
+@dataclass(frozen=True)
+class CanonicalGameBundlePublicView:
+    """Validated public/audit records safe for Development Publication."""
+
+    game_id: str
+    public_event_stream: PublicEventHistory
+    authoritative_pre_prefixes: tuple[AuthoritativePREPrefix, ...]
+    belief_observations: tuple[BeliefObservation, ...]
+    speech_annotations_v1: tuple[V1SpeechAnnotation, ...]
+    call_budget_summary: CallBudgetSummary
+    parser_summary: ParserSummary
 
 
 def _replay_result(
@@ -573,6 +587,150 @@ def _call_budget_from_record(record: Mapping[str, Any]) -> CallBudgetSummary:
     return summary
 
 
+def validate_canonical_game_bundle_public_records(
+    *,
+    game_id: str,
+    public_event_records: Sequence[Mapping[str, Any]],
+    authoritative_pre_prefix_records: Sequence[Mapping[str, Any]],
+    belief_observation_records: Sequence[Mapping[str, Any]],
+    speech_annotation_records: Sequence[Mapping[str, Any]],
+    call_budget_record: Mapping[str, Any],
+    parser_summary_record: Mapping[str, Any],
+) -> CanonicalGameBundlePublicView:
+    """Decode and validate one immutable Bundle public/audit projection.
+
+    This is a validation/consumption boundary only. It never reconstructs a
+    PRE Prefix from a cutoff and never reparses public speech.
+    """
+
+    records = {
+        "public_event_records": public_event_records,
+        "authoritative_pre_prefix_records": authoritative_pre_prefix_records,
+        "belief_observation_records": belief_observation_records,
+        "speech_annotation_records": speech_annotation_records,
+        "call_budget_record": call_budget_record,
+        "parser_summary_record": parser_summary_record,
+    }
+    for location, value in records.items():
+        _assert_no_private_fields(value, location)
+    try:
+        history = _history_from_records(public_event_records)
+        annotations = tuple(
+            _annotation_from_record(item, history)
+            for item in speech_annotation_records
+        )
+        prefixes = tuple(
+            _prefix_from_record(item)
+            for item in authoritative_pre_prefix_records
+        )
+        observations = tuple(
+            _observation_from_record(item)
+            for item in belief_observation_records
+        )
+        call_budget = _call_budget_from_record(call_budget_record)
+    except ArtifactValidationError:
+        raise
+    except (TypeError, ValueError) as error:
+        raise ArtifactValidationError(
+            f"invalid Canonical Game Bundle public records: {error}"
+        ) from error
+
+    if not prefixes:
+        raise ArtifactValidationError("public game requires at least one PRE Prefix")
+    if any(prefix.game_id != game_id for prefix in prefixes):
+        raise ArtifactValidationError("public PRE Prefix game identity mismatch")
+    if any(observation.game_id != game_id for observation in observations):
+        raise ArtifactValidationError(
+            "public Belief Observation game identity mismatch"
+        )
+    if len({prefix.boundary_id for prefix in prefixes}) != len(prefixes):
+        raise ArtifactValidationError("public PRE Boundary identities are not unique")
+    if tuple(prefix.step_index for prefix in prefixes) != tuple(
+        sorted(prefix.step_index for prefix in prefixes)
+    ):
+        raise ArtifactValidationError("public PRE Prefixes are not chronological")
+    if len({item.observation_id for item in observations}) != len(observations):
+        raise ArtifactValidationError(
+            "public Belief Observation identities are not unique"
+        )
+
+    full_records = history.to_records()
+    for prefix in prefixes:
+        prefix_records = prefix.public_event_history.to_records()
+        if prefix_records != full_records[: len(prefix_records)]:
+            raise ArtifactValidationError(
+                "published PRE Prefix is not an exact public-history prefix"
+            )
+
+    public_speech_ids = tuple(
+        event.event_id
+        for event in history.events
+        if event.event_type == "public_speech"
+    )
+    if tuple(annotation.event_id for annotation in annotations) != public_speech_ids:
+        raise ArtifactValidationError(
+            "published V1 annotations do not exactly cover public speech"
+        )
+    expected_turn_ids = tuple(
+        history.events[event.event_index - 1].event_id
+        for event in history.events
+        if event.event_type == "public_speech"
+    )
+    actual_turn_ids = tuple(
+        prefix.public_event_history.events[-1].event_id for prefix in prefixes
+    )
+    if actual_turn_ids != expected_turn_ids:
+        raise ArtifactValidationError(
+            "published PRE Prefixes do not exactly cover public speech turns"
+        )
+    if any(not annotation.is_successful for annotation in annotations):
+        raise ArtifactValidationError("published V1 annotation is not successful")
+
+    observations_by_id = {item.observation_id: item for item in observations}
+    linked_ids: list[str] = []
+    for prefix in prefixes:
+        for link in prefix.belief_observation_links:
+            linked_ids.append(link.observation_id)
+            observation = observations_by_id.get(link.observation_id)
+            if observation is None:
+                raise ArtifactValidationError(
+                    "published PRE Prefix has a missing Belief Observation"
+                )
+            if (
+                observation.boundary_id != prefix.boundary_id
+                or observation.prefix_digest != prefix.prefix_digest
+                or observation.observer_id != link.observer_id
+                or not observation.observer_alive
+                or observation.status is not BeliefObservationStatus.SUCCESS
+                or observation.day != prefix.public_temporal_state.day
+                or observation.phase != prefix.public_temporal_state.phase.value
+            ):
+                raise ArtifactValidationError(
+                    "published Belief Observation PRE binding mismatch"
+                )
+    if len(linked_ids) != len(set(linked_ids)) or set(linked_ids) != set(
+        observations_by_id
+    ):
+        raise ArtifactValidationError(
+            "published Belief Observations do not exactly equal PRE links"
+        )
+    if call_budget.fallback_action_count or call_budget.second_speaker_belief_count:
+        raise ArtifactValidationError("published call budget is not canonical")
+
+    parser_summary = construct_parser_summary(annotations)
+    if parser_summary.to_record() != parser_summary_record:
+        raise ArtifactValidationError("published parser summary disagrees with V1")
+    return CanonicalGameBundlePublicView(
+        game_id=game_id,
+        public_event_stream=history,
+        authoritative_pre_prefixes=prefixes,
+        belief_observations=observations,
+        speech_annotations_v1=annotations,
+        call_budget_summary=call_budget,
+        parser_summary=parser_summary,
+    )
+
+
 def _private_replay_from_record(record: Mapping[str, Any]) -> PrivateReplayEvidence:
     try:
         evidence = construct_private_replay_evidence(
@@ -753,27 +911,25 @@ def validate_canonical_game_bundle(
         for relative_path in _BUNDLE_FILE_PATHS
         if relative_path.startswith("audit/")
     }
-    for relative_path, records in {**public_records, **audit_records}.items():
-        _assert_no_private_fields(records, relative_path)
-
     try:
-        public_event_stream = _history_from_records(
-            public_records["public/public_event_stream.jsonl"]
-        )
-        annotations = tuple(
-            _annotation_from_record(item, public_event_stream)
-            for item in public_records["public/speech_annotations_v1.jsonl"]
-        )
-        prefixes = tuple(
-            _prefix_from_record(item)
-            for item in public_records["public/authoritative_pre_prefixes.jsonl"]
-        )
-        observations = tuple(
-            _observation_from_record(item)
-            for item in public_records["public/belief_observations.jsonl"]
-        )
-        call_budget = _call_budget_from_record(
-            audit_records["audit/call_budget_summary.json"]
+        public = validate_canonical_game_bundle_public_records(
+            game_id=artifact.manifest["game_id"],
+            public_event_records=public_records[
+                "public/public_event_stream.jsonl"
+            ],
+            authoritative_pre_prefix_records=public_records[
+                "public/authoritative_pre_prefixes.jsonl"
+            ],
+            belief_observation_records=public_records[
+                "public/belief_observations.jsonl"
+            ],
+            speech_annotation_records=public_records[
+                "public/speech_annotations_v1.jsonl"
+            ],
+            call_budget_record=audit_records[
+                "audit/call_budget_summary.json"
+            ],
+            parser_summary_record=audit_records["audit/parser_summary.json"],
         )
         private_replay = _private_replay_from_record(
             _load_json(root / "private/private_replay_evidence.json")
@@ -784,8 +940,12 @@ def validate_canonical_game_bundle(
                 root / "private/backend_call_evidence.jsonl"
             )
         )
-        prefixes_by_boundary = {item.boundary_id: item for item in prefixes}
-        observations_by_id = {item.observation_id: item for item in observations}
+        prefixes_by_boundary = {
+            item.boundary_id: item for item in public.authoritative_pre_prefixes
+        }
+        observations_by_id = {
+            item.observation_id: item for item in public.belief_observations
+        }
         actions = tuple(
             _action_from_record(item, prefixes_by_boundary, observations_by_id)
             for item in _load_jsonl(
@@ -794,11 +954,11 @@ def validate_canonical_game_bundle(
         )
         evidence = construct_canonical_game_evidence(
             game_id=artifact.manifest["game_id"],
-            public_event_stream=public_event_stream,
-            authoritative_pre_prefixes=prefixes,
-            belief_observations=observations,
-            speech_annotations_v1=annotations,
-            call_budget_summary=call_budget,
+            public_event_stream=public.public_event_stream,
+            authoritative_pre_prefixes=public.authoritative_pre_prefixes,
+            belief_observations=public.belief_observations,
+            speech_annotations_v1=public.speech_annotations_v1,
+            call_budget_summary=public.call_budget_summary,
             submitted_gameplay_actions=actions,
             backend_call_evidence=backend_records,
             private_replay_evidence=private_replay,
@@ -810,9 +970,6 @@ def validate_canonical_game_bundle(
             f"invalid Canonical Game Bundle: {error}"
         ) from error
 
-    parser_record = audit_records["audit/parser_summary.json"]
-    if evidence.parser_summary.to_record() != parser_record:
-        raise ArtifactValidationError("parser summary disagrees with V1 annotations")
     runtime_configuration_digest = sha256_bytes(
         private_replay.runtime_configuration.canonical_bytes
     )
@@ -823,7 +980,7 @@ def validate_canonical_game_bundle(
         raise ArtifactValidationError("Bundle runtime configuration digest mismatch")
     _validate_parent_contract(plan, claim, evidence)
     replay_result = validate_deterministic_replay(
-        expected_public_event_stream=public_event_stream,
+        expected_public_event_stream=public.public_event_stream,
         private_replay_evidence=private_replay,
         submitted_gameplay_actions=actions,
         replay_executor=replay_executor,
@@ -833,11 +990,11 @@ def validate_canonical_game_bundle(
     return VerifiedCanonicalGameBundle(
         artifact=artifact,
         game_id=evidence.game_id,
-        public_event_stream=public_event_stream,
-        authoritative_pre_prefixes=prefixes,
-        belief_observations=observations,
-        speech_annotations_v1=annotations,
-        call_budget_summary=call_budget,
+        public_event_stream=public.public_event_stream,
+        authoritative_pre_prefixes=public.authoritative_pre_prefixes,
+        belief_observations=public.belief_observations,
+        speech_annotations_v1=public.speech_annotations_v1,
+        call_budget_summary=public.call_budget_summary,
         parser_summary=evidence.parser_summary,
         submitted_gameplay_actions=actions,
         backend_call_evidence=evidence.backend_call_evidence,

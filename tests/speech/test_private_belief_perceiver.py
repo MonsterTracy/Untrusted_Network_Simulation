@@ -20,7 +20,7 @@ from werewolf.canonical_collection.call_audit import (
     CanonicalCallAudit,
 )
 from werewolf.helper.log_utils import Log
-from werewolf.models.twd_tom.schema import LABEL_PROMPT_VERSION
+from werewolf.speech.validation import LABEL_PROMPT_VERSION
 from werewolf.speech.private_belief_perceiver import (
     LABEL_GENERATION_MAX_ATTEMPTS,
     PRIVATE_BELIEF_JSON_SCHEMA,
@@ -435,7 +435,7 @@ def test_report_does_not_call_dataset_belief_conversion(monkeypatch):
         raise AssertionError("belief conversion must remain in the Dataset")
 
     monkeypatch.setattr(
-        "werewolf.models.twd_tom.belief_labels.suspicion_set_to_belief_vector",
+        "werewolf.tom.dataset.belief_target",
         forbidden,
     )
     result, backend, agent = _report(

@@ -1,10 +1,5 @@
-from werewolf.registry import Registry
-
-agent_registry = Registry(name="agent")
+"""Canonical gameplay cognition agent (never a trained ToM model)."""
 
 from werewolf.agents.gpt_agent import GPTAgent
 
-__all__ = [
-    "agent_registry",
-    "GPTAgent",
-]
+__all__ = ["GPTAgent"]

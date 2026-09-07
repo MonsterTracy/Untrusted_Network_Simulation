@@ -136,20 +136,7 @@ class Classic7RuntimeFactory:
             call_audit=audit,
             runtime_configuration=self._normalized,
         )
-        env_config = deepcopy(self._normalized["env_config"])
-        env_config["log_save_path"] = None
-
-        def replay_environment(seed):
-            return WerewolfTextEnvV0(
-                **env_config,
-                speech_perceiver=_ReplaySpeechPerceiver(),
-                random_seed=seed,
-            )
-
-        replay = make_classic7_replay_executor(
-            identity="classic7-runtime-action-replay-v1",
-            environment_factory=replay_environment,
-        )
+        replay = classic7_replay_executor(self._normalized)
         return _RecordedRuntime(
             env=env,
             agents=agents,
@@ -160,4 +147,15 @@ class Classic7RuntimeFactory:
         )
 
 
-__all__ = ["Classic7RuntimeFactory"]
+def classic7_replay_executor(runtime_config):
+    env_config = deepcopy(normalize_runtime_config(runtime_config)["env_config"])
+    env_config["log_save_path"] = None
+
+    def replay_environment(seed):
+        return WerewolfTextEnvV0(**env_config, speech_perceiver=_ReplaySpeechPerceiver(), random_seed=seed)
+
+    return make_classic7_replay_executor(
+        identity="classic7-runtime-action-replay-v1", environment_factory=replay_environment)
+
+
+__all__ = ["Classic7RuntimeFactory", "classic7_replay_executor"]

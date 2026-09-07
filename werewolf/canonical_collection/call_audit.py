@@ -17,7 +17,7 @@ from werewolf.canonical_collection.trajectory_evidence import (
     construct_backend_call_evidence,
     construct_call_budget_summary,
 )
-from werewolf.models.twd_tom.schema import normalize_player
+from werewolf.speech.validation import normalize_player
 
 
 class CollectionCallBudgetExceeded(RuntimeError):

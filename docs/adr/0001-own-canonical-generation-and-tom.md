@@ -1,0 +1,3 @@
+# Keep canonical data generation and ToM modeling in one repository
+
+This repository owns both the Game Runtime and the ToM Mainline because strict PRE causality, public/private information separation, cumulative public history, V1 perception, and belief-observation provenance are part of the scientific validity of the belief-modeling task. The Game Runtime exists only to generate Canonical Trajectories: gameplay-policy optimization, MCTS, candidate action or speech scoring, reinforcement learning, and ToM-driven gameplay remain out of scope. A cross-repository split will be reconsidered only if an independent gameplay-policy research program actually exists; the current system will not pre-design a cross-repository contract for that hypothetical future.

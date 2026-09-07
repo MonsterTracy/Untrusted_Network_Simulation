@@ -6,6 +6,8 @@ setup(
     description="Multi-agent Theory-of-Mind reasoning in Werewolf.",
     keywords="werewolf, multi-agent, theory-of-mind",
     packages=find_packages(),
+    py_modules=["run_random"],
+    entry_points={"console_scripts": ["classic7-tom=werewolf.cli:main"]},
     python_requires=">=3.10",
     install_requires=[
         "gymnasium",
@@ -19,19 +21,12 @@ setup(
         "tiktoken>=0.7.0",
     ],
     extras_require={
-        "local_model": [
-            "torch>=2.0.0",
-            "transformers>=4.47.1",
-        ],
         "tom": [
             "torch>=2.0.0",
             "transformers>=4.47.1",
         ],
         "dev": [
             "pytest",
-        ],
-        "vllm_server": [
-            "vllm>=0.6.3",
         ],
     },
 )

@@ -25,14 +25,13 @@ from werewolf.agents.prompt_template_v0 import (
     build_public_speech_realization_prompt,
     build_public_claim_catalog,
     build_vote_prompt,
-    compile_discussion_intent_v2,
+    compile_discussion_intent,
     derive_belief_constraints,
     freeze_discussion_candidates,
 )
 from werewolf.backends import BackendError
 from werewolf.canonical_collection.pre import SpeakerPREBeliefHandoff
-from werewolf.models.twd_tom.schema import normalize_player
-from . import agent_registry as AgentRegistry
+from werewolf.speech.validation import normalize_player
 
 
 _CONSTRAINED_NIGHT_PHASES = (
@@ -48,22 +47,19 @@ _GAMEPLAY_GENERATION_ERRORS = (
 )
 
 
-@AgentRegistry.register(["gpt", "gpt-4", "GPT-4", "gpt4", "o1", "gpt4o", "gpt4o-mini", "deepseek"])
 class GPTAgent(LLMAgent):
     def __init__(
         self,
         backend=None,
         model_name=None,
-        tokenizer=None,
         temperature=1.0,
         log_file=None,
-        gameplay_prompt_profile="legacy",
+        gameplay_prompt_profile=STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
         gameplay_max_tokens=None,
     ):
         super().__init__(
             backend=backend,
             model_name=model_name,
-            tokenizer=tokenizer,
             temperature=temperature,
             log_file=log_file,
             gameplay_prompt_profile=gameplay_prompt_profile,
@@ -108,10 +104,8 @@ class GPTAgent(LLMAgent):
         speech_kind = "speech_pk" if "speech_pk" in phase else "speech"
         is_vote = "vote" in phase
         is_night = any(name in phase for name in _CONSTRAINED_NIGHT_PHASES)
-        is_strict = self.gameplay_prompt_profile == STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE
         if (
             is_speech
-            and is_strict
             and not isinstance(pre_speech_belief, SpeakerPREBeliefHandoff)
         ):
             raise TypeError(
@@ -121,7 +115,7 @@ class GPTAgent(LLMAgent):
         time.sleep(self.rate_limit)
         temperature, max_tokens = self._request_limits()
 
-        if is_speech and is_strict:
+        if is_speech:
             day_cognition, candidate_snapshot, claim_catalog = (
                 self._generate_day_cognition(
                     observation,
@@ -130,7 +124,7 @@ class GPTAgent(LLMAgent):
                     max_tokens=max_tokens,
                 )
             )
-            discussion_acts = compile_discussion_intent_v2(
+            discussion_acts = compile_discussion_intent(
                 candidate_snapshot,
                 public_content_action_indices=(
                     day_cognition.public_content_action_indices
@@ -148,7 +142,7 @@ class GPTAgent(LLMAgent):
             )
             return speech_kind, raw_text
 
-        if is_vote and is_strict:
+        if is_vote:
             belief = self._generate_belief(
                 observation,
                 temperature=temperature,
@@ -168,36 +162,6 @@ class GPTAgent(LLMAgent):
                 max_tokens=max_tokens,
             )
 
-        if is_speech:
-            prompt = self.format_observation(observation)
-            def generate_speech(attempt, _last_error):
-                content, metadata = self._chat_with_metadata(
-                    [{"role": "user", "content": prompt}],
-                    player_log_context={
-                        "stage": "speech",
-                        "observation": observation,
-                        "gen_times": attempt - 1,
-                    },
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                validate_gameplay_public_speech(
-                    content,
-                    finish_reason=metadata["finish_reason"],
-                    player_id=observation.get("current_act_idx"),
-                    phase=phase,
-                )
-                return speech_kind, self.extract_answer(content.strip())
-
-            return self._retry_validated_generation(
-                stage="speech",
-                generate=generate_speech,
-            )
-
-        if is_vote:
-            raise BackendError(
-                "vote cognition requires gameplay_prompt_profile='strict_classic7'"
-            )
         raise ValueError(f"unsupported gameplay phase: {phase!r}")
 
     def _request_limits(self):
@@ -554,10 +518,3 @@ class GPTAgent(LLMAgent):
             phase=phase,
         )
         return env_action
-
-    def extract_answer(self, response):
-        pattern = r'\n\n\"(.*?)\"'
-        matches = re.findall(pattern, response, re.DOTALL)
-        if matches:
-            response = matches[0]
-        return response

@@ -81,6 +81,21 @@ def test_collection_plan_freezes_one_production_identity():
     )
 
 
+def test_nested_collection_ancestors_are_durable_before_first_claim(tmp_path, monkeypatch):
+    from werewolf.artifact_io import canonical
+    synced = []
+    sync = canonical._fsync_directory
+
+    def record(path):
+        sync(path)
+        synced.append(path)
+
+    monkeypatch.setattr(canonical, "_fsync_directory", record)
+    root = tmp_path / "new" / "collection"
+    initialize_attempt_ledger(root, _plan())
+    assert root in synced and root.parent in synced and tmp_path in synced
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [

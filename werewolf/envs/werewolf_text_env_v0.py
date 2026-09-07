@@ -21,8 +21,8 @@ from werewolf.canonical_collection.speech import (
 from werewolf.speech.speech_perceiver import (
     SpeechPerceiver,
 )
-from werewolf.models.twd_tom.belief_labels import close_hard_knowledge
-from werewolf.models.twd_tom.schema import normalize_player
+from werewolf.speech.validation import close_hard_knowledge
+from werewolf.speech.validation import normalize_player
 
 
 class V1SpeechPerceptionExhausted(RuntimeError):
@@ -48,9 +48,9 @@ class WerewolfTextEnvV0(gym.Env):
         self.n_villager = kwargs.get('n_villager', 3)
         self._validate_7p_config()
         self.roles = (["Werewolf" for _ in range(self.n_werewolf)] + ["Seer" for _ in range(self.n_seer)] +
-                      ["Guard" for _ in range(self.n_guard)] + ["Witch" for _ in range(self.n_witch)] +
+                      ["Witch" for _ in range(self.n_witch)] +
                       ["Villager" for _ in range(self.n_villager)])
-        self.game_phase_set = ['init', 'skill_wolf', 'skill_seer', 'skill_guard', 'skill_witch',
+        self.game_phase_set = ['init', 'skill_wolf', 'skill_seer', 'skill_witch',
                                'speech', 'speech_pk', 'vote', 'vote_pk', 'end_game']
 
         self.game_count = 0
@@ -84,6 +84,8 @@ class WerewolfTextEnvV0(gym.Env):
             'n_seer': 1,
             'n_villager': 3,
             'n_hunter': 0,
+            'n_guard': 0,
+            'n_witch': 1,
         }
         for attribute, expected in expected_counts.items():
             actual = getattr(self, attribute)
@@ -91,11 +93,6 @@ class WerewolfTextEnvV0(gym.Env):
                 raise ValueError(
                     f"{attribute} must be {expected} for a 7-player game, got {actual}."
                 )
-
-        if self.n_guard not in (0, 1) or self.n_witch not in (0, 1):
-            raise ValueError("n_guard and n_witch must each be 0 or 1.")
-        if self.n_guard + self.n_witch != 1:
-            raise ValueError("Exactly one of n_guard and n_witch must be 1.")
 
         role_total = (
             self.n_werewolf + self.n_seer + self.n_guard +
@@ -111,23 +108,18 @@ class WerewolfTextEnvV0(gym.Env):
             raise ValueError(f"roles must contain exactly 7 entries, got {len(self.roles)}.")
 
         role_counts = Counter(self.roles)
-        supported_roles = {"Werewolf", "Seer", "Witch", "Guard", "Villager"}
+        supported_roles = {"Werewolf", "Seer", "Witch", "Villager"}
         unsupported_roles = set(role_counts) - supported_roles
         if unsupported_roles:
             raise ValueError(f"Unsupported roles: {sorted(unsupported_roles)}.")
 
-        required_counts = {"Werewolf": 2, "Seer": 1, "Villager": 3}
+        required_counts = {"Werewolf": 2, "Seer": 1, "Witch": 1, "Villager": 3}
         for role, expected in required_counts.items():
             actual = role_counts[role]
             if actual != expected:
                 raise ValueError(
                     f"roles must contain {expected} {role}, got {actual}."
                 )
-
-        if role_counts["Witch"] not in (0, 1) or role_counts["Guard"] not in (0, 1):
-            raise ValueError("Witch and Guard counts must each be 0 or 1.")
-        if role_counts["Witch"] + role_counts["Guard"] != 1:
-            raise ValueError("roles must contain exactly one Witch or Guard.")
 
     def reset(self, **kwargs):
         self.game_count += 1
@@ -140,7 +132,6 @@ class WerewolfTextEnvV0(gym.Env):
 
         self.WOLF_IDX = [idx for idx, role in enumerate(self.roles) if role == 'Werewolf']
         self.SEER_IDX = self.roles.index('Seer')
-        self.GUARD_IDX = self.roles.index('Guard') if 'Guard' in self.roles else -1
         self.WITCH_IDX = self.roles.index('Witch') if 'Witch' in self.roles else -1
         self.VILLAGER_IDX = [idx for idx, role in enumerate(self.roles) if role == 'Villager']
 
@@ -153,7 +144,6 @@ class WerewolfTextEnvV0(gym.Env):
         self.single_werewolf_kill_target = [{} for _ in range(len(self.WOLF_IDX))]
         self.werewolf_kill_decision = {}
         self.seer_check_target = {}
-        self.guard_target = {}
         self.witch_heal_target = {}
         self.witch_poison_target = {}
         self.vote_target = [{} for _ in range(self.n_player)]
@@ -201,7 +191,6 @@ class WerewolfTextEnvV0(gym.Env):
         public_phase_by_runtime_phase = {
             "skill_wolf": "night",
             "skill_seer": "night",
-            "skill_guard": "night",
             "skill_witch": "night",
             "speech": "discussion",
             "vote": "vote",
@@ -314,9 +303,6 @@ class WerewolfTextEnvV0(gym.Env):
                 if self.alive[self.SEER_IDX] == 1:
                     self.current_act_idx = self.SEER_IDX
                     self.phase = 'skill_seer'
-                elif self.GUARD_IDX != -1 and self.alive[self.GUARD_IDX] == 1:
-                    self.current_act_idx = self.GUARD_IDX
-                    self.phase = 'skill_guard'
                 elif self.WITCH_IDX != -1 and self.alive[self.WITCH_IDX] == 1:
                     self.current_act_idx = self.WITCH_IDX
                     self.phase = 'skill_witch'
@@ -332,22 +318,6 @@ class WerewolfTextEnvV0(gym.Env):
                     Log(viewer=[self.SEER_IDX, ], source=self.current_act_idx, target=action_content,
                         content={'cheked_identity': checked_identity},
                         day=self.day, time=self.get_time(), event=self.phase))
-            if self.GUARD_IDX != -1 and self.alive[self.GUARD_IDX] == 1:
-                self.current_act_idx = self.GUARD_IDX
-                self.phase = 'skill_guard'
-            elif self.WITCH_IDX != -1 and self.alive[self.WITCH_IDX] == 1:
-                self.current_act_idx = self.WITCH_IDX
-                self.phase = 'skill_witch'
-            else:
-                reward, done, info = self.end_night()
-        elif self.phase == 'skill_guard':
-            assert self.current_act_idx == self.GUARD_IDX
-            assert type(action_content) == int and -1 <= action_content < self.n_player 
-            self.guard_target[self.get_phase(self.day, self.day_or_night, self.phase)] = action_content
-            self.game_log.append(
-                Log(viewer=[self.GUARD_IDX, ], source=self.current_act_idx, target=action_content,
-                    content={'protected': action_content}, day=self.day,
-                    time=self.get_time(), event=self.phase))
             if self.WITCH_IDX != -1 and self.alive[self.WITCH_IDX] == 1:
                 self.current_act_idx = self.WITCH_IDX
                 self.phase = 'skill_witch'
@@ -534,14 +504,11 @@ class WerewolfTextEnvV0(gym.Env):
 
     def end_night(self):
         wolf_kill_idx = -1
-        guard_protect_idx = -1
         witch_heal_idx = -1
         witch_poison_idx = -1
 
         wolf_kill_idx = self.werewolf_kill_decision.get(self.get_phase(self.day, self.day_or_night, 'skill_wolf'))
 
-        if self.GUARD_IDX != -1:
-            guard_protect_idx = self.guard_target.get(self.get_phase(self.day, self.day_or_night, 'skill_guard'), -1)
         if self.WITCH_IDX != -1:
             witch_heal_idx = self.witch_heal_target.get(self.get_phase(self.day, self.day_or_night, 'skill_witch'), -1)
             witch_poison_idx = self.witch_poison_target.get(self.get_phase(self.day, self.day_or_night, 'skill_witch'),
@@ -551,12 +518,8 @@ class WerewolfTextEnvV0(gym.Env):
         dead_idx = set()
         if wolf_kill_idx != -1:
             dead_idx.add(wolf_kill_idx)
-        if guard_protect_idx == wolf_kill_idx and guard_protect_idx in dead_idx:
-            dead_idx.remove(guard_protect_idx)
         if witch_heal_idx == wolf_kill_idx and witch_heal_idx in dead_idx:
             dead_idx.remove(witch_heal_idx)
-        if witch_heal_idx == guard_protect_idx and witch_heal_idx != -1:
-            dead_idx.add(witch_heal_idx)
         if witch_poison_idx != -1:
             dead_idx.add(witch_poison_idx)
 
@@ -787,27 +750,6 @@ class WerewolfTextEnvV0(gym.Env):
             if len(valid_action) == 0:
                 valid_action = [('check', -1)]
 
-        elif self.phase == 'skill_guard':
-            valid_action = [('guard', -1)] + [
-                ('guard', idx)
-                for idx, is_live in enumerate(self.alive)
-                if is_live == 1
-            ]
-
-            last_guard = self.guard_target.get(
-                self.get_phase(
-                    self.day - 1,
-                    'night',
-                    'skill_guard',
-                ),
-                None,
-            )
-
-            if ('guard', last_guard) in valid_action:
-                valid_action.remove(
-                    ('guard', last_guard)
-                )
-
         elif self.phase == 'skill_witch':
             valid_action = [
                 ('witch_pass', -1)
@@ -990,13 +932,9 @@ class WerewolfTextEnvV0(gym.Env):
             "suggestible_exile_targets": suggestible_exile_targets,
         }
 
-    def get_twd_tom_hard_knowledge_for(self, player_id):
+    def observer_private_knowledge(self, player_id):
         """Return closed K+/K- derived only from one observer's legal view."""
 
-        if self.WITCH_IDX == -1 or self.GUARD_IDX != -1:
-            raise ValueError(
-                "classic7 ToM requires exactly one Witch and no Guard"
-            )
         observation = self.get_observation_for(player_id)
         observer = normalize_player(player_id)
         identity = observation.get("identity")

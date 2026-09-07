@@ -29,19 +29,11 @@ def new_config():
             "backend": "deepseek",
             "model": "deepseek-chat",
         },
-        "agent_config": {},
+        "agent_config": {"all_candidates": [{"profile_name": "playing", "agent_type": "gpt",
+            "backend": "deepseek", "model": "deepseek-chat"}]},
+        "env_config": {"n_player": 7},
     }
 
-
-def legacy_config():
-    return {
-        "backend": {
-            "type": "openai_compatible",
-            "base_url": "https://legacy.example/v1",
-            "default_model": "legacy-model",
-        },
-        "agent_config": {},
-    }
 
 
 class NamedBackendFactoryTest(unittest.TestCase):
@@ -104,6 +96,7 @@ class NamedBackendFactoryTest(unittest.TestCase):
             }
         }
         config["parser"]["backend"] = "defaulted"
+        config["agent_config"]["all_candidates"][0]["backend"] = "defaulted"
         backend = object()
         backend_class.return_value = backend
 
@@ -239,31 +232,6 @@ class NamedBackendFactoryTest(unittest.TestCase):
             {"deepseek", "openai"},
         )
 
-    @patch("werewolf.backends.factory.OpenAICompatibleBackend")
-    def test_legacy_schema_uses_default_named_backend(
-        self,
-        backend_class,
-    ):
-        backend = object()
-        backend_class.return_value = backend
-
-        with patch.dict(
-            os.environ,
-            {"OPENAI_API_KEY": "legacy-secret"},
-            clear=True,
-        ):
-            backends = load_named_backends(
-                legacy_config(),
-                env_file=None,
-            )
-
-        self.assertEqual(backends, {"default": backend})
-        backend_class.assert_called_once_with(
-            api_key="legacy-secret",
-            base_url="https://legacy.example/v1",
-            default_model="legacy-model",
-            supports_json_schema=False,
-        )
 
 
 if __name__ == "__main__":

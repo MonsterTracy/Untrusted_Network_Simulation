@@ -21,6 +21,7 @@ from werewolf.artifact_io import (
     sha256_bytes,
     verify_artifact,
 )
+from werewolf.artifact_io.canonical import ensure_durable_directory
 
 
 COLLECTION_PLAN_SCHEMA_VERSION = "classic7_collection_plan_v1"
@@ -742,7 +743,10 @@ def _ensure_attempt_ledger_directories(
     ledger_directory: Path | str,
 ) -> tuple[Path, Path]:
     ledger_directory = Path(ledger_directory)
-    ledger_directory.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_durable_directory(ledger_directory.parent)
+    except OSError as error:
+        raise _durability_error(error) from error
     if ledger_directory.is_symlink():
         raise LedgerValidationError("Attempt Ledger directory cannot be a symlink")
     created_ledger = not ledger_directory.exists()
@@ -852,7 +856,7 @@ _PLAN_RECORD_FIELDS = frozenset(
 )
 
 
-def _plan_from_record(value: dict[str, Any]) -> CollectionPlan:
+def collection_plan_from_record(value: dict[str, Any]) -> CollectionPlan:
     if set(value) != _PLAN_RECORD_FIELDS:
         raise LedgerValidationError("collection_plan.json has an invalid field set")
     environment = value["environment_provenance"]
@@ -900,12 +904,22 @@ def _validate_bound_collection_plan(
     plan_path = collection_directory / "collection_plan.json"
     if plan_path.is_symlink() or not plan_path.is_file():
         raise LedgerValidationError("collection_plan.json is missing or invalid")
-    plan = _plan_from_record(_load_canonical_record(plan_path))
+    plan = collection_plan_from_record(_load_canonical_record(plan_path))
     if plan.plan_digest != expected_plan.plan_digest:
         raise LedgerRecordConflictError(
             "collection directory is bound to a different Collection Plan"
         )
     return plan
+
+
+def load_collection_plan(collection_directory: Path | str) -> CollectionPlan:
+    """Open the immutable Collection Plan bound to one collection directory."""
+
+    collection_directory = Path(collection_directory)
+    plan_path = collection_directory / "collection_plan.json"
+    if plan_path.is_symlink() or not plan_path.is_file():
+        raise LedgerValidationError("collection_plan.json is missing or invalid")
+    return collection_plan_from_record(_load_canonical_record(plan_path))
 
 
 def initialize_attempt_ledger(
