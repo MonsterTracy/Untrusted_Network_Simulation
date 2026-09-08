@@ -1,14 +1,14 @@
-# Phase-1 Classic7 ToM Mainline Implementation Specification
+# Phase-1 Classic7 ToM Mainline Specification
 
-Status: ready for implementation review
+Status: current development mainline specification
 
 Authority: `CONTEXT.md` and ADR 0001–0021
 
 Scope: Phase-1 contract-complete execution on controlled small-scale data
 
 This specification does not reopen the frozen scientific decisions. It chooses
-only the physical artifacts, module seams, validation mechanics, and execution
-order needed to implement them.
+the current physical artifacts, module seams, validation mechanics, and
+execution order that enforce them.
 
 The labels below distinguish the source of each requirement:
 
@@ -44,37 +44,13 @@ The labels below distinguish the source of each requirement:
 | 0020 durable attempt claim | Section 3.3 |
 | 0021 Non-Self Suspicion Simplex | Sections 3.6 and 6.1 |
 
-## 1. Problem statement and current-to-target architecture map
+## 1. Current architecture
 
-The repository currently contains useful implementations of Classic7 runtime,
-strict-PRE collection, V1 speech perception, structured event features, an
-observer-relative Qwen2 predictor, metrics, and replay validation. Those live
-pieces are interleaved with superseded experiment lineages: pilot collection,
-old empty-target semantics, generic supervision scopes, private-conditioned
-features, V2 and shadow annotation paths, GPT-2 compatibility, best-checkpoint
-outer-fold selection, final-fit/sealed evaluation, and historical split
-materializers.
-
-The target is not another abstraction layer around these paths. It is one
-executable scientific path whose modules have one semantic owner each.
+The repository owns one development ToM scientific mainline. Canonical
+Collection constructs the evidence; downstream modules validate and consume it
+under the frozen public-input, supervision, and OOF boundaries.
 
 ### Current executable shape
-
-```text
-Game Runtime
-  ├─ canonical collection
-  ├─ pilot/fallback collection
-  └─ several raw trajectory/sample projections
-          ├─ V1 / legacy-empty Dataset
-          ├─ V1 current-empty Dataset
-          ├─ V2 sidecars and ablations
-          ├─ public-only / private-conditioned models
-          ├─ Qwen2 / GPT-2 backbones
-          ├─ generic supervision scopes
-          └─ development OOF / diagnostic OOF / final fit / sealed eval
-```
-
-### Target Phase-1 shape
 
 ```text
 Game Runtime
@@ -101,8 +77,8 @@ held-out predictions at canonical shift 0
 game-macro and paired game-cluster-bootstrap reports
 ```
 
-The target contains no compatibility seam back to the old paths. Historical
-artifacts remain the responsibility of the old repository.
+The executable lifecycle is development OOF. Final fit, standalone inference,
+and independent final/sealed evaluation are not current executable operations.
 
 ONUW supplies only the principle-level natural-language → structured social
 action → chronological Transformer belief-modeling pattern. It supplies no
@@ -690,7 +666,7 @@ manifest before any fold training or evaluation. It binds:
 - the assertion `max_seq_len >= max_structured_token_count`;
 - per-fold initial-state and paired training-schedule digests;
 - Primary and All-Alive mask digests;
-- optimizer, fixed scheduler if any, batch construction, rotation-cycle count,
+- AdamW settings, constant learning rate, batch construction, rotation-cycle count,
   derived optimizer-step budget, RNG/dropout schedule, determinism settings,
   `deterministic_step_boundary_resume_v1`, and its recovery-checkpoint cadence;
 - evaluation metric versions, bootstrap-plan digest, bootstrap replicate count,
@@ -716,7 +692,7 @@ identical. No compatibility reader for the former control semantics is provided.
 
 ## 4. Module and API seams
 
-The target exposes a small external interface and keeps validation and artifact
+The mainline exposes a small external interface and keeps validation and artifact
 mechanics inside deep modules.
 
 ### 4.1 Module topology
@@ -837,88 +813,15 @@ but complete histories, and a fixed small call budget. The test uses the actual
 public-event builder, Dataset, Qwen2 graph, loss, checkpoint, inference, and
 reporting modules. Deterministic adapters replace only external model calls.
 
-## 5. Current-module disposition and deletion plan
+## 5. Current module ownership
 
-Tests do not confer scientific reachability. A current module is kept only if
-the frozen mainline still consumes its capability.
-
-### 5.1 KEEP
-
-| Current module/capability | Reason and required boundary |
-|---|---|
-| Classic7 environment and core role/game rules | Required Game Runtime; retain Night0 and private scheduler internally |
-| Gameplay agents and backend protocol | Required only to generate trajectories; no policy optimization or ToM feedback |
-| V1 speech perceiver and its bounded-attempt audit | Sole frozen semantic perception path after narrowing statuses/provenance |
-| Private belief perceiver used for real observer cognition | Required for Belief Observation and Speaker PRE Belief Handoff, not model conditioning |
-| Structured action ontology and player normalization | Current live V1 and tensor semantics |
-| Observer-relative Qwen2 core, hidden 256/layers 4/heads 8 direction | No evidence supports changing baseline capacity or relative representation |
-| Low-level metric primitives and Uniform Non-Self Reference | Reused under new game-macro orchestration |
-| Deterministic replay and backend call-budget audit capabilities | Required canonical validation/provenance |
-| `CONTEXT.md` and ADR 0001–0021 | Authoritative contract sources |
-
-### 5.2 MODIFY
-
-| Current module/capability | Required modification |
-|---|---|
-| `run_random` and Game Runtime integration | Remove deterministic legal fallback and pilot behavior; emit coarse public phases and use one Speaker PRE Belief Handoff |
-| `trajectory` | Split manifest-bound public, audit, and Private Replay Evidence partitions; retain replay evidence without leaking it |
-| `public_events` | Replace private scheduler phase names, include initial Night0 state, retain terminal `turn_start`, propagate day/phase causally, remove the R0 prefix-stripping function |
-| `speech_annotations` and V1 perceiver | Make `no_action` explicit success, bind full attempt provenance, make exhausted `error` ineligible |
-| Belief snapshot collection | Collect every alive observer once, reject self-suspicion, write explicit linked observations and handoff identity |
-| Qwen2 belief backbone | Remove GPT-2/private/learned-temporal branches, structurally mask the diagonal, inject deterministic/zero temporal code at one point |
-| Losses and metrics | Narrow to game-balanced CE and named current diagnostics; remove scope/private/legacy parameters |
-| Baselines | Keep Uniform Non-Self; permit empirical priors only when fit solely on the matching outer-training games and report them as secondary |
-| Replay/audit and worst-case reporting | Consume current bundle/report schemas only; no legacy target comparison |
-| Package/config documentation | Describe the frozen mainline and formal CLI only |
-
-### 5.3 REPLACE
-
-| Current module/capability | Replacement |
-|---|---|
-| `TWDToMSampleCollector`, raw snapshot projection, and batch summary ownership | Canonical Collection deep module plus Bundle/Attempt Ledger artifacts |
-| `samples` public snapshot schema | Authoritative PRE Prefix and Belief Observation records with no downstream reconstruction |
-| `materialize_canonical_belief_dataset` | Development Publication; no train/validation/test split |
-| `materialize_development_folds` | Publication-owned deterministic five-fold manifest |
-| standalone `materialize_role_sidecar` | Publication-owned restricted Role Sidecar writer |
-| `dataset`, `dense_dataset`, and `action_features` orchestration | One population-blind Canonical ToM Dataset and one rotation primitive |
-| `supervision` generic scopes | Named Primary Population Selector and All-Alive Eligibility operation |
-| current `checkpoint` pickle contract | Canonical tensor-state artifact and fixed terminal checkpoint |
-| current `train`, `eval`, and `run_development_oof` | Experiment preparation, fixed Primary trainer, pure fold inference, named evaluators, and OOF reporter |
-| standalone dataset/canonical audit scripts | Validators owned by Bundle, Publication, Dataset, and Experiment modules |
-| script-per-operation CLI surface | One `uns` command with the five subcommands above |
-
-Replacement means the old interface and tests are deleted in the same commit
-that makes the replacement reachable. It does not mean wrapping the old path.
-
-### 5.4 DELETE
-
-Delete these code paths, configs, docs, and tests without an archive or
-compatibility namespace:
-
-- pilot collection mode, gameplay fallback action, missing-PRE fallback speech,
-  and pilot-only configs/branches;
-- V2 annotation sidecars, auto-candidate logic, repeatability/ablation runners,
-  and V2 target sources;
-- shadow parser configs, audit runner, and shadow replacement hooks;
-- private-conditioned Dataset tensors, model embeddings, train/eval/checkpoint
-  fields, and private leakage compatibility tests;
-- GPT-2 block backbone and checkpoint compatibility;
-- legacy empty-unobserved conversion and every target-semantics selector;
-- generic `all_alive`, `non_wolf_alive`, `villager_alive`, speaker, diagnostic,
-  and formal supervision-scope switches;
-- old non-wolf diagnostic runner and terminology;
-- historical split schemas including 48/6/6, 54/6, train/validation/test
-  materialization, and hard-coded game counts;
-- best-checkpoint, early-stopping, outer-validation selection, and `best.pt`;
-- final-fit, sealed-evaluation, sealed-marker, and historical provenance code,
-  configs, docs, and tests;
-- memorization-sanity runner lineage; retain only its relevant assertions as
-  ordinary test-suite acceptance tests;
-- server deployment and sealed-evaluation documents that describe superseded
-  research protocols;
-- old worst-case report comparisons across legacy/V2 target semantics;
-- aliases, loaders, adapters, migrations, and checkpoint upgraders whose only
-  purpose would be reading artifacts owned by the historical repository.
+[Live module responsibilities](../repository_structure.md) identifies the
+production owners. Sections 2–4 define their information boundaries and artifact
+contracts; Sections 6–7 define training, evaluation, and validation requirements.
+Every production module is reachable from the sole `uns` CLI import graph.
+Gameplay agents generate canonical evidence only; trained ToM outputs do not
+control gameplay. No alternate collection, representation, population-training,
+or checkpoint-selection path is part of the mainline.
 
 ## 6. Training and evaluation protocol implementation
 
@@ -1293,271 +1196,7 @@ Collection Plan
 → aggregate and paired reports
 ```
 
-## 8. Dependency-ordered implementation work packages
-
-This section is an implementation responsibility map, not a set of mandatory
-Git commit boundaries. Work-package numbering expresses dependency order,
-ownership, required replacements/deletions, and tests. Each package retains its
-goal and completion criteria, but need not be implemented, tested, or committed
-in isolation from the consumers required for a coherent cutover.
-
-Sections 1–7 and 9 remain authoritative and unchanged: target architecture,
-artifact contracts, information boundaries, testing requirements, and deletion
-requirements are not relaxed by this execution strategy. References elsewhere
-to a planned commit identify the corresponding work package, not a mandatory
-Git boundary.
-
-Implementation may span multiple work packages to change related producers,
-consumers, tests, CLI entry points, and exports together. Follow the real
-dependency graph and preserve one coherent end-to-end cutover; do not force
-unmigrated consumers to depend on modules deleted solely to finish an earlier
-package. Actual Git commits should be cohesive and reviewable, but need not
-correspond one-to-one with packages or number fifteen in total.
-
-Do not introduce a compatibility layer, adapter, fallback, migration path, or
-duplicate semantic implementation to make an intermediate package pass alone.
-Existing superseded implementation may remain only while it still has a real
-consumer awaiting migration. Delete it immediately when its last real consumer
-is migrated, together with obsolete tests, imports, exports, and entry points.
-For the replace-and-delete execution rule in Section 5.3, replacement
-reachability means this coherent consumer cutover, not the first availability
-of a producer scaffold. Do not postpone already-safe deletion to Work Package
-15, and do not retain obsolete interfaces merely to keep historical tests
-passing.
-
-Final acceptance is determined by the target Phase-1 dataflow, Section 7
-validation matrix, forbidden information flows, Section 5 DELETE inventory,
-and full repository test suite, not by completing a predefined number of Git
-commits. Required package tests and completion criteria remain obligations;
-cross-package execution changes their scheduling, not their substance.
-
-Work Packages 1–5 were completed as the original Commits 1–5. Their history is
-not rewritten or replayed. The scaffold and cutover notes below record that
-completed sequence, including the first production cutover in Commit 5; they
-do not impose new Git boundaries. Work Packages 6–15 retain the original
-remaining implementation responsibilities under the execution rules above.
-
-### Work Package 1 — Canonical artifact I/O and validation scaffold
-
-- **Goal:** add canonical JSON/JSONL, digest, immutable-directory publication,
-  and raw tensor-container primitives.
-- **Modules:** shared artifact envelope and validator utilities.
-- **Tests:** byte-stable serialization, NaN rejection, file-table mismatch,
-  atomic no-overwrite behavior, tensor ordering/dtype/digest corruption.
-- **Completion:** artifact fixtures round-trip and every single-byte mutation
-  fails validation.
-- **Dependency note:** prerequisite scaffold; it changes no scientific path.
-
-### Work Package 2 — Public-history, PRE, V1, and token-plan scaffold
-
-- **Goal:** implement the frozen coarse public-event/PRE/V1 interfaces and the
-  one pure Structured Token Planner required by later Collection, Publication,
-  and Dataset modules, without yet changing the executable collector.
-- **Modules:** public-event ontology/validator, Authoritative PRE Prefix
-  constructor, V1 annotation contract, Speaker PRE Belief Handoff value,
-  Structured Token Planner.
-- **Delete:** none; this prerequisite module is exercised only through its new
-  interface until Commit 5.
-- **Tests:** Night0 timeline, all five phases, causal inheritance, strict PRE
-  leakage cases, `no_action`, V1 provenance, single speaker handoff, token-plan
-  order/state/count/digest and count-only consumption.
-- **Completion:** deterministic public-history/PRE fixtures yield valid prefixes
-  and token plans through the new interfaces; no future Dataset module is
-  needed to compute a structured-token count.
-- **Dependency note:** prerequisite scaffold; Commit 5 makes it authoritative
-  and simultaneously deletes R0/alternate constructors.
-
-### Work Package 3 — Crash-atomic Attempt Ledger scaffold
-
-- **Goal:** implement Collection Plan validation plus the deep Attempt Ledger
-  module, without claiming that collection has already cut over.
-- **Modules:** Collection Plan, `publish_ledger_record`, claim/terminal schemas,
-  ledger recovery/validation.
-- **Delete:** none; this is a prerequisite scaffold exercised only through its
-  new interface.
-- **Tests:** injected crashes after staging create/write/file-`fsync`/hard-link/
-  directory-`fsync`, leftover staging cleanup, pre-existing final path,
-  duplicate/out-of-order/orphan records, interruption closure, provenance
-  drift, target stopping, and seed exhaustion.
-- **Completion:** at every injected crash point, recovery observes either no
-  authoritative record or one complete immutable record; published paths are
-  never overwritten, and a claimed seed can only reach one terminal outcome.
-- **Dependency note:** prerequisite scaffold; production runtime integration is
-  intentionally deferred to Commit 4.
-
-### Work Package 4 — Canonical Game Bundle and replay scaffold
-
-- **Goal:** implement immutable Bundle public/audit/private partitions and the
-  replay validator without claiming that collection has already cut over.
-- **Modules:** trajectory evidence types, Bundle writer/reader, deterministic
-  replay, canonical failure evidence/summary.
-- **Replace/Delete:** none; this prerequisite module accepts deterministic
-  evidence fixtures through its interface.
-- **Tests:** complete eligible Bundle, belief/perception/gameplay failure
-  evidence, private-field leakage, replay divergence, child digest corruption,
-  atomic no-replace publication, and failure-artifact round trip.
-- **Completion:** fixtures can produce only a verified Bundle or explicit
-  failure artifact, and the Bundle validator is the sole read interface.
-- **Dependency note:** prerequisite scaffold; it has no Collection or Dataset
-  import and needs no future commit to prove its artifact contract.
-
-### Work Package 5 — Production-only Canonical Collection cutover
-
-- **Goal:** integrate the Commit-2 public-history interfaces, Commit-3 Ledger,
-  and Commit-4 Bundle into the sole plan-closed executable collector.
-- **Modules:** Game Runtime public-event emission, collection orchestrator,
-  belief/perception adapters, call-budget/failure evidence, Speaker PRE Belief
-  Handoff, Ledger and Bundle interfaces.
-- **Replace/Delete:** raw `TWDToMSampleCollector` output ownership, old batch
-  summary/projection contracts, R0 terminal-turn stripping, private scheduler
-  phase exposure, alternate PRE constructors, pilot mode/configs, gameplay
-  fallback, missing-PRE fallback speech, and replacement/rerun branches.
-- **Tests:** deterministic game-to-Bundle integration, complete and failed
-  observations/perception/gameplay, backend call forbidden before durable
-  claim, Bundle durable before terminal record, interrupted attempt never
-  rerun, target stopping, no second speaker belief, and absence of old imports.
-- **Completion:** the sole reachable collector produces a verified Bundle or
-  explicit failure evidence, publishes exactly one terminal record, never calls
-  a backend before claim durability, and exposes no old/fallback path.
-
-### Work Package 6 — Development Publication, folds, and Role Sidecar
-
-- **Goal:** publish the ledger-defined game set, public records, deterministic
-  five folds, statistics, and restricted Role Sidecar.
-- **Modules:** publication writer/reader, Structured Token Planner from Work
-  Package 2 in count-only use, fold assigner, sidecar writer/validator.
-- **Delete:** canonical train/validation/test materializer, standalone fold and
-  sidecar materializers, historical split schemas/counts.
-- **Tests:** plan closure, no cherry-pick, fold determinism/balance/isolation,
-  max day/token statistics matched to the Work-Package-2 planner, sidecar
-  multiplicities, private stripping, and a dependency test proving no Dataset
-  import is required.
-- **Completion:** a publication can be built only from the exact completed
-  collection and exposes separate public and restricted handles.
-
-### Work Package 7 — One population-blind Dataset and rotation primitive
-
-- **Goal:** implement full-prefix tensorization, one target conversion, public
-  alive/status metadata, and pure cyclic rotation.
-- **Modules:** Dataset, numeric tensor materializer consuming the Work-Package-2
-  Structured Token Plan, target converter, collator, rotation primitive.
-- **Delete:** V2/legacy target sources, private masks, scope/role Dataset
-  arguments, silent truncation, duplicate dense/point tensorizers.
-- **Tests:** empty/non-empty/failure targets, terminal turn inclusion, no
-  current-speech leakage, full-history capacity, rotation inverse/metamorphism.
-- **Completion:** Dataset has one constructor contract and no import of Role
-  Sidecar, roles, V2, or private knowledge.
-
-### Work Package 8 — Named population operations
-
-- **Goal:** terminate role truth at Primary selection and create public-only
-  All-Alive eligibility.
-- **Modules:** Primary Population Selector, All-Alive Eligibility, eligibility
-  artifacts and orchestration wrapper.
-- **Delete:** generic supervision scopes and old diagnostic/formal naming.
-- **Tests:** exact masks, sidecar is sole role consumer, All-Alive works with
-  sidecar unavailable, rotation only permutes booleans.
-- **Completion:** downstream row identity artifacts contain no role semantics.
-
-### Work Package 9 — Deterministic temporal artifacts and public-only Qwen2 model
-
-- **Goal:** implement Parameter-Parity Contract, exact temporal bytes, one
-  injection point, and Non-Self Suspicion Simplex output.
-- **Modules:** temporal artifact writer/provider, Qwen2 model, observer-relative
-  feature path.
-- **Delete:** GPT-2 backbone, private conditioning, learned day/phase parameters,
-  model/backbone registry and compatibility checkpoint branches.
-- **Tests:** known Walsh rows/digest, day-table metadata/digest, fail-closed
-  unknown/out-of-range states, parameter graph equality, zero-vs-explicit
-  injection, exact diagonal exclusion.
-- **Completion:** the only model graph is public-only Qwen2 and the temporal
-  condition changes no trainable key or shape.
-
-### Work Package 10 — Experiment preparation and paired schedules/states
-
-- **Goal:** freeze capacity, masks, temporal inputs, bootstrap plan, balanced
-  schedules, paired initial state, deterministic recovery cadence, and full
-  fixed protocol before training.
-- **Modules:** Experiment Manifest, schedule writer, canonical state writer,
-  bootstrap-plan writer, preflight validator.
-- **Tests:** round-independent starting offsets and exact seven-shift coverage,
-  stable batch schedule, paired bytes, recovery-policy/cadence binding, hidden
-  default rejection, token-capacity failure, artifact-parent mismatch.
-- **Completion:** a verified Experiment handle is sufficient for training and
-  contains no mutable or undecided protocol field.
-
-### Work Package 11 — Fixed-budget Primary fold training
-
-- **Goal:** implement game-balanced CE and exact terminal-checkpoint training on
-  outer-training games only, including its sole deterministic crash recovery.
-- **Modules:** trainer, loss, training log, recovery-state writer/loader,
-  terminal checkpoint writer, checkpoint-set sealer.
-- **Delete:** best checkpoint, early stopping, inner/outer validation selection,
-  generic scope/private/V2 training paths.
-- **Tests:** unequal row/game counts and exact partial-batch coefficients,
-  zero-row fail, All-Alive access spy, schedule/step mismatch, crashes between
-  recovery publication steps and between optimizer/recovery steps, exact
-  optimizer/RNG/cursor restore, rejection of earlier-point/manual restart,
-  held-out access spy, terminal checkpoint identity, and training closure after
-  checkpoint-set seal.
-- **Completion:** paired fold runs start from the same digest, consume identical
-  schedules/protocols, recover only through the predeclared rule, emit one
-  terminal checkpoint each, and seal all ten checkpoint digests before any
-  held-out record can be opened.
-
-### Work Package 12 — Pure fold inference and two named evaluations
-
-- **Goal:** freeze held-out predictions once and derive Primary and All-Alive
-  fold reports from the same checkpoint/prediction bytes.
-- **Modules:** inference, Primary evaluator, All-Alive evaluator, per-game metric
-  primitives, Uniform Non-Self Reference.
-- **Delete:** generic eval, non-wolf diagnostic runner, private/V2 evaluation,
-  test-time rotation.
-- **Tests:** selection-blind call graph/spies, canonical shift 0, mask row sets,
-  required checkpoint-set seal, same checkpoint digest, no All-Alive training
-  entry, and permanent rejection of training/recovery after held-out access.
-- **Completion:** every fold/temporal checkpoint has exactly two distinct named
-  reports sharing one prediction artifact.
-
-### Work Package 13 — OOF aggregation and paired reporting
-
-- **Goal:** implement game-macro KL, bootstrap intervals, stress penalty, and
-  Primary temporal information effect.
-- **Modules:** OOF merger, game score reducer, bootstrap evaluator, aggregate
-  report schemas, current worst-case export.
-- **Delete:** row-weighted headline, fold-weighted aggregation, legacy/V2
-  worst-case comparisons, final-fit/sealed reporting.
-- **Tests:** hand-computed unequal-game fixtures, exact paired resamples,
-  negative differences, Uniform reference row identity, report naming.
-- **Completion:** two training lineages yield four cell reports and exactly the
-  frozen two paired headline contrasts.
-
-### Work Package 14 — Formal CLI cutover and full end-to-end acceptance
-
-- **Goal:** expose the five formal subcommands and prove the controlled
-  small-scale production path.
-- **Modules:** root CLI composition, deterministic test adapters, E2E fixture.
-- **Delete:** superseded script-per-lineage entry points and configs.
-- **Tests:** CLI argument snapshots exclude forbidden switches; full five-fold,
-  two-lineage, four-report E2E digest chain.
-- **Completion:** Phase-1 can be reproduced from Collection Plan to aggregate
-  reports without importing an old runner.
-
-### Work Package 15 — Legacy deletion and documentation closure
-
-- **Goal:** remove remaining unreachable historical lineage and make docs match
-  the executable mainline.
-- **Modules:** package exports, configs, README and current architecture/
-  collection/ToM docs.
-- **Delete:** V2, shadow, private, GPT-2, pilot, generic-scope, final/sealed,
-  server deployment, old split, compatibility code/tests/docs not already
-  removed; memorization runner becomes test assertions only.
-- **Tests:** import/config/CLI inventory assertions and full suite; repository
-  search asserts forbidden public options and obsolete module names are absent.
-- **Completion:** every remaining non-test module is reachable from the frozen
-  mainline or has a documented runtime/provenance justification.
-
-## 9. Out of scope, risks, and unresolved implementation-only questions
+## 8. Out of scope, risks, and required configuration
 
 ### Out of scope
 
@@ -1602,15 +1241,17 @@ remaining implementation responsibilities under the execution rules above.
 6. **A small five-game acceptance fixture is not a performance test.** It proves
    contract reachability only and cannot be reported as scientific evidence.
 
-### Unresolved implementation-only questions
+### Required configuration
 
-None block Phase-1 specification. The following are deliberately Runtime/config
-values that an experiment author must declare before `prepare-experiment`, not
-questions for code to answer implicitly:
+The following Runtime/config values require explicit declarations in their
+Collection Plan, runtime configuration, or experiment configuration. Formal
+Development Protocol v1 remains pending until its researcher-selected values
+are frozen; code does not supply them implicitly:
 
 - actual ordered seed pool and target canonical-success count;
-- `max_seq_len` after publication statistics are known;
-- optimizer and fixed step-based scheduler settings;
+- `max_seq_len` predeclared independently of held-out/publication content;
+  publication statistics only validate the declaration and overflow fails closed;
+- AdamW numerical settings under the fixed constant-learning-rate protocol;
 - batch size and complete rotation-cycle count;
 - deterministic recovery-checkpoint cadence;
 - initialization, schedule, and bootstrap seed material;
