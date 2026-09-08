@@ -8,7 +8,7 @@ import torch
 def test_schedule_complete_seven_shifts_and_partial_batch_weights():
     from werewolf.tom.protocol import training_schedule
 
-    schedule = training_schedule("a" * 64, 2, ("a", "b", "c", "d"), 2, 3)
+    schedule = training_schedule(303, 2, ("a", "b", "c", "d"), 2, 3)
     assert len(schedule["batches"]) == 28
     counts = Counter((item["game_id"], item["shift"]) for batch in schedule["batches"] for item in batch)
     assert counts == Counter({(g, shift): 2 for g in "abcd" for shift in range(7)})
@@ -17,7 +17,7 @@ def test_schedule_complete_seven_shifts_and_partial_batch_weights():
     for game in "abcd":
         actual = sum(1/len(b) for b in schedule["batches"] if any(i["game_id"] == game for i in b))
         assert schedule["cumulative_game_coefficients"][game] == actual
-    assert schedule == training_schedule("a" * 64, 2, ("a", "b", "c", "d"), 2, 3)
+    assert schedule == training_schedule(303, 2, ("a", "b", "c", "d"), 2, 3)
 
 
 def test_game_balanced_loss_not_pooled_rows():

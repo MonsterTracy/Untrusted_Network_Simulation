@@ -8,8 +8,8 @@ import numpy as np
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 
-SCHEDULE_VERSION = "classic7_balanced_seven_shift_v1"
-ORDER_VERSION = "classic7_round_game_order_v1"
+SCHEDULE_VERSION = "classic7_balanced_seven_shift_v2"
+ORDER_VERSION = "classic7_round_game_order_v2"
 BOOTSTRAP_VERSION = "classic7_sha256_rejection_bootstrap_v1"
 FIELD_ENCODING = "canonical_json_utf8_u64be_length_prefix_v1"
 
@@ -36,7 +36,10 @@ def digest_fields(*values):
     return hashlib.sha256(b"".join(len(v).to_bytes(8, "big") + v for v in encoded)).digest()
 
 
-def training_schedule(protocol_digest, fold, game_ids, cycles, batch_size):
+def training_schedule(schedule_seed, fold, game_ids, cycles, batch_size):
+    """Control order/rotation only from frozen settings and training identities."""
+    if type(schedule_seed) is not int or not 0 <= schedule_seed < 2**63:
+        raise ValueError("schedule seed must be an explicit integer in 0..2**63-1")
     games = tuple(sorted(game_ids))
     if not games or len(set(games)) != len(games):
         raise ValueError("training games must be nonempty and unique")
@@ -44,9 +47,9 @@ def training_schedule(protocol_digest, fold, game_ids, cycles, batch_size):
         raise ValueError("invalid training schedule configuration")
     batches = []
     for cycle in range(cycles):
-        offsets = {g: int.from_bytes(digest_fields(SCHEDULE_VERSION, protocol_digest, fold, cycle, g), "big") % 7 for g in games}
+        offsets = {g: int.from_bytes(digest_fields(SCHEDULE_VERSION, schedule_seed, fold, cycle, g), "big") % 7 for g in games}
         for round_index in range(7):
-            ordered = sorted(games, key=lambda g: (digest_fields(ORDER_VERSION, protocol_digest, fold, cycle, round_index, g), g))
+            ordered = sorted(games, key=lambda g: (digest_fields(ORDER_VERSION, schedule_seed, fold, cycle, round_index, g), g))
             rows = [{"game_id": g, "shift": (offsets[g] + round_index) % 7, "cycle": cycle, "round": round_index} for g in ordered]
             batches.extend(rows[i:i+batch_size] for i in range(0, len(rows), batch_size))
     counts = Counter((r["game_id"], r["shift"]) for b in batches for r in b)
@@ -54,7 +57,7 @@ def training_schedule(protocol_digest, fold, game_ids, cycles, batch_size):
         raise ValueError("incomplete seven-shift schedule")
     coefficients = {g: sum(1 / len(b) for b in batches if any(r["game_id"] == g for r in b)) for g in games}
     return {"schedule_version": SCHEDULE_VERSION, "order_version": ORDER_VERSION,
-            "field_encoding": FIELD_ENCODING, "protocol_digest": protocol_digest, "fold": fold,
+            "field_encoding": FIELD_ENCODING, "schedule_seed": schedule_seed, "fold": fold,
             "rotation_cycles": cycles, "game_batch_size": batch_size, "optimizer_steps": len(batches),
             "batches": batches, "cumulative_game_coefficients": coefficients}
 

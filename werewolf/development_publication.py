@@ -51,7 +51,7 @@ PUBLISHED_GAME_SCHEMA_VERSION = "classic7_published_game_v1"
 DEVELOPMENT_FOLD_MANIFEST_SCHEMA_VERSION = (
     "classic7_development_fold_manifest_v1"
 )
-FOLD_ASSIGNMENT_VERSION = "classic7_sha256_rank_round_robin_5fold_v1"
+FOLD_ASSIGNMENT_VERSION = "classic7_sha256_game_identity_5fold_v2"
 ROLE_SIDECAR_SCHEMA_VERSION = "classic7_role_sidecar_v1"
 FOLD_COUNT = 5
 
@@ -555,7 +555,7 @@ def assign_development_folds(
     *,
     development_game_set_digest: str,
 ) -> DevelopmentFoldManifest:
-    """Assign exact whole games to the frozen deterministic five folds."""
+    """Assign by stable game identity; full content digests only bind provenance."""
 
     frozen = tuple(games)
     _require_digest(development_game_set_digest, "development_game_set_digest")
@@ -573,12 +573,7 @@ def assign_development_folds(
             raise ArtifactValidationError("invalid Development Game Set game ID")
         _require_digest(bundle_digest, "bundle_digest")
         ranking_digest = sha256_bytes(
-            (
-                FOLD_ASSIGNMENT_VERSION
-                + development_game_set_digest
-                + game_id
-                + bundle_digest
-            ).encode("utf-8")
+            canonical_json_bytes([FOLD_ASSIGNMENT_VERSION, game_id])
         )
         ranked_values.append((ranking_digest, game_id, bundle_digest))
     ranked_values.sort(key=lambda item: (item[0], item[1]))

@@ -36,6 +36,7 @@ def _completed_collection(
     *,
     game_count: int = 5,
     target_count: int | None = None,
+    transform_evidence=None,
 ):
     target = game_count if target_count is None else target_count
     plan = _plan(
@@ -61,6 +62,8 @@ def _completed_collection(
             claim,
             game_id=game_id,
         )
+        if transform_evidence is not None:
+            evidence = transform_evidence(evidence)
         bundle = publish_canonical_game_bundle(
             root / "games" / game_id,
             plan=plan,
@@ -176,14 +179,14 @@ def _completed_collection_after_failure(root: Path):
     return plan, executor
 
 
-def _publication(tmp_path: Path):
+def _publication(tmp_path: Path, *, transform_evidence=None):
     from werewolf.development_publication import (
         open_verified_collection,
         publish_development,
     )
 
     collection_path = tmp_path / "collection"
-    plan, executor = _completed_collection(collection_path)
+    plan, executor = _completed_collection(collection_path, transform_evidence=transform_evidence)
     collection = open_verified_collection(
         collection_path,
         replay_executor=executor,
@@ -314,12 +317,7 @@ def test_five_fold_assignment_is_deterministic_balanced_and_whole_game(tmp_path)
     expected_ranked = sorted(
         (
             hashlib.sha256(
-                (
-                    manifest.assignment_version
-                    + public.development_game_set_digest
-                    + game.game_id
-                    + game.bundle_digest
-                ).encode("utf-8")
+                canonical_json_bytes([manifest.assignment_version, game.game_id])
             ).hexdigest(),
             game.game_id,
             game.bundle_digest,

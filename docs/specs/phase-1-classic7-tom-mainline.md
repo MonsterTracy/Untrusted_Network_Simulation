@@ -168,7 +168,10 @@ public interfaces, not merely discouraged:
 - Dataset or Publication reparsing raw speech or replacing a V1 annotation.
 - All-Alive rows entering training, early stopping, model selection, retry, or
   experiment selection.
-- A held-out outer game influencing any checkpoint byte.
+- Held-out content influencing fold membership or checkpoint model tensor bytes,
+  including through provenance digests used as numerical training controls.
+  Full artifact manifests/digests may change to record different provenance;
+  that change must not itself change model tensors.
 - The trained ToM predictor entering gameplay generation or control.
 - A generic population, target-semantics, annotation-version, backbone, or
   private-conditioning switch reintroducing a deleted lineage.
@@ -503,19 +506,25 @@ transformation.
 
 **Implementation choice.** Fold assignment is deterministic and balanced:
 
-1. For every publication game, compute SHA-256 over the exact bytes of
-   `fold_assignment_version || development_game_set_digest || game_id || bundle_digest`.
+1. For every publication game, compute SHA-256 over canonical JSON UTF-8 bytes
+   of `[fold_assignment_version, game_id]`, with assignment version
+   `classic7_sha256_game_identity_5fold_v2`. Game IDs must be stable identities
+   fixed independently of generated public, belief, role, and private content.
 2. Sort ascending by that digest, then by game ID as a total-order tie breaker.
 3. Assign sorted item `n` to fold `n mod 5`.
 
-`development_game_set_digest` is computed first over the ledger-ordered
-`(game_id, bundle_digest)` pairs and therefore does not depend on the fold file
-or final Publication Manifest. This avoids circular identity. The fixed five
+`development_game_set_digest` remains computed over the full ledger-ordered
+`(game_id, bundle_digest)` pairs for provenance and validation only. Neither it
+nor a bundle/public-content digest controls ranking or membership. The fixed five
 folds differ in game count by at most one. The manifest records
 the algorithm version, ordered ranking digest, and exact held-out game
 IDs/bundle digests per fold. Fold count and fold assignment are not CLI values.
 Any game overlap, omission, duplicate, changed digest, or boundary split fails
 closed.
+
+With the eligible game-ID set fixed, changing any game's content leaves fold
+membership unchanged, while the full fold/publication provenance changes.
+Canonical eligibility and plan closure are still validated before assignment.
 
 #### Role Sidecar
 
@@ -694,6 +703,16 @@ recovery-checkpoint cadence, bootstrap replicate count, and interval level.
 They must be explicit—there are
 no hidden defaults in a formal experiment—and identical across the paired
 temporal lineages where required. They are not permanent scientific constants.
+
+Numerical training settings, including capacity and seeds, must be declared
+without consulting held-out content. Preparation validates capacity against
+publication statistics; it does not select or enlarge capacity from those
+statistics. Experiment schema `classic7_experiment_v2` retains the full
+`protocol_inputs` and `protocol_digest` as provenance identities. They bind the
+publication, folds, model, complete configuration and evaluation versions, but
+are not inputs to initialization seeds, training RNG, game order or seat shifts.
+An artifact identity may therefore differ while its model tensor bytes remain
+identical. No compatibility reader for the former control semantics is provided.
 
 ## 4. Module and API seams
 
@@ -920,7 +939,7 @@ the entire cycle:
 
 ```text
 starting_offset(g,c) =
-    SHA256(schedule_version || experiment_protocol_digest || fold || c || game_id)
+    SHA256(schedule_version || schedule_seed || fold || c || game_id)
     mod 7
 ```
 
@@ -932,12 +951,21 @@ Round `r=0..6` uses
 a bijection on `Z_7`, therefore
 `{shift(g,c,r) | r=0..6} = {0,1,2,3,4,5,6}` for every game and cycle. The
 per-round game order is independently derived from
-`SHA256(schedule_order_version || experiment_protocol_digest || fold || c || r || game_id)`;
+`SHA256(schedule_order_version || schedule_seed || fold || c || r || game_id)`;
 it may depend on round because it affects batching order, not shift coverage.
 
-The experiment protocol digest is computed over the declared publication,
-model, training, evaluation, and seed inputs before derived schedules and
-states are added to the final Experiment Manifest, avoiding circular identity.
+`schedule_seed` is the explicit frozen integer configuration value in
+`0..2**63-1`; it is not an artifact/content digest. Schedule and order versions
+are `classic7_balanced_seven_shift_v2` and `classic7_round_game_order_v2`.
+Schedule records bind this seed, fold, cycle count, batch size, versions and
+the resulting training-game sequence. Validation reconstructs the schedule
+from those controls and rejects inconsistent records even with valid hashes.
+The full experiment protocol digest is still computed over the declared
+publication, model, training, evaluation, and seed inputs before derived
+schedules and states are added, but serves provenance/validation only.
+Initialization and training RNG seeds remain derived from their respective
+explicit configuration seeds and fold identity. Publication, role-sidecar,
+held-out-label and private-evidence digests never control numerical training.
 
 The schedule writer materializes the exact ordered `(game_id, shift)` sequence
 and batch boundaries before either temporal lineage trains. It does not use

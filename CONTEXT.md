@@ -53,11 +53,11 @@ The complete set of canonically eligible successes produced by one predeclared c
 _Avoid_: Hand-picked game subset, train split, test split
 
 **Development Fold Manifest**:
-The deterministic, versioned assignment of every game in a Development Game Set to exactly one of five game-level OOF folds, bound to game identities and digests.
+The deterministic, versioned assignment of every game in a Development Game Set to exactly one of five game-level OOF folds. Membership depends on stable, content-independent game identities and the frozen fold rule; full evidence digests bind provenance without determining membership.
 _Avoid_: Snapshot split, configurable fold count, sealed split
 
 **Outer Selection Blindness**:
-The OOF rule that games assigned to an outer held-out fold cannot influence epoch choice, early stopping, learning-rate adaptation, hyperparameters, configuration, model selection, or retry decisions. Their Primary and All-Alive evaluations begin only after the fold checkpoint identity and digest are frozen.
+The OOF rule that games assigned to an outer held-out fold cannot influence epoch choice, early stopping, learning-rate adaptation, hyperparameters, configuration, model selection, retry decisions, or numerical training controls through content/provenance identities. Model parameters depend only on outer-training data and independently frozen training settings. Artifact provenance identities may change without changing model parameters. Primary and All-Alive evaluations begin only after checkpoint identities and digests are frozen.
 _Avoid_: Validation-fold OOF, best-on-held-out checkpoint, post-evaluation rerun
 
 **Fixed-Budget Training Protocol**:

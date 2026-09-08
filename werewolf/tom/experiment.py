@@ -23,7 +23,7 @@ from werewolf.tom.scoring import SCORING_VERSION
 from werewolf.tom.state import publish_model_state
 from werewolf.tom.temporal import publish_temporal, TemporalCodeProvider
 
-EXPERIMENT_VERSION = "classic7_experiment_v1"
+EXPERIMENT_VERSION = "classic7_experiment_v2"
 RECOVERY_POLICY = "deterministic_step_boundary_resume_v1"
 TEMPORAL_CONDITIONS = ("implicit", "explicit_day_phase")
 
@@ -145,7 +145,7 @@ class VerifiedExperiment:
     def schedule(self, index):
         fold = self.fold(index)
         value = read_json(self.file(f"folds/{index}/schedule_manifest.json"))
-        expected = training_schedule(self.manifest["protocol_digest"], index, fold["training_game_ids"],
+        expected = training_schedule(self.config.schedule_seed, index, fold["training_game_ids"],
             self.config.rotation_cycles, self.config.game_batch_size)
         if value != expected or self.file(f"folds/{index}/training_schedule.jsonl") != canonical_jsonl_bytes(expected["batches"]):
             raise ValueError("schedule/protocol mismatch")
@@ -175,6 +175,7 @@ def prepare_experiment(publication, config: ExperimentConfig, destination):
               "development_game_set_digest": view.development_game_set_digest,
               "model_graph": MODEL_GRAPH, "config": asdict(config), "scoring_version": SCORING_VERSION,
               "recovery_policy": RECOVERY_POLICY, "bootstrap_version": BOOTSTRAP_VERSION}
+    # Full provenance identity, never a numerical training-control seed.
     protocol_digest = sha256_bytes(canonical_json_bytes(inputs))
     games = {g.game_id: g for g in view.games}
     files = {}
@@ -186,7 +187,7 @@ def prepare_experiment(publication, config: ExperimentConfig, destination):
         for fold in view.fold_manifest.folds:
             index = fold.fold_index
             training = [g for g in view.game_ids if g not in fold.game_ids]
-            schedule = training_schedule(protocol_digest, index, training, config.rotation_cycles, config.game_batch_size)
+            schedule = training_schedule(config.schedule_seed, index, training, config.rotation_cycles, config.game_batch_size)
             files[f"folds/{index}/schedule_manifest.json"] = canonical_json_bytes(schedule)
             files[f"folds/{index}/training_schedule.jsonl"] = canonical_jsonl_bytes(schedule["batches"])
             for partition, ids, masks in (("training_primary", training, primary),
