@@ -1,5 +1,10 @@
 # Explicit current configuration
 
+The designated first formal development protocol is in
+[`formal/development-experiment-v1`](formal/development-experiment-v1/README.md).
+It is pending researcher-selected values and cannot run or count as frozen
+while those fields remain null. It uses the existing `ExperimentConfig` schema.
+
 There is no default experiment, collection mode or supervision scope. The
 formal commands accept explicit files; credentials are environment variables.
 

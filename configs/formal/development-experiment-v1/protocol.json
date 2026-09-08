@@ -1,0 +1,22 @@
+{
+  "max_seq_len": null,
+  "learning_rate": null,
+  "weight_decay": null,
+  "adam_betas": null,
+  "adam_eps": null,
+  "game_batch_size": null,
+  "rotation_cycles": null,
+  "initialization_seed": null,
+  "rng_seed": null,
+  "schedule_seed": null,
+  "bootstrap_seed": null,
+  "bootstrap_replicates": null,
+  "confidence_level": null,
+  "recovery_cadence": null,
+  "device": null,
+  "torch_num_threads": null,
+  "source_revision": "c2449428362af8a4e25bee6d61c82cb336350a61",
+  "optimizer": "adamw",
+  "scheduler": "constant",
+  "deterministic_algorithms": true
+}
