@@ -1,11 +1,11 @@
 import pytest
 
 
-def test_only_five_named_commands_and_no_semantic_switches():
+def test_five_scientific_commands_and_isolated_capacity_check():
     from werewolf.cli import build_parser
     parser = build_parser()
     commands = parser._subparsers._group_actions[0].choices
-    assert set(commands) == {"collect", "publish-development", "prepare-experiment", "run-development-oof", "validate-artifact"}
+    assert set(commands) == {"collect", "publish-development", "prepare-experiment", "run-development-oof", "validate-artifact", "capacity-check"}
     for command in commands.values():
         options = {option for action in command._actions for option in action.option_strings}
         assert not options & {"--scope", "--population", "--pilot", "--private", "--resume-step", "--test", "--best", "--backbone"}

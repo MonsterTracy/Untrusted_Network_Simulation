@@ -65,7 +65,6 @@ artifacts/
 /archive/
 *.tar.gz
 *.bundle
-twd_tom_legacy_projection_source.zip
 
 # Temporary files
 /tmp/

@@ -67,7 +67,7 @@ configuration as the v1 source. Do not edit a frozen protocol in place to adapt
 to outcomes or preparation failures. No experiment preparation or training is
 authorized merely by completing this pending document.
 
-Use the existing `classic7-tom prepare-experiment` operation with this JSON as
+Use the existing `uns prepare-experiment` operation with this JSON as
 `--protocol`, a verified development publication as `--publication`, and a new
 artifact destination as `--destination`. All three arguments are explicit.
 The artifact records the full config under `protocol_inputs.config`, together
@@ -79,3 +79,10 @@ Publication, sidecar and complete protocol digests bind provenance only.
 Fold membership uses stable game identities and its frozen rule; numerical
 training controls use the explicit seeds, fold and training identities.
 This document does not introduce final fit or inference.
+
+CLI execution additionally requires an explicit deployment storage profile.
+That profile is separate from this scientific JSON; see
+[server execution](../../../docs/server-execution.md).
+The source revision above identifies the P1 baseline. Before a formal freeze,
+record the actual reviewed implementation revision including subsequent CLI
+changes; this pending protocol is not authorization to run against stale source.

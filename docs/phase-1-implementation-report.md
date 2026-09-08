@@ -73,7 +73,7 @@ checkpoint，不另行训练。Primary targets 是 realized non-wolf cognition�
 
 ## 4. Remaining executable entry points
 
-唯一 root CLI 是 `classic7-tom`，与 `python -m werewolf.cli` 指向同一 implementation：
+唯一 root CLI 是 `uns`，与 `python -m werewolf.cli` 指向同一 implementation：
 
 | Command | Responsibility |
 | --- | --- |
@@ -370,7 +370,7 @@ typed state contract 修复；它不要求修改 scientific semantics 或 artifa
 - `docs/collection_contract.md`
 - `docs/public_speech_event_contract.md`
 - `docs/repository_structure.md`
-- `docs/twd_tom_contract.md`
+- `docs/tom_contract.md`
 - `README.md`
 - `run_random.py`
 - `setup.py`

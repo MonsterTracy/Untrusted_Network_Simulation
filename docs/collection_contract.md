@@ -1,6 +1,6 @@
 # Canonical Collection
 
-`classic7-tom collect` invokes the sole production collector. A durable
+`uns collect` invokes the sole production collector. A durable
 attempt claim precedes runtime construction and every external call.
 Claims and terminals use complete staging writes, file fsync, atomic
 no-replace publication and directory fsync. Staging is never authoritative.

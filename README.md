@@ -6,7 +6,7 @@ two Werewolves, three Villagers, one Seer and one Witch, including Night0.
 
 `CONTEXT.md`, ADRs 0001–0021 and
 [the Phase-1 specification](docs/specs/phase-1-classic7-tom-mainline.md)
-are authoritative. Historical artifacts belong to the old repository.
+are authoritative. This repository owns the current scientific mainline.
 
 ## One executable path
 
@@ -33,19 +33,18 @@ Primary-trained checkpoints, not a second training population.
 
 ```sh
 python -m pip install -e ".[tom,dev]"
-classic7-tom --help
-classic7-tom collect --plan plan.json --runtime-config runtime.yaml --call-limit 10000 --destination artifacts/collection
-classic7-tom publish-development --collection artifacts/collection --runtime-config runtime.yaml --destination artifacts/publications/development
-classic7-tom prepare-experiment --publication artifacts/publications/development --protocol protocol.json --destination artifacts/experiments/experiment
-classic7-tom run-development-oof --experiment artifacts/experiments/experiment
-classic7-tom validate-artifact artifacts/experiments/experiment
+uns --help
+export UNS_STORAGE_PROFILE="$PWD/configs/server.json"
+uns prepare-experiment --publication DEV_ID --protocol configs/formal/development-experiment-v1/protocol.json --destination EXP_ID
+uns validate-artifact experiments/EXP_ID/experiments/experiment
+uns run-development-oof --experiment EXP_ID
 ```
 
-The call limit above is an example runtime value, not a scientific constant.
-The Collection Plan must bind its actual value and the normalized runtime
-configuration digest in `environment_provenance`. Plan records are constructed
-with `construct_collection_plan`; every ExperimentConfig field must be
-explicitly declared. See [configuration](configs/README.md).
+The formal protocol remains pending and these operations fail until its
+researcher-selected values are frozen and a real publication exists.
+See [server execution and storage](docs/server-execution.md) for installation,
+collection, identity resolution and explicit resume. No server paths belong
+in the scientific protocol. See [configuration](configs/README.md).
 
 No network calls or large-scale collection are part of the test suite.
 Formal training runs in fresh processes, uses complete seven-shift cycles and
@@ -55,14 +54,18 @@ Held-out evaluation never selects a checkpoint.
 
 ## Validation
 
+Synthetic training-capacity validation is available through `uns capacity-check`;
+see [server execution](docs/server-execution.md#synthetic-capacity-check).
+It is engineering-only, reads no scientific artifacts and changes no protocol.
+
 ```sh
-conda run -n 3wd python -m pytest -q
-conda run -n 3wd python -m compileall -q run_random.py werewolf tests
+python -m pytest -q
+python -m compileall -q run_random.py werewolf tests
 git diff --check
 ```
 
 [Architecture](docs/architecture.md), [collection contract](docs/collection_contract.md),
-[ToM contract](docs/twd_tom_contract.md), and
+[ToM contract](docs/tom_contract.md), and
 [module ownership](docs/repository_structure.md) describe the live implementation.
 Game agents exist only to generate canonical evidence; trained ToM outputs never
 control gameplay. Phase-1 acceptance is contract-complete small-scale execution,

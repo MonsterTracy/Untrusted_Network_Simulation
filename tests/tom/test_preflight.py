@@ -43,14 +43,17 @@ def test_preflight_rejects_semantic_corruption_even_with_valid_outer_hashes(tmp_
         validate_artifact(destination)
 
 
-def test_cli_prepares_and_semantically_validates_same_experiment(tmp_path, capsys):
+def test_cli_prepares_and_semantically_validates_same_experiment(tmp_path, capsys, monkeypatch):
     from werewolf.artifact_io import canonical_json_bytes
     from werewolf.cli import main
     from tests.development_publication.test_development_publication import _publication
+    profile = tmp_path / "storage.json"
+    profile.write_bytes(canonical_json_bytes({"artifact_root": str(tmp_path.resolve())}))
+    monkeypatch.setenv("UNS_STORAGE_PROFILE", str(profile))
     _, handles = _publication(tmp_path)
     protocol = tmp_path / "protocol.json"
     protocol.write_bytes(canonical_json_bytes(asdict(experiment_config(handles.public.public_view.max_structured_token_count))))
-    destination = tmp_path / "experiments" / "cli"
+    destination = tmp_path / "experiments" / "cli" / "experiments" / "experiment"
     assert main(["prepare-experiment", "--publication", str(handles.public.path), "--protocol", str(protocol), "--destination", str(destination)]) == 0
     identity = capsys.readouterr().out.strip()
     assert len(identity) == 64

@@ -7,7 +7,7 @@ setup(
     keywords="werewolf, multi-agent, theory-of-mind",
     packages=find_packages(),
     py_modules=["run_random"],
-    entry_points={"console_scripts": ["classic7-tom=werewolf.cli:main"]},
+    entry_points={"console_scripts": ["uns=werewolf.cli:main"]},
     python_requires=">=3.10",
     install_requires=[
         "gymnasium",

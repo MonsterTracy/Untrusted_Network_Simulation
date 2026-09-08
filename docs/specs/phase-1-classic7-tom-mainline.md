@@ -780,7 +780,14 @@ members of one controlled ablation; no third value is accepted.
 
 ### 4.3 Formal CLI seam
 
-One `classic7-tom` command owns a small set of subcommands:
+The same CLI also owns `capacity-check`, a synthetic-only engineering operation
+outside the scientific lifecycle. It accepts only explicit synthetic sizes and
+device, reads/writes no scientific artifacts, and reports no scientific scores.
+Its scratch optimizer settings and output cannot select or modify a formal
+protocol. It executes the existing graph and loss without changing their math;
+OOM fails immediately without resizing or fallback.
+
+One `uns` command owns a small set of subcommands:
 
 1. `collect` — execute one immutable Collection Plan or resume its exact ledger.
 2. `publish-development` — validate the completed collection and atomically
@@ -792,6 +799,14 @@ One `classic7-tom` command owns a small set of subcommands:
    both named evaluations and aggregate reports.
 5. `validate-artifact` — dispatch by the artifact's declared type only; it does
    not repair or upgrade artifacts.
+
+Deployment paths are supplied by an explicit storage profile (`artifact_root`),
+separate from ExperimentConfig. `werewolf.cli` owns the sole `uns` console entry.
+Named experiment destinations retain immutable inputs and digest-addressed
+mutable runs in one experiment-specific namespace; see
+[server execution](../server-execution.md). No latest-artifact lookup is allowed.
+Existing collection ledgers and OOF runs require explicit `--resume`; this flag
+only authorizes the existing recovery policy, never an alternate checkpoint.
 
 During its training phase, the OOF command may continue only through
 `deterministic_step_boundary_resume_v1`. During its evaluation phase, it may
@@ -870,7 +885,7 @@ the frozen mainline still consumes its capability.
 | current `checkpoint` pickle contract | Canonical tensor-state artifact and fixed terminal checkpoint |
 | current `train`, `eval`, and `run_development_oof` | Experiment preparation, fixed Primary trainer, pure fold inference, named evaluators, and OOF reporter |
 | standalone dataset/canonical audit scripts | Validators owned by Bundle, Publication, Dataset, and Experiment modules |
-| script-per-operation CLI surface | One `classic7-tom` command with the five subcommands above |
+| script-per-operation CLI surface | One `uns` command with the five subcommands above |
 
 Replacement means the old interface and tests are deleted in the same commit
 that makes the replacement reachable. It does not mean wrapping the old path.

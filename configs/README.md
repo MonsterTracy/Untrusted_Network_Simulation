@@ -36,3 +36,7 @@ and source revision. max_seq_len must cover the publication maximum.
 Backend instances are external transport dependencies only. Tests inject
 deterministic adapters, never a second collection mode. API calls are not made
 by configuration validation or the self-contained test suite.
+
+`server.json` is deployment-only and contains exactly `artifact_root`. Select it
+explicitly with `UNS_STORAGE_PROFILE` or `uns --storage-profile`; no location is
+inferred. See [server execution](../docs/server-execution.md).

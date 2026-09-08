@@ -1,7 +1,8 @@
-"""The five production operations; no alternate scientific lineages."""
+"""Five scientific operations and an isolated synthetic engineering check."""
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import yaml
@@ -10,13 +11,16 @@ from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="classic7-tom")
+    parser = argparse.ArgumentParser(prog="uns")
+    parser.add_argument("--storage-profile", type=Path, default=os.environ.get("UNS_STORAGE_PROFILE"),
+        help="explicit deployment JSON path (or UNS_STORAGE_PROFILE)")
     commands = parser.add_subparsers(dest="command", required=True)
     collect = commands.add_parser("collect")
     collect.add_argument("--plan", type=Path, required=True)
     collect.add_argument("--runtime-config", type=Path, required=True)
     collect.add_argument("--call-limit", type=int, required=True)
     collect.add_argument("--destination", type=Path, required=True)
+    collect.add_argument("--resume", action="store_true", help="explicitly continue the exact collection ledger")
     publication = commands.add_parser("publish-development")
     publication.add_argument("--collection", type=Path, required=True)
     publication.add_argument("--runtime-config", type=Path, required=True)
@@ -27,10 +31,66 @@ def build_parser():
     experiment.add_argument("--destination", type=Path, required=True)
     oof = commands.add_parser("run-development-oof")
     oof.add_argument("--experiment", type=Path, required=True)
+    oof.add_argument("--resume", action="store_true", help="explicitly continue the exact existing run under its recovery policy")
     validate = commands.add_parser("validate-artifact")
     validate.add_argument("path", type=Path)
     validate.add_argument("--runtime-config", type=Path)
+    capacity = commands.add_parser("capacity-check", help="synthetic engineering check, not a scientific run")
+    capacity.add_argument("--pre-count-per-game", type=int, required=True)
+    capacity.add_argument("--max-seq-len", type=int, required=True)
+    capacity.add_argument("--game-batch-size", type=int, required=True)
+    capacity.add_argument("--device", choices=("cpu", "cuda"), required=True)
     return parser
+
+
+def _storage_root(profile):
+    if profile is None:
+        raise ValueError("storage profile is required; no default artifact location")
+    value = json.loads(Path(profile).read_bytes())
+    if not isinstance(value, dict) or set(value) != {"artifact_root"} or not isinstance(value["artifact_root"], str):
+        raise ValueError("storage profile requires exactly artifact_root")
+    root = Path(value["artifact_root"])
+    if not root.is_absolute() or ".." in root.parts or not root.is_dir():
+        raise ValueError("artifact root must be an existing absolute directory")
+    if any(p.is_symlink() for p in (root, *root.parents)):
+        raise ValueError("artifact root cannot traverse symbolic links")
+    return root.resolve(strict=True)
+
+
+def _artifact_path(root, value, kind=None):
+    path = Path(value)
+    if ".." in path.parts or str(path) == ".":
+        raise ValueError("invalid artifact path")
+    if not path.is_absolute():
+        if len(path.parts) == 1 and kind is not None:
+            path = Path(kind) / path
+            if kind == "experiments":
+                # Keep immutable inputs and mutable runs in one experiment namespace.
+                path = path / "experiments" / "experiment"
+        path = root / path
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError("artifact path cannot traverse symbolic links")
+    path = path.resolve()
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError("artifact path must be inside artifact root")
+    return path
+
+
+def _require_resume(path, resume):
+    started = path.exists() and any(path.iterdir())
+    if started and not resume:
+        raise ValueError("existing run requires explicit --resume")
+    if resume and not started:
+        raise ValueError("--resume requires existing run records")
+
+
+def _experiment_path(root, value):
+    path = _artifact_path(root, value, "experiments")
+    parts = path.relative_to(root).parts
+    if len(parts) != 4 or parts[0] != "experiments" or parts[2:] != ("experiments", "experiment"):
+        raise ValueError("experiment must use experiments/ID/experiments/experiment layout")
+    _artifact_path(root, path.parent.parent / "runs")
+    return path
 
 
 def _runtime(path):
@@ -83,6 +143,32 @@ def validate_artifact(path, runtime_config=None):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.command == "capacity-check":
+        from werewolf.tom.capacity_check import NOTICE, check_training_capacity
+        print(NOTICE, flush=True)
+        result = check_training_capacity(pre_count_per_game=args.pre_count_per_game,
+            max_seq_len=args.max_seq_len, game_batch_size=args.game_batch_size, device=args.device)
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    root = _storage_root(args.storage_profile)
+    if args.command == "collect":
+        args.destination = _artifact_path(root, args.destination, "canonical")
+        _require_resume(args.destination, args.resume)
+    elif args.command == "publish-development":
+        args.collection = _artifact_path(root, args.collection, "canonical")
+        args.destination = _artifact_path(root, args.destination, "publications")
+    elif args.command == "prepare-experiment":
+        args.publication = _artifact_path(root, args.publication, "publications")
+        args.destination = _experiment_path(root, args.destination)
+    elif args.command == "run-development-oof":
+        args.experiment = _experiment_path(root, args.experiment)
+    else:
+        args.path = _artifact_path(root, args.path)
+        if (args.path / "experiment_manifest.json").is_file():
+            _experiment_path(root, args.path)
+            manifest = json.loads((args.path / "experiment_manifest.json").read_bytes())
+            _artifact_path(root, manifest["publication_path"])
+            _artifact_path(root, args.path.parent.parent / "runs")
     if args.command == "collect":
         from werewolf.backends import load_named_backends
         from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
@@ -110,7 +196,11 @@ def main(argv=None):
     elif args.command == "run-development-oof":
         from werewolf.tom.experiment import open_experiment
         from werewolf.tom.reporting import run_development_oof
-        identity = run_development_oof(open_experiment(args.experiment))["record_digest"]
+        experiment = open_experiment(args.experiment)
+        _artifact_path(root, experiment.manifest["publication_path"])
+        runs = _artifact_path(root, experiment.runs_path)
+        _require_resume(runs, args.resume)
+        identity = run_development_oof(experiment)["record_digest"]
     else:
         identity = validate_artifact(args.path, args.runtime_config)
     print(identity)
