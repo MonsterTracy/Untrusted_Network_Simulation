@@ -44,19 +44,28 @@ and does not apply to separate `conda env remove` commands. The exact-prefix
 removal above invokes no Conda channels.
 See the [official environment YAML specification](https://conda.org/learn/specifications/exchange/environment-yml/).
 
+The clean-create invocation also sets `CONDA_NO_PLUGINS=true` for that command
+only. Conda disables external plugins, including `conda-anaconda-tos`, while
+retaining built-in plugins. This is separate from the YAML's `nodefaults`
+channel policy: do not accept the defaults ToS or edit global Conda settings.
+Other external plugins, including external solvers, are also disabled; a
+creation failure must be reported rather than silently changing the solver.
+See [Conda plugin configuration](https://docs.conda.io/projects/conda/en/stable/configuration.html)
+and the [Anaconda ToS plugin](https://github.com/anaconda/conda-anaconda-tos).
+
 ```sh
 cd /home/dell/yuxiao/Untrusted_Network_Simulation
-export CONDA_PKGS_DIRS=/data/yuxiao/cache/conda/pkgs
+export CONDA_PKGS_DIRS=/data/yuxiao/cache/conda-pkgs
 export CONDA_ENVS_PATH=/data/yuxiao/envs
 export CONDA_REGISTER_ENVS=false
 export CONDA_NUMBER_CHANNEL_NOTICES=0
-export XDG_CACHE_HOME=/data/yuxiao/cache
+export XDG_CACHE_HOME=/data/yuxiao/cache/xdg
 export XDG_DATA_HOME=/data/yuxiao/share
 export XDG_STATE_HOME=/data/yuxiao/state
 export PIP_CACHE_DIR=/data/yuxiao/cache/pip
-export TMPDIR=/data/yuxiao/tmp
-mkdir -p "$CONDA_PKGS_DIRS" "$CONDA_ENVS_PATH" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
-PYTHONNOUSERSITE=1 conda env create --prefix /data/yuxiao/envs/untrusted-network-simulation-vllm --file configs/environments/vllm.yaml
+export TMPDIR=/data/yuxiao/tmp/vllm-build
+mkdir -p /data/yuxiao/conda-home "$CONDA_PKGS_DIRS" "$CONDA_ENVS_PATH" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
+HOME=/data/yuxiao/conda-home CONDA_NO_PLUGINS=true PYTHONNOUSERSITE=1 conda env create --prefix /data/yuxiao/envs/untrusted-network-simulation-vllm --file configs/environments/vllm.yaml
 conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
 python -c 'import os, site, sys; assert os.environ.get("PYTHONNOUSERSITE") == "1"; assert site.ENABLE_USER_SITE is False; assert site.getusersitepackages() not in sys.path; print(sys.executable)'
 python -m pip check
