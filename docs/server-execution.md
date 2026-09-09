@@ -91,6 +91,10 @@ conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
 python -c 'import os, site, sys; assert os.environ.get("PYTHONNOUSERSITE") == "1"; assert site.ENABLE_USER_SITE is False; assert site.getusersitepackages() not in sys.path; print(sys.executable)'
 python -m pip check
 python -m pip show \
+  flashinfer-python \
+  flashinfer-jit-cache \
+  flashinfer-cubin
+python -m pip show \
   cuda-toolkit \
   nvidia-cuda-nvcc \
   nvidia-cuda-crt \
@@ -109,6 +113,16 @@ The CUDA discovery check must point to
 Updating the repository YAML alone does not update an already-created
 environment's activation variables. Stop if the activated value is missing or
 different. These checks verify discovery, not successful JIT compilation.
+
+The FlashInfer package check must show `flashinfer-python` 0.6.16.post3 and
+`flashinfer-jit-cache` 0.6.16.post3+cu130. `flashinfer-cubin` must remain absent;
+the corresponding package-not-found warning from `pip show` is expected.
+The environment uses the exact x86_64, cp39-abi3, manylinux_2_28 wheel URL and
+SHA-256 listed in the [official CUDA 13.0 JIT-cache index](https://flashinfer.ai/whl/cu130/flashinfer-jit-cache/).
+This package-specific direct reference leaves the existing PyPI index policy
+unchanged. It targets this Linux x86_64 server; Python 3.12 and glibc 2.39
+satisfy the wheel tags. Do not install `flashinfer-cubin` or upgrade the core
+FlashInfer package to satisfy this check.
 
 The package versions must be `cuda-toolkit` 13.0.3.0 (equivalently 13.0.3),
 `nvidia-cuda-nvcc`, `nvidia-cuda-crt`, and `nvidia-nvvm` 13.0.88,
@@ -168,6 +182,17 @@ FlashInfer 0.6.16.post3 appends `.cache/flashinfer` to
 The variable must be set before starting the service. Leave historical caches
 under `/home/dell/.cache` untouched; this service must not use them.
 See the [versioned FlashInfer workspace implementation](https://github.com/flashinfer-ai/flashinfer/blob/v0.6.16.post3/flashinfer/jit/env.py).
+
+The JIT-cache acceptance criterion is actual vLLM startup on this SM86 GPU:
+the sampling module must load an available prebuilt artifact from the installed
+cache, without attempting a local Ninja link of `sampling.so`. Package presence
+or `python -m flashinfer show-config` alone is insufficient. A missing or
+unloadable prebuilt artifact can still lead upstream FlashInfer to attempt JIT;
+that does not satisfy this deployment check.
+The show-config message `No supported CUDA architectures found for major
+versions [9, 10, 11, 12]` concerns modules restricted to SM90+, not FlashInfer
+as a whole. It does not invalidate detection of `{(8, '6')}`. Keep the real
+SM86 architecture; do not add a fake architecture to suppress this message.
 
 Run from the source checkout. The declared deployment uses one GPU, BF16,
 text-only loading, eager execution, one concurrent sequence, 90% GPU memory

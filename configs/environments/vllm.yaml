@@ -11,6 +11,7 @@ dependencies:
   - pip
   - pip:
       - vllm==0.27.0
+      - "flashinfer-jit-cache @ https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.16.post3/flashinfer_jit_cache-0.6.16.post3+cu130-cp39-abi3-manylinux_2_28_x86_64.whl#sha256=abcca93faa2fbbc9a98394ccc44ab657627b91e49da2624efd26a6ff669264ab"
       - cuda-toolkit==13.0.3.0
       - nvidia-cuda-nvcc==13.0.88
       - nvidia-cuda-crt==13.0.88
