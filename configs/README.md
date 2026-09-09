@@ -40,3 +40,14 @@ by configuration validation or the self-contained test suite.
 `server.json` is deployment-only and contains exactly `artifact_root`. Select it
 explicitly with `UNS_STORAGE_PROFILE` or `uns --storage-profile`; no location is
 inferred. See [server execution](../docs/server-execution.md).
+
+Local Qwen serving uses three explicit, separate configuration files:
+
+- `environments/vllm.yaml`: standalone Python/vLLM environment.
+- `deployment/qwen35-9b.yaml`: native `vllm serve --config` arguments.
+- `runtime/local-qwen35-9b.yaml`: current normalized scientific client runtime.
+
+These files are deployment/collection configuration, not frozen Development
+Experiment Protocol values. Server-side generation settings and external model
+identity must also be recorded in the Collection Plan provenance; the runtime
+config digest alone cannot verify a remote server's settings or weight bytes.

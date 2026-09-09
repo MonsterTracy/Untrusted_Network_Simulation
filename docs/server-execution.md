@@ -1,5 +1,89 @@
 # Server execution and storage
 
+## Local Qwen service
+
+The scientific client and external base-model server use separate environments:
+
+- Client: `/data/yuxiao/envs/untrusted-network-simulation`.
+- vLLM: `/data/yuxiao/envs/untrusted-network-simulation-vllm`.
+- External model: `/data/yuxiao/models/qwen3.5-9b`.
+
+The external model directory must contain the explicitly selected complete
+Qwen3.5-9B checkpoint and tokenizer files. It is outside the scientific artifact
+root. Do not use symlinks or substitute a model identifier on path failure.
+No model download, service startup, or scientific run is automatic.
+
+Create the standalone environment once from the source checkout:
+
+```sh
+cd /home/dell/yuxiao/Untrusted_Network_Simulation
+conda env create --prefix /data/yuxiao/envs/untrusted-network-simulation-vllm --file configs/environments/vllm.yaml
+conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
+python -m pip check
+nvidia-smi
+python -c 'import torch, vllm; print(vllm.__version__, torch.__version__, torch.version.cuda); assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
+```
+
+The environment pins **vLLM 0.27.0** and Python 3.12. Its own pip dependencies
+provide the matching Torch stack; do not install the main environment's Torch
+into it. The Linux wheel requires glibc >= 2.28 and a driver compatible with
+its CUDA build. Actual driver support and RTX 3090 memory headroom must be
+verified on the server before using the service.
+
+Version evidence reviewed for this configuration:
+
+- [Official Qwen3.5-9B recipe](https://recipes.vllm.ai/Qwen/Qwen3.5-9B)
+  requires vLLM >= 0.17.0.
+- [v0.27.0 model registry](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/model_executor/models/registry.py)
+  includes Qwen3.5 dense conditional generation.
+- [v0.27.0 release metadata](https://pypi.org/pypi/vllm/0.27.0/json)
+  pins torch 2.13.0 and torchaudio 2.11.0.
+  [TorchAudio's compatibility contract](https://docs.pytorch.org/audio/stable/installation.html)
+  explicitly supports Torch 2.11 and later with TorchAudio 2.11.
+- [Native YAML configuration](https://docs.vllm.ai/en/v0.27.0/configuration/serve_args/)
+  uses the long CLI argument names. No project launcher is needed.
+
+Ordinary service operation is:
+
+```sh
+conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
+vllm serve --config configs/deployment/qwen35-9b.yaml
+```
+
+Run from the source checkout. The declared deployment uses one GPU, BF16,
+text-only loading, eager execution, one concurrent sequence, 90% GPU memory
+budget, an 8192-token context and disabled thinking. These are explicit initial
+deployment settings, not a demonstrated 3090 capacity result. The context is
+the external model's tokenizer capacity, unrelated to ToM `max_seq_len`.
+Oversized requests or OOM must fail; do not truncate, resize, or switch backend
+automatically. The runtime declares gameplay temperature 0.7 and output budget
+2048; parser `model_params` is empty because runtime assembly does not forward
+those parameters. Existing perception/belief request contracts remain in force.
+
+The service listens only on loopback without authentication. The served model
+name matches every client reference. In another terminal:
+
+```sh
+cd /home/dell/yuxiao/Untrusted_Network_Simulation
+conda activate /data/yuxiao/envs/untrusted-network-simulation
+export UNS_STORAGE_PROFILE="$PWD/configs/server.json"
+curl --fail http://127.0.0.1:8000/v1/models
+uns --help
+```
+
+Select `configs/runtime/local-qwen35-9b.yaml` explicitly with the existing
+`--runtime-config` argument when an authorized collection/publication is run.
+`uns` remains the only scientific CLI. It does not start or discover vLLM.
+
+The Collection Plan must bind the normalized runtime config digest and exact
+call limit as before. Separately record the serve-config digest, installed
+vLLM/runtime versions, and external model revision/file identity in the existing
+backend/environment provenance before collection. The client cannot attest
+remote weights or settings from an endpoint/model alias. Changing them requires
+a newly declared plan, not resuming a bound collection. Never override serve
+flags outside the recorded configuration. Stop vLLM explicitly before ToM GPU
+capacity checks or training on the same 3090; they need their own memory budget.
+
 ## Synthetic capacity check
 
 `uns capacity-check` is a separate engineering operation owned by the same CLI.

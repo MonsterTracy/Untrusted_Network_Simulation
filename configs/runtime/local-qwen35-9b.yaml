@@ -1,0 +1,34 @@
+# Explicit local collection runtime; no game count or experiment settings.
+backends:
+  local_qwen:
+    type: openai_compatible
+    base_url: http://127.0.0.1:8000/v1
+    api_key_env: null
+    default_model: qwen35-9b
+    supports_json_schema: true
+parser:
+  backend: local_qwen
+  model: qwen35-9b
+  model_params: {}
+agent_config:
+  all_candidates:
+    - profile_name: local_qwen
+      agent_type: gpt
+      backend: local_qwen
+      model: qwen35-9b
+      model_params:
+        temperature: 0.7
+        gameplay_max_tokens: 2048
+        gameplay_prompt_profile: strict_classic7
+      sample_ratio: 1.0
+  must_include: [local_qwen]
+  allow_cross_team_profiles: true
+env_config:
+  n_player: 7
+  n_role: 4
+  n_werewolf: 2
+  n_villager: 3
+  n_seer: 1
+  n_witch: 1
+  n_guard: 0
+  n_hunter: 0
