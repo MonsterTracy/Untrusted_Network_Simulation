@@ -5,8 +5,15 @@ channels:
 variables:
   PYTHONNOUSERSITE: "1"
   CUDA_HOME: "/data/yuxiao/envs/untrusted-network-simulation-vllm/lib/python3.12/site-packages/nvidia/cu13"
+  FLASHINFER_WORKSPACE_BASE: "/data/yuxiao/cache/flashinfer"
 dependencies:
   - python=3.12
   - pip
   - pip:
       - vllm==0.27.0
+      - cuda-toolkit==13.0.3.0
+      - nvidia-cuda-nvcc==13.0.88
+      - nvidia-cuda-crt==13.0.88
+      - nvidia-nvvm==13.0.88
+      - nvidia-cuda-runtime==13.0.96
+      - nvidia-cuda-nvrtc==13.0.88

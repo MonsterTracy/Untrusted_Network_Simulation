@@ -17,8 +17,9 @@ The server's existing environment was installed with Python user-site packages
 visible, so pip accepted dependencies outside the environment. Disabling the
 user site afterwards hides those dependencies; it does not install the missing
 ones. Remove that incomplete environment and rebuild it in full. Do not repair
-it by installing individual missing packages. The dependency tree comes solely
-from `vllm==0.27.0`, not a manually maintained dependency list.
+it by installing individual missing packages. Rebuild from the environment
+specification, which retains `vllm==0.27.0` and pins its CUDA 13.0 JIT toolchain
+as a coherent set. Do not downgrade individual packages in the existing prefix.
 
 Stop the vLLM process and leave its environment first (`conda deactivate` if it
 is active). Only for the known damaged environment, remove this exact prefix:
@@ -89,6 +90,13 @@ env \
 conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
 python -c 'import os, site, sys; assert os.environ.get("PYTHONNOUSERSITE") == "1"; assert site.ENABLE_USER_SITE is False; assert site.getusersitepackages() not in sys.path; print(sys.executable)'
 python -m pip check
+python -m pip show \
+  cuda-toolkit \
+  nvidia-cuda-nvcc \
+  nvidia-cuda-crt \
+  nvidia-nvvm \
+  nvidia-cuda-runtime \
+  nvidia-cuda-nvrtc
 echo "$CUDA_HOME"
 test -x "$CUDA_HOME/bin/nvcc"
 "$CUDA_HOME/bin/nvcc" --version
@@ -101,6 +109,15 @@ The CUDA discovery check must point to
 Updating the repository YAML alone does not update an already-created
 environment's activation variables. Stop if the activated value is missing or
 different. These checks verify discovery, not successful JIT compilation.
+
+The package versions must be `cuda-toolkit` 13.0.3.0 (equivalently 13.0.3),
+`nvidia-cuda-nvcc`, `nvidia-cuda-crt`, and `nvidia-nvvm` 13.0.88,
+`nvidia-cuda-runtime` 13.0.96, and `nvidia-cuda-nvrtc` 13.0.88.
+`nvcc --version` must report CUDA 13.0, V13.0.88. These match the
+[CUDA 13.0.3 component table](https://pypi.org/project/cuda-toolkit/13.0.3/)
+and Torch 2.13.0's CUDA toolkit requirement. The explicit compiler component
+pins prevent unconstrained dependencies from selecting CUDA 13.3 components.
+Stop on a mismatch or failed `pip check`; do not repair the prefix piecemeal.
 
 The YAML `variables` entry preserves `PYTHONNOUSERSITE=1` on activation. It is
 not assumed to isolate the pip installation phase; the creation command must
@@ -139,8 +156,18 @@ Ordinary service operation is:
 
 ```sh
 conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
+echo "$FLASHINFER_WORKSPACE_BASE"
+test "$FLASHINFER_WORKSPACE_BASE" = /data/yuxiao/cache/flashinfer || exit 1
+mkdir -p /data/yuxiao/cache/flashinfer
 vllm serve --config configs/deployment/qwen35-9b.yaml
 ```
+
+FlashInfer 0.6.16.post3 appends `.cache/flashinfer` to
+`FLASHINFER_WORKSPACE_BASE`, so its JIT workspace is under
+`/data/yuxiao/cache/flashinfer/.cache/flashinfer/<version>/<architecture>/`.
+The variable must be set before starting the service. Leave historical caches
+under `/home/dell/.cache` untouched; this service must not use them.
+See the [versioned FlashInfer workspace implementation](https://github.com/flashinfer-ai/flashinfer/blob/v0.6.16.post3/flashinfer/jit/env.py).
 
 Run from the source checkout. The declared deployment uses one GPU, BF16,
 text-only loading, eager execution, one concurrent sequence, 90% GPU memory
