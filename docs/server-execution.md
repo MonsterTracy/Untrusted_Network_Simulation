@@ -35,6 +35,15 @@ the allowed directories; leave any old registry entry untouched.
 Create the standalone environment from the source checkout. These exports
 apply before Conda starts its pip subprocess, including on a fresh install:
 
+The environment YAML uses `conda-forge` plus `nodefaults` to exclude configured
+default channels when creating this environment. Its Conda dependencies are
+Python and pip; vLLM and its dependency tree are installed through pip. No
+Anaconda defaults channel or ToS acceptance is required by this specification.
+This file-local channel policy does not change any global Conda configuration
+and does not apply to separate `conda env remove` commands. The exact-prefix
+removal above invokes no Conda channels.
+See the [official environment YAML specification](https://conda.org/learn/specifications/exchange/environment-yml/).
+
 ```sh
 cd /home/dell/yuxiao/Untrusted_Network_Simulation
 export CONDA_PKGS_DIRS=/data/yuxiao/cache/conda/pkgs

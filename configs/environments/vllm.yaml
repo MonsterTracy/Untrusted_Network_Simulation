@@ -1,6 +1,7 @@
 name: untrusted-network-simulation-vllm
 channels:
   - conda-forge
+  - nodefaults
 variables:
   PYTHONNOUSERSITE: "1"
 dependencies:
