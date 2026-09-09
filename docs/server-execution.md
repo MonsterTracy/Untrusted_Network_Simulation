@@ -13,16 +13,61 @@ Qwen3.5-9B checkpoint and tokenizer files. It is outside the scientific artifact
 root. Do not use symlinks or substitute a model identifier on path failure.
 No model download, service startup, or scientific run is automatic.
 
-Create the standalone environment once from the source checkout:
+The server's existing environment was installed with Python user-site packages
+visible, so pip accepted dependencies outside the environment. Disabling the
+user site afterwards hides those dependencies; it does not install the missing
+ones. Remove that incomplete environment and rebuild it in full. Do not repair
+it by installing individual missing packages. The dependency tree comes solely
+from `vllm==0.27.0`, not a manually maintained dependency list.
+
+Stop the vLLM process and leave its environment first (`conda deactivate` if it
+is active). Only for the known damaged environment, remove this exact prefix:
+
+```sh
+rm -rf -- /data/yuxiao/envs/untrusted-network-simulation-vllm
+```
+
+Do not change or clean `/home/dell/.local`, `/home/dell/ENTER`, or other server
+directories. Do not reuse the old inference environment. Direct prefix removal
+avoids `conda env remove` updating a user-level environment registry outside
+the allowed directories; leave any old registry entry untouched.
+
+Create the standalone environment from the source checkout. These exports
+apply before Conda starts its pip subprocess, including on a fresh install:
 
 ```sh
 cd /home/dell/yuxiao/Untrusted_Network_Simulation
-conda env create --prefix /data/yuxiao/envs/untrusted-network-simulation-vllm --file configs/environments/vllm.yaml
+export CONDA_PKGS_DIRS=/data/yuxiao/cache/conda/pkgs
+export CONDA_ENVS_PATH=/data/yuxiao/envs
+export CONDA_REGISTER_ENVS=false
+export CONDA_NUMBER_CHANNEL_NOTICES=0
+export XDG_CACHE_HOME=/data/yuxiao/cache
+export XDG_DATA_HOME=/data/yuxiao/share
+export XDG_STATE_HOME=/data/yuxiao/state
+export PIP_CACHE_DIR=/data/yuxiao/cache/pip
+export TMPDIR=/data/yuxiao/tmp
+mkdir -p "$CONDA_PKGS_DIRS" "$CONDA_ENVS_PATH" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$PIP_CACHE_DIR" "$TMPDIR"
+PYTHONNOUSERSITE=1 conda env create --prefix /data/yuxiao/envs/untrusted-network-simulation-vllm --file configs/environments/vllm.yaml
 conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
+python -c 'import os, site, sys; assert os.environ.get("PYTHONNOUSERSITE") == "1"; assert site.ENABLE_USER_SITE is False; assert site.getusersitepackages() not in sys.path; print(sys.executable)'
 python -m pip check
 nvidia-smi
 python -c 'import torch, vllm; print(vllm.__version__, torch.__version__, torch.version.cuda); assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 ```
+
+The YAML `variables` entry preserves `PYTHONNOUSERSITE=1` on activation. It is
+not assumed to isolate the pip installation phase; the creation command must
+also set it explicitly. Both the isolated `pip check` and actual imports must
+pass before this environment is considered usable. A failed check means stop,
+not disable isolation or fill dependencies one at a time.
+
+The cache/temp exports keep installation downloads and working data under
+`/data/yuxiao`; disabling registration avoids writing `~/.conda/environments.txt`,
+and disabling channel notices avoids their user-level cache. Conda may briefly
+create its generated requirements file beside the YAML in the source checkout,
+which is also inside the allowed tree. No global Conda configuration is edited.
+Keep these explicit cache settings in shells used for subsequent installation
+or service operation. They do not move or clean any existing user directories.
 
 The environment pins **vLLM 0.27.0** and Python 3.12. Its own pip dependencies
 provide the matching Torch stack; do not install the main environment's Torch
