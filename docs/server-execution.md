@@ -89,9 +89,18 @@ env \
 conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
 python -c 'import os, site, sys; assert os.environ.get("PYTHONNOUSERSITE") == "1"; assert site.ENABLE_USER_SITE is False; assert site.getusersitepackages() not in sys.path; print(sys.executable)'
 python -m pip check
+echo "$CUDA_HOME"
+test -x "$CUDA_HOME/bin/nvcc"
+"$CUDA_HOME/bin/nvcc" --version
 nvidia-smi
 python -c 'import torch, vllm; print(vllm.__version__, torch.__version__, torch.version.cuda); assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 ```
+
+The CUDA discovery check must point to
+`/data/yuxiao/envs/untrusted-network-simulation-vllm/lib/python3.12/site-packages/nvidia/cu13`.
+Updating the repository YAML alone does not update an already-created
+environment's activation variables. Stop if the activated value is missing or
+different. These checks verify discovery, not successful JIT compilation.
 
 The YAML `variables` entry preserves `PYTHONNOUSERSITE=1` on activation. It is
 not assumed to isolate the pip installation phase; the creation command must

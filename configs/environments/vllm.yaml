@@ -4,6 +4,7 @@ channels:
   - nodefaults
 variables:
   PYTHONNOUSERSITE: "1"
+  CUDA_HOME: "/data/yuxiao/envs/untrusted-network-simulation-vllm/lib/python3.12/site-packages/nvidia/cu13"
 dependencies:
   - python=3.12
   - pip
