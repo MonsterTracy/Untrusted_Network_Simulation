@@ -1,7 +1,6 @@
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
-import httpx
 import openai
 
 from werewolf.backends.base import BackendError, LLMBackend
@@ -54,9 +53,8 @@ class OpenAICompatibleBackend(LLMBackend):
             if max_retries is not None:
                 client_kwargs["max_retries"] = max_retries
             if _is_loopback_base_url(base_url):
-                client_kwargs["http_client"] = httpx.Client(
+                client_kwargs["http_client"] = openai.DefaultHttpx2Client(
                     trust_env=False,
-                    timeout=openai.DEFAULT_TIMEOUT,
                 )
             client = openai.OpenAI(**client_kwargs)
 

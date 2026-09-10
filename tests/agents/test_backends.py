@@ -106,7 +106,7 @@ class BackendTest(unittest.TestCase):
                 self.assertFalse(_is_loopback_base_url(base_url))
 
     @patch("werewolf.backends.openai_compatible.openai.OpenAI")
-    @patch("werewolf.backends.openai_compatible.httpx.Client")
+    @patch("werewolf.backends.openai_compatible.openai.DefaultHttpx2Client")
     def test_loopback_backend_disables_environment_proxy_only(
         self,
         http_client_class,
@@ -130,12 +130,13 @@ class BackendTest(unittest.TestCase):
                     base_url=base_url,
                     default_model="local-model",
                     max_retries=0,
+                    supports_json_schema=True,
                 )
 
                 self.assertEqual(backend.default_model, "local-model")
+                self.assertTrue(backend.supports_json_schema)
                 http_client_class.assert_called_once_with(
                     trust_env=False,
-                    timeout=openai.DEFAULT_TIMEOUT,
                 )
                 openai_client_class.assert_called_once_with(
                     api_key="local-mlx",
@@ -145,7 +146,7 @@ class BackendTest(unittest.TestCase):
                 )
 
     @patch("werewolf.backends.openai_compatible.openai.OpenAI")
-    @patch("werewolf.backends.openai_compatible.httpx.Client")
+    @patch("werewolf.backends.openai_compatible.openai.DefaultHttpx2Client")
     def test_remote_backend_keeps_default_http_client_behavior(
         self,
         http_client_class,
@@ -175,6 +176,40 @@ class BackendTest(unittest.TestCase):
                 )
 
         http_client_class.assert_not_called()
+
+    def test_loopback_native_client_preserves_sdk_timeout_family(self):
+        backend = OpenAICompatibleBackend(
+            api_key="local-test",
+            base_url="http://127.0.0.1:8000/v1",
+            max_retries=0,
+        )
+        try:
+            transport = backend.client._client
+            self.assertIsInstance(transport, openai.DefaultHttpx2Client)
+            self.assertFalse(transport.trust_env)
+            self.assertIsInstance(transport.timeout, type(openai.DEFAULT_TIMEOUT))
+            self.assertEqual(transport.timeout, openai.DEFAULT_TIMEOUT)
+            self.assertTrue(transport.follow_redirects)
+            self.assertEqual(backend.client.max_retries, 0)
+        finally:
+            backend.client.close()
+
+    @patch("werewolf.backends.openai_compatible.openai.OpenAI")
+    @patch("werewolf.backends.openai_compatible.openai.DefaultHttpx2Client")
+    def test_injected_loopback_client_bypasses_transport_construction(
+        self, http_client_class, openai_client_class
+    ):
+        client = FakeClient()
+        backend = OpenAICompatibleBackend(
+            base_url="http://[::1]:8000/v1",
+            client=client,
+            supports_json_schema=True,
+            max_retries=0,
+        )
+        self.assertIs(backend.client, client)
+        self.assertTrue(backend.supports_json_schema)
+        http_client_class.assert_not_called()
+        openai_client_class.assert_not_called()
 
     def test_fake_backend_can_implement_common_interface(self):
         class FakeBackend(LLMBackend):

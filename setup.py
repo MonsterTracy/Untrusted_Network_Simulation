@@ -11,9 +11,8 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "gymnasium",
-        "httpx",
         "numpy>=1.24,<3.0",
-        "openai>=1.59.3",
+        "openai>=3.10.0",
         "pydantic>=2.10.4",
         "python-dotenv>=1.0.0",
         "PyYAML>=6.0.2",
