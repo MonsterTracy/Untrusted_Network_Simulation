@@ -164,16 +164,17 @@ Version evidence reviewed for this configuration:
   [TorchAudio's compatibility contract](https://docs.pytorch.org/audio/stable/installation.html)
   explicitly supports Torch 2.11 and later with TorchAudio 2.11.
 - [Native YAML configuration](https://docs.vllm.ai/en/v0.27.0/configuration/serve_args/)
-  uses the long CLI argument names. No project launcher is needed.
+  uses the long CLI argument names; the operator start script only activates
+  the environment and execs this native configuration.
 
-Ordinary service operation is:
+Before starting the service, verify the activated environment and workspace:
 
 ```sh
 conda activate /data/yuxiao/envs/untrusted-network-simulation-vllm
 echo "$FLASHINFER_WORKSPACE_BASE"
 test "$FLASHINFER_WORKSPACE_BASE" = /data/yuxiao/cache/flashinfer || exit 1
 mkdir -p /data/yuxiao/cache/flashinfer
-vllm serve --config configs/deployment/qwen35-9b.yaml
+./scripts/start_vllm.sh
 ```
 
 FlashInfer 0.6.16.post3 appends `.cache/flashinfer` to
@@ -313,7 +314,107 @@ publication path in the experiment artifact, never in the scientific protocol.
 Relocating an existing experiment's bound publication is not an automatic
 migration; plan the server storage locations before artifact preparation.
 
-## Formal commands
+## Operator collection workflow
+
+The recommended collection entry is `scripts/collect_games.py`. It freezes a
+Collection Plan and delegates to the existing `uns collect` implementation;
+it does not own a second collector or change ledger/recovery semantics.
+Run from `/home/dell/yuxiao/Untrusted_Network_Simulation` with the main
+environment installed from this checkout. Commit and review all source changes
+before collection: both new and resumed campaigns require a clean actual Git
+HEAD. No revision or provenance digest is copied from a calibration run.
+
+Prepare the operator file once:
+
+```sh
+mkdir -p /data/yuxiao/Untrusted_Network_Simulation/operator
+cp configs/operator/collection_campaign.example.json /data/yuxiao/Untrusted_Network_Simulation/operator/collection_campaign.json
+```
+
+Edit only `collection_id`, `target_games`, `seed_pool_size`, and `call_limit`
+in that external JSON. The example specifies 300 successes, 450 planned seeds,
+and a call limit of 1000. The call limit is an operational fail-closed backend
+dispatch cap, not a theoretical Classic7 call upper bound. Changing 300 to 500
+requires a new collection_id (and a sufficient seed pool); never alter an
+already frozen campaign in place. Unknown fields and invalid values fail.
+`--campaign PATH` selects another explicit operator file; no discovery occurs.
+
+Initialize Conda in the operator shell so `CONDA_EXE` identifies the existing
+Conda executable. Start the foreground service in one terminal:
+
+```sh
+./scripts/start_vllm.sh
+```
+
+The script activates the vLLM environment and execs the authoritative deployment
+YAML without copying model options. No restart, background daemon, or endpoint
+substitution is performed. In another terminal, activate the main environment:
+
+```sh
+conda activate /data/yuxiao/envs/untrusted-network-simulation
+python scripts/collect_games.py
+```
+
+After interruption, explicitly resume:
+
+```sh
+python scripts/collect_games.py --resume
+```
+
+Paths are resolved under the artifact root in `configs/server.json`:
+
+- Operator parameters: `operator/collection_campaign.json` (default).
+- Frozen Plan: `plans/<collection_id>.json`.
+- Canonical destination: `canonical/<collection_id>`.
+
+New execution requires both Plan and destination to be absent. An existing
+Plan always rejects ordinary execution, even if its destination is absent.
+Resume requires both the original Plan and existing run records. A Plan frozen
+before a crash but lacking a destination requires explicit operator handling;
+the script does not repair, overwrite, delete, or restart it. Resume compares
+campaign fields, source HEAD, schema identities, and all recomputed provenance
+with the original Plan. It never regenerates the ordered seed pool. Existing
+collector policy closes an interrupted claim and advances through the frozen
+pool; it does not retry that game seed.
+
+Seeds use zero-based ordinal order. Each is the big-endian integer from the
+first eight bytes of SHA-256 of
+`classic7-canonical-collection-v1:<collection_id>:<ordinal>`, masked to 63 bits.
+The rule is content-independent, and duplicate seeds or any seed in
+900000001..900000015 fail closed, without skipping or re-rolling. Those 15
+engineering calibration seeds are permanently excluded from formal campaigns.
+
+Preflight recomputes normalized runtime SHA-256, deployment file SHA-256, and
+a complete model manifest digest. The model directory specified by deployment
+YAML must contain `HF_REVISION`, a plain UTF-8 file with the exact 40-character
+HF commit. There is no inferred revision or fallback. The manifest contains
+every regular file (including HF_REVISION), recursively sorted by relative
+POSIX path, as records with `path`, `size_bytes`, and `sha256`; its digest uses
+the project's canonical JSON. Symlinks are rejected. Keep the external model
+directory immutable during preflight and collection. A previously computed
+digest using another manifest format is not substituted for this calculation.
+
+The Plan also records serving model name, model path, client Python/OpenAI
+versions, serving Python/vLLM/Torch/CUDA/FlashInfer versions, seed rule identity,
+pool size, target, and exact call limit. Serving versions are queried from the
+vLLM environment's Python. Missing software or revision evidence fails.
+Health and model-list requests use the declared loopback endpoint with
+environment proxies disabled. These requests prove service availability and
+served-name agreement, not remote weight bytes or process launch arguments:
+the operator must run this checkout's start script against the audited model
+and environment, and leave them unchanged during the campaign.
+
+The Plan is durably published without replacement using the existing ledger
+publication primitive, then reloaded through canonical Plan validation before
+collection. Console output prints the frozen identity, counts, digests, paths,
+revision and mode, without hidden/private game data. All actual dispatch limits
+passed to `uns collect` come from the validated frozen Plan.
+
+vLLM and ToM training must not run concurrently on the single RTX 3090.
+Stop the service explicitly before training. This workflow performs no training
+and does not fill the pending Formal Development Protocol.
+
+## Advanced/reference commands
 
 `COLLECTION_ID`, `PUBLICATION_ID`, `EXPERIMENT_ID`, plan/runtime paths and
 `DECLARED_CALL_LIMIT` below are explicit operator-supplied values, not defaults.

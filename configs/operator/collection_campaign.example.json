@@ -1,0 +1,6 @@
+{
+  "collection_id": "development-qwen35-9b-300-v1",
+  "target_games": 300,
+  "seed_pool_size": 450,
+  "call_limit": 1000
+}
