@@ -132,6 +132,9 @@ class SpeechPerceiver:
     ) -> SpeechParseAuditResult:
         """Run bounded full-response parsing and retain every attempt."""
 
+        # call_audit imports speech.validation through this package's __init__.
+        from werewolf.canonical_collection.call_audit import CollectionCallBudgetExceeded
+
         precondition_error = None
         if self.backend is None or not self.model_name:
             precondition_error = RuntimeError(
@@ -185,6 +188,8 @@ class SpeechPerceiver:
                     error_message=None,
                     generation_attempts=tuple(attempts),
                 )
+            except CollectionCallBudgetExceeded:
+                raise
             except Exception as exc:
                 last_error = exc
                 raw_response = getattr(exc, "raw_response", None)

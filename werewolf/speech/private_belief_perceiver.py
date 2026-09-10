@@ -15,6 +15,7 @@ STATUS_SEMANTIC_ERROR = "semantic_error"
 STATUS_REPORTER_ERROR = "reporter_error"
 
 from werewolf.canonical_collection.pre import AuthoritativePREPrefix
+from werewolf.canonical_collection.call_audit import CollectionCallBudgetExceeded
 from werewolf.speech.validation import (
     LABEL_PROMPT_VERSION,
     PLAYER_IDS,
@@ -234,6 +235,8 @@ class PlayingAgentBeliefReporter:
                         legal_candidates=legal_candidates,
                         required_candidates=required_candidates,
                     )
+            except CollectionCallBudgetExceeded:
+                raise
             except Exception as exc:
                 attempt_record = {
                     "attempt_index": generation_attempt,

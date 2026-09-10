@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+from unittest.mock import Mock
 
 import pytest
 
@@ -18,6 +19,7 @@ from werewolf.canonical_collection import (
 from werewolf.canonical_collection.call_audit import (
     AuditedBackend,
     CanonicalCallAudit,
+    CollectionCallBudgetExceeded,
 )
 from werewolf.helper.log_utils import Log
 from werewolf.speech.validation import LABEL_PROMPT_VERSION
@@ -863,3 +865,60 @@ def test_reporter_distinguishes_parse_backend_and_context_failures():
     )
     assert context["status"] == STATUS_REPORTER_ERROR
     assert "speaker mismatch" in context["error"]
+
+
+def test_budget_abort_does_not_dispatch_or_record_semantic_attempt(monkeypatch):
+    audit = CanonicalCallAudit(plan=_plan(), configured_call_limit=1)
+    call = Mock(return_value='{"suspected_werewolves":[]}')
+    monkeypatch.setattr(CapturingBackend, "chat", call)
+    result, _, _ = _report(None, player_id=2, audit_hook=audit)
+    assert result["status"] == STATUS_OK
+    before = audit.records
+    semantic = Mock(wraps=audit.mark_semantic_attempt)
+    monkeypatch.setattr(audit, "mark_semantic_attempt", semantic)
+    generation = Mock(wraps=LLMAgent.report_suspected_werewolves_readonly)
+    # Count attempted reports without replacing the real audited dispatch path.
+    def report_once(agent, **kwargs):
+        return generation(agent, **kwargs)
+    monkeypatch.setattr(LLMAgent, "report_suspected_werewolves_readonly", report_once)
+    with pytest.raises(CollectionCallBudgetExceeded, match="configured call limit exhausted"):
+        _report(None, audit_hook=audit)
+    assert generation.call_count == 1
+    assert call.call_count == 1
+    assert audit.records == before
+    assert len(audit.records) == audit.summary().used_calls == 1
+    semantic.assert_not_called()
+
+
+def test_dispatched_backend_error_keeps_evidence_and_reporter_retry(monkeypatch):
+    audit = CanonicalCallAudit(plan=_plan(), configured_call_limit=3)
+    call = Mock(side_effect=[RuntimeError("backend failed"), '{"suspected_werewolves":[]}'])
+    monkeypatch.setattr(CapturingBackend, "chat", call)
+    result, _, _ = _report(None, audit_hook=audit)
+    assert result["status"] == STATUS_OK
+    assert result["generation_attempt_count"] == call.call_count == 2
+    assert [record.status.value for record in audit.records] == ["error", "success"]
+    assert [record.private_payload.to_value()["semantic_status"] for record in audit.records] == ["error", "success"]
+    assert result["generation_attempts"][0]["error_category"] == "RuntimeError"
+    assert audit.summary().used_calls == 2
+
+
+def test_speech_parser_budget_abort_has_no_generation_retry(monkeypatch):
+    from werewolf.speech.speech_perceiver import SpeechPerceiver
+
+    audit = CanonicalCallAudit(plan=_plan(), configured_call_limit=1)
+    raw = Mock()
+    raw.chat.return_value = "NONE"
+    backend = AuditedBackend(raw, audit)
+    parser = SpeechPerceiver(backend=backend, model_name="fake")
+    with audit.speech_perception_context(event_id="speech-1", boundary_id="pre-1", speaker_id=1):
+        assert parser.parse_with_audit(speaker=1, speech="hello", day=1, phase="discussion").parse_status == "ok"
+    before = audit.records
+    dispatch = Mock(wraps=audit.dispatch)
+    monkeypatch.setattr(audit, "dispatch", dispatch)
+    with audit.speech_perception_context(event_id="speech-2", boundary_id="pre-2", speaker_id=1):
+        with pytest.raises(CollectionCallBudgetExceeded):
+            parser.parse_with_audit(speaker=1, speech="hello", day=1, phase="discussion")
+    assert dispatch.call_count == raw.chat.call_count == 1
+    assert audit.records == before
+    assert len(audit.records) == audit.summary().used_calls == 1

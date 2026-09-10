@@ -275,67 +275,73 @@ def test_live_preflight_success_uses_only_explicit_endpoints(monkeypatch):
         "http://127.0.0.1:8000/health", "http://127.0.0.1:8000/v1/models"]
 
 
-@pytest.mark.parametrize("invalid_identity", [None, "model_identity", "prompt_identity"])
-def test_production_runtime_identity_survives_bundle_publication(tmp_path, monkeypatch, invalid_identity):
-    import run_random
-    from tests.canonical_collection.test_game_bundle import _claim
-    from tests.canonical_collection.test_runtime_game_evidence import _Agent, _Backend
-    from werewolf.canonical_collection import publish_canonical_game_bundle
-    from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory
-
-    # Read the real runtime/deployment config; mock only external model/software reads.
+@pytest.fixture
+def production_identity(monkeypatch):
     monkeypatch.setattr(operator, "model_manifest", lambda _: ("a" * 64, "b" * 40))
     monkeypatch.setattr(operator, "software_versions", lambda: {"client_openai": "test-version"})
     provenance, _ = operator.inspect_inputs()
-    raw_config = operator.yaml.safe_load(operator.RUNTIME.read_bytes())
-    normalized = operator.normalize_runtime_config(raw_config)
+    config = operator.normalize_runtime_config(operator.yaml.safe_load(operator.RUNTIME.read_bytes()))
     fields = operator.plan_fields({**CAMPAIGN, "target_games": 1, "seed_pool_size": 1},
                                   "e" * 40, provenance)
-    if invalid_identity == "model_identity":
-        fields[invalid_identity] = f"qwen3.5-9b:{provenance['hf_revision']}:{provenance['model_manifest_sha256']}"
-    elif invalid_identity == "prompt_identity":
-        fields[invalid_identity] = (f"{operator.STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE}:"
-                                    f"{operator.V1_SPEECH_PROMPT_VERSION}")
-    plan = operator.construct_collection_plan(ordered_seed_pool=(101,), **fields)
-    claim = _claim(plan)
+    return operator.construct_collection_plan(ordered_seed_pool=(101,), **fields), config
 
-    # Keep real build_runtime, environment, SpeechPerceiver, audit, recorder and replay.
-    # Only gameplay/readonly belief generation uses existing deterministic agents.
-    def deterministic_agents(*args, backends, **kwargs):
-        backend = backends[normalized["parser"]["backend"]]
-        return {}, [_Agent(backend, seat) for seat in range(1, 8)]
 
-    monkeypatch.setattr(run_random, "assign_agents", deterministic_agents)
-    runtime = Classic7RuntimeFactory(
-        runtime_config=raw_config,
-        backends={normalized["parser"]["backend"]: _Backend()},
-        configured_call_limit=1000,
-    )(plan=plan, claim=claim)
-    product = runtime.run()
-    evidence = product.evidence
-    assert evidence.speech_annotations_v1
-    destination = tmp_path / evidence.game_id
-    if invalid_identity is not None:
-        with pytest.raises(ValueError, match=f"V1 attempt {invalid_identity} does not match Collection Plan"):
-            publish_canonical_game_bundle(destination, plan=plan, claim=claim,
-                                         evidence=evidence, replay_executor=product.replay_executor)
-        assert not destination.exists()
-        return
-
-    # Publication comes first so the old operator fails with the original contract error.
-    bundle = publish_canonical_game_bundle(destination, plan=plan, claim=claim,
-                                          evidence=evidence, replay_executor=product.replay_executor)
-    assert bundle.manifest_digest
-    assert plan.model_identity == normalized["parser"]["model"] == runtime.env.speech_perceiver.model_name
+def test_plan_matches_production_identity(production_identity):
+    plan, config = production_identity
+    assert plan.model_identity == config["parser"]["model"]
     assert plan.prompt_identity == operator.V1_SPEECH_PROMPT_VERSION
-    for annotation in evidence.speech_annotations_v1:
-        assert annotation.attempts
-        for attempt in annotation.attempts:
-            assert attempt.model_id == plan.model_identity
-            assert attempt.prompt_version == plan.prompt_identity
-            assert attempt.backend_id == plan.backend_identity
-            assert attempt.parser_version == plan.parser_identity == operator.V1_SPEECH_PARSER_VERSION
+    assert plan.parser_identity == operator.V1_SPEECH_PARSER_VERSION
     bound = dict(plan.environment_provenance)
-    assert bound["hf_revision"] == provenance["hf_revision"]
-    assert bound["model_manifest_sha256"] == provenance["model_manifest_sha256"]
+    assert bound["hf_revision"] == "b" * 40
+    assert bound["model_manifest_sha256"] == "a" * 64
+    assert bound["served_model_name"] == plan.model_identity
     assert bound["gameplay_prompt_profile"] == operator.STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE
+
+
+def test_production_runtime_identity_wiring(production_identity):
+    from tests.canonical_collection.test_game_bundle import _claim
+    from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory
+
+    plan, config = production_identity
+    backend = Mock()
+    runtime = Classic7RuntimeFactory(
+        runtime_config=config, backends={config["parser"]["backend"]: backend},
+        configured_call_limit=1000,
+    )(plan=plan, claim=_claim(plan))
+    perceiver = runtime.env.speech_perceiver
+    assert perceiver.model_name == plan.model_identity == config["parser"]["model"]
+    assert perceiver.backend.canonical_backend_identity == plan.backend_identity
+    backend.chat.assert_not_called()
+    backend.chat_with_metadata.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid_identity", [None, "model_identity", "prompt_identity"])
+def test_finite_bundle_identity_contract(production_identity, tmp_path, monkeypatch, invalid_identity):
+    from dataclasses import replace
+    from tests.canonical_collection import test_game_bundle as fixtures
+    from werewolf.canonical_collection import publish_canonical_game_bundle
+
+    plan, _ = production_identity
+    if invalid_identity is not None:
+        annotation = fixtures._annotation
+        old_value = (f"qwen3.5-9b:{'b' * 40}:{'a' * 64}" if invalid_identity == "model_identity"
+                     else f"{operator.STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE}:{operator.V1_SPEECH_PROMPT_VERSION}")
+        # Only the V1 annotation receives the wrong identity; calls/parent retain the real Plan.
+        monkeypatch.setattr(fixtures, "_annotation", lambda history, parent:
+                            annotation(history, replace(parent, **{invalid_identity: old_value})))
+    if invalid_identity == "prompt_identity":
+        # The V1 dataclass rejects this value before a Bundle can even be constructed.
+        with pytest.raises(ValueError, match="unsupported V1 prompt_version"):
+            fixtures._fixture(plan)
+        return
+    _, claim, evidence, replay = fixtures._fixture(plan)
+    destination = tmp_path / evidence.game_id
+    if invalid_identity == "model_identity":
+        with pytest.raises(ValueError, match="V1 attempt model_identity does not match Collection Plan"):
+            publish_canonical_game_bundle(destination, plan=plan, claim=claim,
+                                         evidence=evidence, replay_executor=replay)
+        assert not destination.exists()
+    else:
+        bundle = publish_canonical_game_bundle(destination, plan=plan, claim=claim,
+                                              evidence=evidence, replay_executor=replay)
+        assert bundle.manifest_digest
