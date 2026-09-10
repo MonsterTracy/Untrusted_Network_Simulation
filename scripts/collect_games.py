@@ -202,6 +202,7 @@ def inspect_inputs():
 
 def plan_fields(campaign, head, provenance):
     environment = {**provenance, "configured_call_limit": str(campaign["call_limit"]),
+                   "gameplay_prompt_profile": STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
                    "seed_pool_size": str(campaign["seed_pool_size"]),
                    "target_success_count": str(campaign["target_games"])}
     return dict(
@@ -210,9 +211,9 @@ def plan_fields(campaign, head, provenance):
         runtime_identity="classic7-canonical-runtime-v1",
         agent_identity="classic7-gpt-pre-belief-handoff-v1",
         backend_identity="openai-compatible-loopback-vllm-v1",
-        model_identity=f"qwen3.5-9b:{provenance['hf_revision']}:{provenance['model_manifest_sha256']}",
+        model_identity=provenance["served_model_name"],
         parser_identity=V1_SPEECH_PARSER_VERSION,
-        prompt_identity=f"{STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE}:{V1_SPEECH_PROMPT_VERSION}",
+        prompt_identity=V1_SPEECH_PROMPT_VERSION,
         retry_policy_identity=(f"classic7-transport0-gameplay{GAMEPLAY_GENERATION_MAX_ATTEMPTS}"
                                f"-belief{LABEL_GENERATION_MAX_ATTEMPTS}"
                                f"-parser{SPEECH_PARSER_GENERATION_MAX_ATTEMPTS}-v1"),

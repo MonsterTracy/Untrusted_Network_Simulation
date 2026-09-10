@@ -339,6 +339,13 @@ requires a new collection_id (and a sufficient seed pool); never alter an
 already frozen campaign in place. Unknown fields and invalid values fail.
 `--campaign PATH` selects another explicit operator file; no discovery occurs.
 
+The first `development-qwen35-9b-300-v1` campaign froze incompatible V1 model
+and prompt identities at source `f8109750d3a4ea47a9d03c49e44f19e0c9134a88`
+and already consumed a durable claim. Preserve its Plan and failed/interrupted
+evidence. Do not resume it with corrected code, edit its Plan, or delete it to
+reuse the identity. After the identity fix is committed, use
+`development-qwen35-9b-300-v2` on the new clean HEAD to freeze a new Plan.
+
 Initialize Conda in the operator shell so `CONDA_EXE` identifies the existing
 Conda executable. Start the foreground service in one terminal:
 
@@ -398,6 +405,10 @@ The Plan also records serving model name, model path, client Python/OpenAI
 versions, serving Python/vLLM/Torch/CUDA/FlashInfer versions, seed rule identity,
 pool size, target, and exact call limit. Serving versions are queried from the
 vLLM environment's Python. Missing software or revision evidence fails.
+`model_identity` is the served model name used by the runtime parser;
+`prompt_identity` is exactly the V1 speech perception prompt version.
+HF revision, model manifest digest/rule, and the separate
+`gameplay_prompt_profile` remain bound in `environment_provenance`.
 Health and model-list requests use the declared loopback endpoint with
 environment proxies disabled. These requests prove service availability and
 served-name agreement, not remote weight bytes or process launch arguments:
