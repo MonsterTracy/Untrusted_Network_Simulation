@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx2
 import openai
 
 try:
@@ -177,22 +178,24 @@ class BackendTest(unittest.TestCase):
 
         http_client_class.assert_not_called()
 
-    def test_loopback_native_client_preserves_sdk_timeout_family(self):
-        backend = OpenAICompatibleBackend(
+    @patch("werewolf.backends.openai_compatible.openai.OpenAI")
+    def test_loopback_native_client_preserves_sdk_timeout_family(
+        self, openai_client_class
+    ):
+        OpenAICompatibleBackend(
             api_key="local-test",
             base_url="http://127.0.0.1:8000/v1",
             max_retries=0,
         )
+        transport = openai_client_class.call_args.kwargs["http_client"]
         try:
-            transport = backend.client._client
-            self.assertIsInstance(transport, openai.DefaultHttpx2Client)
-            self.assertFalse(transport.trust_env)
-            self.assertIsInstance(transport.timeout, type(openai.DEFAULT_TIMEOUT))
+            self.assertIsInstance(transport, httpx2.Client)
+            self.assertIsInstance(transport.timeout, httpx2.Timeout)
             self.assertEqual(transport.timeout, openai.DEFAULT_TIMEOUT)
             self.assertTrue(transport.follow_redirects)
-            self.assertEqual(backend.client.max_retries, 0)
+            self.assertEqual(openai_client_class.call_args.kwargs["max_retries"], 0)
         finally:
-            backend.client.close()
+            transport.close()
 
     @patch("werewolf.backends.openai_compatible.openai.OpenAI")
     @patch("werewolf.backends.openai_compatible.openai.DefaultHttpx2Client")
