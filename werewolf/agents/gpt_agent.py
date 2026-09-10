@@ -1,5 +1,4 @@
 import re
-import time
 
 from werewolf.agents.llm_agent import (
     BeliefValidationError,
@@ -65,7 +64,6 @@ class GPTAgent(LLMAgent):
             gameplay_prompt_profile=gameplay_prompt_profile,
             gameplay_max_tokens=gameplay_max_tokens,
         )
-        self.rate_limit = 6
         self.temperature = temperature
 
     def act(self, observation):
@@ -112,7 +110,6 @@ class GPTAgent(LLMAgent):
                 "strict day cognition requires SpeakerPREBeliefHandoff"
             )
 
-        time.sleep(self.rate_limit)
         temperature, max_tokens = self._request_limits()
 
         if is_speech:

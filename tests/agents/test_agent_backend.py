@@ -367,7 +367,6 @@ class GameplayCognitionTest(unittest.TestCase):
             gameplay_prompt_profile="strict_classic7",
             **kwargs,
         )
-        agent.rate_limit = 0
         return agent
 
     def test_belief_schema_has_exact_minimal_fields_and_accepts_unknown(self):
@@ -1855,7 +1854,6 @@ class GameplayCognitionTest(unittest.TestCase):
     def test_o1_unconfigured_limit_and_temperature_are_preserved(self):
         backend = MetadataBackend(['{"action_index":0}'])
         agent = GPTAgent(backend=backend, model_name="o1-test-model")
-        agent.rate_limit = 0
 
         self.assertEqual(
             agent.act({
