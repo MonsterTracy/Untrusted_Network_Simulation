@@ -70,11 +70,15 @@ def _storage_root_for_link(root, tmp_path):
     return _storage_root(profile)
 
 
-def test_pending_formal_protocol_stops_before_publication_access(storage, monkeypatch):
+def test_pending_formal_protocol_stops_before_publication_access(storage, monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         raise AssertionError("publication must not be opened")
     monkeypatch.setattr("werewolf.development_publication.open_publication", forbidden)
     protocol = Path(__file__).resolve().parents[2] / "configs/formal/development-experiment-v1/protocol.json"
+    record = json.loads(protocol.read_text()).copy()
+    record["max_seq_len"] = None
+    protocol = tmp_path / "pending_protocol.json"
+    protocol.write_text(json.dumps(record))
     with pytest.raises(ValueError, match="max_seq_len"):
         main(["prepare-experiment", "--publication", "p", "--protocol", str(protocol), "--destination", "e"])
     assert not (storage[0] / "experiments").exists()
