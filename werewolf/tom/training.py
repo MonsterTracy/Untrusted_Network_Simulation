@@ -209,6 +209,37 @@ def _verify_terminal_recovery(experiment, fold, condition, terminal):
         raise ValueError("terminal/final-recovery digest or model mismatch")
 
 
+def fit_steps(model, optimizer, by_game, masks, schedule, *, device, learning_rate, start, logs, gate, on_step):
+    """Shared fixed-budget optimizer loop; no validation or checkpoint selection."""
+    model.train()
+    step = start
+    budget = schedule["optimizer_steps"]
+    for cursor in range(start, budget):
+        gate()
+        optimizer.zero_grad(set_to_none=True)
+        game_losses = []
+        for item in schedule["batches"][cursor]:
+            samples, eligibility = [], []
+            for sample in by_game[item["game_id"]]:
+                rotated, mask = rotate(sample, item["shift"], torch.tensor(masks[sample.game_id][sample.boundary_id], dtype=torch.bool))
+                samples.append(rotated)
+                eligibility.append(mask & rotated.label_observed)
+            public = PublicTensors.stack([s.public for s in samples])
+            logp = model(**{k: v.to(device) for k, v in public.kwargs().items()})
+            q = torch.stack([s.q for s in samples]).to(device)
+            mask = torch.stack(eligibility).to(device)
+            game_losses.append((logp, q, mask))
+        loss = game_balanced_cross_entropy(game_losses)
+        if not torch.isfinite(loss):
+            raise ValueError("nonfinite Primary training loss")
+        loss.backward()
+        optimizer.step()
+        step = cursor + 1
+        logs.append({"step": step, "game_ids": [i["game_id"] for i in schedule["batches"][cursor]], "loss": float(loss.detach().cpu()), "learning_rate": learning_rate})
+        on_step(step, logs)
+    return step
+
+
 def _train_worker(path, expected_digest, fold, condition):
     experiment = open_experiment(path)
     if experiment.digest != expected_digest:
@@ -267,32 +298,14 @@ def _train_worker(path, expected_digest, fold, condition):
         _optimizer_restore(optimizer, decoded["optimizer_tensors"], m["optimizer_scalars"])
         _rng_restore(decoded["rng_state"], m["rng_scalars"])
         logs, step, previous = candidate_logs, point, artifact.manifest_digest
-    model.train()
-    for cursor in range(step, budget):
-        _training_gate(experiment)
-        optimizer.zero_grad(set_to_none=True)
-        game_losses = []
-        for item in schedule["batches"][cursor]:
-            samples, eligibility = [], []
-            for sample in by_game[item["game_id"]]:
-                rotated, mask = rotate(sample, item["shift"], torch.tensor(masks[sample.game_id][sample.boundary_id], dtype=torch.bool))
-                samples.append(rotated)
-                eligibility.append(mask & rotated.label_observed)
-            public = PublicTensors.stack([s.public for s in samples])
-            logp = model(**{k: v.to(experiment.config.device) for k, v in public.kwargs().items()})
-            q = torch.stack([s.q for s in samples]).to(experiment.config.device)
-            mask = torch.stack(eligibility).to(experiment.config.device)
-            game_losses.append((logp, q, mask))
-        loss = game_balanced_cross_entropy(game_losses)
-        if not torch.isfinite(loss):
-            raise ValueError("nonfinite Primary training loss")
-        loss.backward()
-        optimizer.step()
-        step = cursor + 1
-        logs.append({"step": step, "game_ids": [i["game_id"] for i in schedule["batches"][cursor]], "loss": float(loss.detach().cpu()), "learning_rate": experiment.config.learning_rate})
+    def on_step(step, logs):
+        nonlocal previous
         if step in points:
             recovery = _publish_recovery(recovery_root / str(step), experiment, fold, condition, step, model, optimizer, logs, previous)
             previous = recovery.manifest_digest
+    step = fit_steps(model, optimizer, by_game, masks, schedule, device=experiment.config.device,
+        learning_rate=experiment.config.learning_rate, start=step, logs=logs,
+        gate=lambda: _training_gate(experiment), on_step=on_step)
     log_bytes = canonical_jsonl_bytes(logs)
     publish_run_bytes(lineage / "training_log.jsonl", log_bytes)
     publish_model_state(lineage / "terminal_checkpoint", model, {

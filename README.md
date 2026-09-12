@@ -40,8 +40,7 @@ uns validate-artifact experiments/EXP_ID/experiments/experiment
 uns run-development-oof --experiment EXP_ID
 ```
 
-The formal protocol remains pending and these operations fail until its
-researcher-selected values are frozen and a real publication exists.
+The formal protocol is frozen; preparation still requires a valid real publication.
 See [server execution and storage](docs/server-execution.md) for installation,
 collection, identity resolution and explicit resume. No server paths belong
 in the scientific protocol. See [configuration](configs/README.md).
@@ -70,3 +69,10 @@ git diff --check
 Game agents exist only to generate canonical evidence; trained ToM outputs never
 control gameplay. Phase-1 acceptance is contract-complete small-scale execution,
 not model quality or a paper-level scientific conclusion.
+
+## Final fit and independent evaluation
+
+The [paired final lifecycle](docs/final-lifecycle.md) trains both conditions on
+all development games with the frozen cycle budget, seals their terminal
+checkpoints, and only then consumes an independent final publication.
+Development OOF remains available for qualification and analysis.

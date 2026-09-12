@@ -12,6 +12,21 @@ from werewolf.tom.scoring import game_macro_summary, paired_summary
 from werewolf.tom.training import train_primary_fold, seal_checkpoint_set, verify_checkpoint_set, lineage_path
 
 
+def summarize_scores(games, rows, game_ids, indices, confidence):
+    scores = [games[g]["kl"] for g in game_ids]
+    reference = [games[g]["uniform_kl"] for g in game_ids]
+    secondary = {name: float(np.mean([games[g][name] for g in game_ids])) for name in
+        ("cross_entropy", "total_variation", "mean_absolute_error", "argmax_in_target_support", "target_support_probability")}
+    gap_rows = [r["normalized_reducible_gap_improvement"] for r in rows
+                if r["normalized_reducible_gap_improvement"] is not None]
+    return {"headline": game_macro_summary(scores, indices, confidence),
+        "uniform_non_self_reference": game_macro_summary(reference, indices, confidence),
+        "secondary_game_macro_diagnostics": secondary,
+        "observer_row_weighted_diagnostic": {"kl": float(np.mean([r["kl"] for r in rows])), "row_count": len(rows),
+            "normalized_reducible_gap_improvement_nonzero_gap_only": float(np.mean(gap_rows)) if gap_rows else None,
+            "nonzero_gap_row_count": len(gap_rows)}}
+
+
 def _aggregate_cell(experiment, seal, indices, bootstrap_digest, condition, operation, reports):
     game_ids = experiment.manifest["game_ids"]
     games = {}
@@ -25,22 +40,11 @@ def _aggregate_cell(experiment, seal, indices, bootstrap_digest, condition, oper
         rows.extend(report["row_scores"])
     if sorted(games) != game_ids:
         raise ValueError("OOF report omitted a development game")
-    scores = [games[g]["kl"] for g in game_ids]
-    reference = [games[g]["uniform_kl"] for g in game_ids]
-    secondary = {name: float(np.mean([games[g][name] for g in game_ids])) for name in
-        ("cross_entropy", "total_variation", "mean_absolute_error", "argmax_in_target_support", "target_support_probability")}
-    gap_rows = [r["normalized_reducible_gap_improvement"] for r in rows
-                if r["normalized_reducible_gap_improvement"] is not None]
     cell = {"artifact_type": operation + "_aggregate", "schema_version": "classic7_oof_cell_v1",
         "experiment_digest": experiment.digest, "checkpoint_set_digest": seal["record_digest"],
         "temporal_condition": condition, "bootstrap_digest": bootstrap_digest,
         "fold_report_digests": [r["record_digest"] for r in reports], "game_scores": games,
-        "headline": game_macro_summary(scores, indices, experiment.config.confidence_level),
-        "uniform_non_self_reference": game_macro_summary(reference, indices, experiment.config.confidence_level),
-        "secondary_game_macro_diagnostics": secondary,
-        "observer_row_weighted_diagnostic": {"kl": float(np.mean([r["kl"] for r in rows])), "row_count": len(rows),
-            "normalized_reducible_gap_improvement_nonzero_gap_only": float(np.mean(gap_rows)) if gap_rows else None,
-            "nonzero_gap_row_count": len(gap_rows)}}
+        **summarize_scores(games, rows, game_ids, indices, experiment.config.confidence_level)}
     worst = sorted(rows, key=lambda r: (-r["kl"], r["game_id"], r["boundary_id"], r["observer"]))
     return cell, canonical_jsonl_bytes(worst)
 

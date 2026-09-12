@@ -1,6 +1,6 @@
 # Phase-1 architecture
 
-The frozen authority is CONTEXT.md, ADRs 0001–0021 and the approved specification.
+The frozen authority is CONTEXT.md, ADRs 0001–0022 and the approved specification.
 
 | Boundary | Authoritative owner | Allowed output |
 | --- | --- | --- |
@@ -31,3 +31,12 @@ is a deterministic temporal code versus zero at the same injection point.
 
 Runtime internal role-action phases are not public temporal states. The five
 public phases are night, discussion, vote, pk_discussion and pk_vote.
+
+Final Fit is a separate all-development artifact lifecycle, specified in
+[ADR 0022](adr/0022-seal-paired-final-models-before-independent-evaluation.md).
+It reuses the same public tensorizer, model, optimizer loop and scoring functions.
+`final_experiment` owns pre-evaluation derived capacity and preparation;
+`final_training` owns paired terminal recovery/sealing; `final_publication`
+owns the independent data projection; `final_evaluation` owns seal-gated public
+inference, immutable consumption and paired reports. No fake fold or changed
+OOF schema is introduced. See [the final lifecycle](final-lifecycle.md).

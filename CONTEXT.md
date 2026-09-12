@@ -299,5 +299,27 @@ The versioned, non-trainable 256-dimensional representation added to each explic
 _Avoid_: Learned temporal embedding, trainable temporal projection, ordinal phase code
 
 **Canonical Day-Code Table**:
-The immutable, provenance-bound table of canonical sinusoidal day-code bytes materialized for all non-negative day indices present in one development experiment. It is an Explicit Day/Phase input artifact, not a learned model parameter or Dataset semantic field.
+The immutable, provenance-bound table of canonical sinusoidal day-code bytes materialized for all non-negative day indices present in one development OOF experiment, or for the complete validator-derived range in a Final Experiment. It is an Explicit Day/Phase input artifact, not a learned model parameter or Dataset semantic field.
 _Avoid_: Day vocabulary, dynamic day cache, checkpoint parameter
+
+
+**Final Experiment**:
+All-development fixed-budget training of the paired temporal conditions, with
+no fold or validation selection. The final protocol reuses the frozen
+ExperimentConfig and records actual clean implementation identity separately
+from its declared source revision.
+
+**Derived Final Temporal Capacity**:
+The version-bound validator rule `floor(max_seq_len/4)`, producing one immutable
+day table for both conditions before final data access. It is not a
+researcher-selected day limit or the tighter current-runtime length theorem.
+
+**Final Model Seal**:
+The immutable binding of both terminal models after complete recovery-chain and
+paired-RNG verification. It permanently closes that experiment's training.
+
+**Final Evaluation Publication / Consumption**:
+An independent plan-closed public dataset and restricted role sidecar bound to
+a prior Final Model Seal, followed by one immutable evaluation-consumption
+identity. Primary/All-Alive and paired temporal reports reuse OOF mathematics.
+See [ADR 0022](docs/adr/0022-seal-paired-final-models-before-independent-evaluation.md).

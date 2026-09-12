@@ -45,19 +45,38 @@ def training_schedule(schedule_seed, fold, game_ids, cycles, batch_size):
         raise ValueError("training games must be nonempty and unique")
     if any(type(n) is not int or n <= 0 for n in (cycles, batch_size)) or type(fold) is not int or not 0 <= fold < 5:
         raise ValueError("invalid training schedule configuration")
+    batches, coefficients = _balanced_schedule(schedule_seed, fold, games, cycles, batch_size)
+    return {"schedule_version": SCHEDULE_VERSION, "order_version": ORDER_VERSION,
+            "field_encoding": FIELD_ENCODING, "schedule_seed": schedule_seed, "fold": fold,
+            "rotation_cycles": cycles, "game_batch_size": batch_size, "optimizer_steps": len(batches),
+            "batches": batches, "cumulative_game_coefficients": coefficients}
+
+
+def _balanced_schedule(schedule_seed, lineage, games, cycles, batch_size):
     batches = []
     for cycle in range(cycles):
-        offsets = {g: int.from_bytes(digest_fields(SCHEDULE_VERSION, schedule_seed, fold, cycle, g), "big") % 7 for g in games}
+        offsets = {g: int.from_bytes(digest_fields(SCHEDULE_VERSION, schedule_seed, lineage, cycle, g), "big") % 7 for g in games}
         for round_index in range(7):
-            ordered = sorted(games, key=lambda g: (digest_fields(ORDER_VERSION, schedule_seed, fold, cycle, round_index, g), g))
+            ordered = sorted(games, key=lambda g: (digest_fields(ORDER_VERSION, schedule_seed, lineage, cycle, round_index, g), g))
             rows = [{"game_id": g, "shift": (offsets[g] + round_index) % 7, "cycle": cycle, "round": round_index} for g in ordered]
             batches.extend(rows[i:i+batch_size] for i in range(0, len(rows), batch_size))
     counts = Counter((r["game_id"], r["shift"]) for b in batches for r in b)
     if counts != Counter({(g, s): cycles for g in games for s in range(7)}):
         raise ValueError("incomplete seven-shift schedule")
     coefficients = {g: sum(1 / len(b) for b in batches if any(r["game_id"] == g for r in b)) for g in games}
-    return {"schedule_version": SCHEDULE_VERSION, "order_version": ORDER_VERSION,
-            "field_encoding": FIELD_ENCODING, "schedule_seed": schedule_seed, "fold": fold,
+    return batches, coefficients
+
+
+def final_training_schedule(schedule_seed, game_ids, cycles, batch_size):
+    """No partition: all development identities, paired across conditions."""
+    if type(schedule_seed) is not int or not 0 <= schedule_seed < 2**63:
+        raise ValueError("invalid schedule seed")
+    games = tuple(sorted(game_ids))
+    if not games or len(set(games)) != len(games) or any(type(n) is not int or n <= 0 for n in (cycles, batch_size)):
+        raise ValueError("invalid final schedule")
+    batches, coefficients = _balanced_schedule(schedule_seed, {"lifecycle": "classic7_final_fit_v1"}, games, cycles, batch_size)
+    return {"schedule_version": "classic7_final_seven_shift_v1", "order_version": ORDER_VERSION,
+            "field_encoding": FIELD_ENCODING, "schedule_seed": schedule_seed,
             "rotation_cycles": cycles, "game_batch_size": batch_size, "optimizer_steps": len(batches),
             "batches": batches, "cumulative_game_coefficients": coefficients}
 

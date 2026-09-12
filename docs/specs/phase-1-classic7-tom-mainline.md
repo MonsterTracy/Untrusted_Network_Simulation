@@ -77,8 +77,9 @@ held-out predictions at canonical shift 0
 game-macro and paired game-cluster-bootstrap reports
 ```
 
-The executable lifecycle is development OOF. Final fit, standalone inference,
-and independent final/sealed evaluation are not current executable operations.
+This diagram describes Development OOF. The separate all-development final-fit,
+sealed label-free inference and independent evaluation lifecycle is specified
+in section 9 and ADR 0022.
 
 ONUW supplies only the principle-level natural-language → structured social
 action → chronological Transformer belief-modeling pattern. It supplies no
@@ -1128,7 +1129,7 @@ as a clearly secondary diagnostic; no interaction headline is created.
     stress penalty and temporal information effect rather than differences of
     unrelated intervals.
 20. As a maintainer, I cannot invoke V2, shadow, private-conditioned, GPT-2,
-    pilot, generic-scope, best-checkpoint, final-fit, or sealed paths because
+    pilot, generic-scope, or validation-selected checkpoint paths because
     their code and tests no longer exist.
 21. As an operator recovering a crashed training process, I have one automatic
     step-boundary resume rule and no failure-time choice of checkpoint, restart,
@@ -1205,7 +1206,6 @@ Collection Plan
 - multimodal inputs, face/tone, or a raw-text ToM backbone;
 - V2/shadow perception, private-conditioned modeling, GPT-2 compatibility, or
   historical reproduction;
-- final/sealed evaluation or a Final Evaluation Publication;
 - all-alive training, a third population, counterfactual public cognition, or a
   new temporal condition;
 - hyperparameter search, adaptive budgets, early stopping, distributed or
@@ -1261,3 +1261,14 @@ are frozen; code does not supply them implicitly:
 Changing one of these values creates a new Collection Plan or Experiment
 Manifest as appropriate. It does not create a new scientific operation, schema
 branch, or compatibility path.
+
+## 9. Paired final lifecycle
+
+Development OOF remains the protocol qualification/development-analysis path.
+All-development Final Fit and independent sealed evaluation are separate
+artifact contracts described in [ADR 0022](../adr/0022-seal-paired-final-models-before-independent-evaluation.md)
+and [the final lifecycle specification](../final-lifecycle.md). They reuse the
+Dataset, model, optimizer loop, population semantics and scoring mathematics.
+They do not reinterpret a fold or alter existing OOF artifact identities.
+Final capacity is validator-derived `floor(max_seq_len/4)`; runtime-tight
+length bounds are implementation sanity checks only.

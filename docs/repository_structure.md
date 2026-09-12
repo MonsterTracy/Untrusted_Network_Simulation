@@ -20,7 +20,11 @@ Every production Python module belongs to one of these current responsibilities:
 | werewolf/tom/experiment.py + protocol.py + state.py | Frozen protocol, schedules, bootstrap indices and canonical state serialization |
 | werewolf/tom/training.py + run_records.py | Primary fixed-budget training, recovery, terminal states and checkpoint-set seal |
 | werewolf/tom/evaluation.py + scoring.py + reporting.py | Pure held-out prediction, named metrics and paired OOF reporting |
-| werewolf/cli.py | Five formal commands; also available as python -m werewolf.cli |
+| werewolf/final_publication.py | Independent, seal-bound final publication without folds |
+| werewolf/tom/final_capacity.py + final_experiment.py | Validator-derived frozen capacity and all-development final input identity |
+| werewolf/tom/final_training.py | Paired final orchestration over shared optimizer steps, deterministic recovery and two-model seal |
+| werewolf/tom/final_evaluation.py | Sealed label-free prediction, immutable final consumption and shared-math reporting |
+| werewolf/cli.py | Development and final lifecycle commands; also available as python -m werewolf.cli |
 | Package __init__.py files | Package boundaries and current explicit exports |
 
 The gameplay discussion intent transport is not a ToM action selector or V2

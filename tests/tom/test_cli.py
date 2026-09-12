@@ -1,11 +1,12 @@
 import pytest
 
 
-def test_five_scientific_commands_and_isolated_capacity_check():
+def test_scientific_lifecycle_commands_and_isolated_capacity_check():
     from werewolf.cli import build_parser
     parser = build_parser()
     commands = parser._subparsers._group_actions[0].choices
-    assert set(commands) == {"collect", "publish-development", "prepare-experiment", "run-development-oof", "validate-artifact", "capacity-check"}
+    assert set(commands) == {"collect", "publish-development", "prepare-experiment", "run-development-oof", "validate-artifact", "capacity-check", "prepare-final-experiment", "run-final-fit",
+        "seal-final-models", "publish-final-evaluation", "run-final-evaluation"}
     for command in commands.values():
         options = {option for action in command._actions for option in action.option_strings}
         assert not options & {"--scope", "--population", "--pilot", "--private", "--resume-step", "--test", "--best", "--backbone"}

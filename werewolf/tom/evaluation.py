@@ -94,10 +94,8 @@ def open_predictions(experiment, fold, condition):
     return manifest, rows, publication
 
 
-def _fold_report_value(experiment, fold, condition, fields, load_masks):
-    prediction, rows, publication = open_predictions(experiment, fold, condition)
-    masks = {g.game_id: load_masks(experiment, fold, g)["rows"] for g in publication.public_view.games}
-    selected = [r for r in rows if r["label_observed"] and masks[r["game_id"]][r["boundary_id"]][r["observer"]]]
+def score_prediction_rows(selected, game_ids):
+    """Shared diagnostics with exact game coverage; no fold semantics."""
     scores = []
     for row in selected:
         q = torch.tensor(row["q"], dtype=torch.float64)
@@ -118,12 +116,20 @@ def _fold_report_value(experiment, fold, condition, fields, load_masks):
             (scores[-1]["uniform_kl"] - scores[-1]["kl"]) / scores[-1]["uniform_kl"]
             if int((q > 0).sum()) < 6 else None)
     game_scores = {}
-    for game_id in publication.public_view.game_ids:
+    for game_id in game_ids:
         values = [r for r in scores if r["game_id"] == game_id]
         if not values:
             raise ValueError("game has zero effective evaluation rows")
         game_scores[game_id] = {"row_count": len(values), **{name: float(np.mean([r[name] for r in values]))
             for name in ("kl", "uniform_kl", "cross_entropy", "total_variation", "mean_absolute_error", "argmax_in_target_support", "target_support_probability")}}
+    return scores, game_scores
+
+
+def _fold_report_value(experiment, fold, condition, fields, load_masks):
+    prediction, rows, publication = open_predictions(experiment, fold, condition)
+    masks = {g.game_id: load_masks(experiment, fold, g)["rows"] for g in publication.public_view.games}
+    selected = [r for r in rows if r["label_observed"] and masks[r["game_id"]][r["boundary_id"]][r["observer"]]]
+    scores, game_scores = score_prediction_rows(selected, publication.public_view.game_ids)
     return {
         "schema_version": "classic7_named_fold_report_v1", **fields, "experiment_digest": experiment.digest,
         "fold": fold, "temporal_condition": condition, "checkpoint_digest": prediction["checkpoint_digest"],

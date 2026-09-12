@@ -217,8 +217,22 @@ class DevelopmentFoldManifest:
         }
 
 
+class PublicGameView:
+    """Shared public records consumed by the single Dataset implementation."""
+
+    @property
+    def game_ids(self) -> tuple[str, ...]:
+        return tuple(game.game_id for game in self.games)
+
+    def load_game(self, game_id: str) -> PublishedGame:
+        for game in self.games:
+            if game.game_id == game_id:
+                return game
+        raise ArtifactValidationError("game is outside publication partition")
+
+
 @dataclass(frozen=True)
-class PublicationPublicView:
+class PublicationPublicView(PublicGameView):
     publication_id: str
     collection_id: str
     collection_plan_digest: str
@@ -231,15 +245,6 @@ class PublicationPublicView:
     max_structured_token_count: int
     structured_token_planner_version: str
 
-    @property
-    def game_ids(self) -> tuple[str, ...]:
-        return tuple(game.game_id for game in self.games)
-
-    def load_game(self, game_id: str) -> PublishedGame:
-        for game in self.games:
-            if game.game_id == game_id:
-                return game
-        raise ArtifactValidationError("game is outside publication partition")
 
 
 @dataclass(frozen=True)

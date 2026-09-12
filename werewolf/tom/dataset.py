@@ -6,7 +6,7 @@ import torch
 
 from werewolf.canonical_collection.public_history import PLAYER_IDS, PUBLIC_PHASES
 from werewolf.canonical_collection.speech import V1_ACTIONS
-from werewolf.development_publication import PublicationPublicView
+from werewolf.development_publication import PublicGameView
 from werewolf.structured_history import STRUCTURED_TOKEN_TYPES, plan_structured_history
 
 
@@ -72,9 +72,27 @@ def belief_target(observer: int, support: tuple[str, ...], status: str | None):
     return q, True
 
 
+def tensorize_public_pre(prefix, capacity: ExperimentCapacity):
+    """Full validated PRE to public tensors, without observation/target access."""
+    plan = plan_structured_history(prefix)
+    if plan.token_count > capacity.max_seq_len:
+        raise ValueError("complete PRE prefix exceeds experiment capacity")
+    arrays = {name: torch.zeros(capacity.max_seq_len, dtype=torch.long) for name in (
+        "event_ids", "source_ids", "action_ids", "target_ids", "day_ids", "phase_ids")}
+    for i, token in enumerate(plan.tokens):
+        arrays["event_ids"][i] = STRUCTURED_TOKEN_TYPES.index(token.token_type) + 1
+        arrays["source_ids"][i] = 0 if token.source is None else PLAYER_IDS.index(token.source) + 1
+        arrays["target_ids"][i] = 0 if token.target is None else PLAYER_IDS.index(token.target) + 1
+        arrays["action_ids"][i] = 0 if token.action is None else V1_ACTIONS.index(token.action) + 1
+        arrays["day_ids"][i] = token.day
+        arrays["phase_ids"][i] = PUBLIC_PHASES.index(token.phase)
+    attention = torch.arange(capacity.max_seq_len) < plan.token_count
+    return plan, PublicTensors(**arrays, attention_mask=attention)
+
+
 class CanonicalToMDataset:
-    def __init__(self, public_view: PublicationPublicView, game_ids, capacity: ExperimentCapacity):
-        if not isinstance(public_view, PublicationPublicView) or not isinstance(capacity, ExperimentCapacity):
+    def __init__(self, public_view: PublicGameView, game_ids, capacity: ExperimentCapacity):
+        if not isinstance(public_view, PublicGameView) or not isinstance(capacity, ExperimentCapacity):
             raise TypeError("Dataset requires public publication and experiment capacity")
         game_ids = tuple(game_ids)
         if not game_ids or len(set(game_ids)) != len(game_ids) or not set(game_ids) <= set(public_view.game_ids):
@@ -84,19 +102,7 @@ class CanonicalToMDataset:
             game = public_view.load_game(game_id)
             observations = {o.observation_id: o for o in game.belief_observations}
             for prefix in game.authoritative_pre_prefixes:
-                plan = plan_structured_history(prefix)
-                if plan.token_count > capacity.max_seq_len:
-                    raise ValueError("complete PRE prefix exceeds experiment capacity")
-                arrays = {name: torch.zeros(capacity.max_seq_len, dtype=torch.long) for name in (
-                    "event_ids", "source_ids", "action_ids", "target_ids", "day_ids", "phase_ids")}
-                for i, token in enumerate(plan.tokens):
-                    arrays["event_ids"][i] = STRUCTURED_TOKEN_TYPES.index(token.token_type) + 1
-                    arrays["source_ids"][i] = 0 if token.source is None else PLAYER_IDS.index(token.source) + 1
-                    arrays["target_ids"][i] = 0 if token.target is None else PLAYER_IDS.index(token.target) + 1
-                    arrays["action_ids"][i] = 0 if token.action is None else V1_ACTIONS.index(token.action) + 1
-                    arrays["day_ids"][i] = token.day
-                    arrays["phase_ids"][i] = PUBLIC_PHASES.index(token.phase)
-                attention = torch.arange(capacity.max_seq_len) < plan.token_count
+                plan, public = tensorize_public_pre(prefix, capacity)
                 q = torch.zeros(7, 7)
                 observed = torch.zeros(7, dtype=torch.bool)
                 alive = torch.tensor([p in prefix.alive_observer_ids for p in PLAYER_IDS])
@@ -109,7 +115,7 @@ class CanonicalToMDataset:
                     raise ValueError("publication has unobserved alive observer")
                 self.samples.append(CanonicalToMSample(
                     game_id, prefix.boundary_id, prefix.prefix_digest, plan.plan_digest,
-                    plan.token_count, PublicTensors(**arrays, attention_mask=attention), q, observed, alive))
+                    plan.token_count, public, q, observed, alive))
         if not self.samples:
             raise ValueError("Dataset partition has no PRE boundaries")
 

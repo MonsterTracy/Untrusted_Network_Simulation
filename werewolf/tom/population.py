@@ -88,8 +88,12 @@ class ObserverEligibility:
 def select_primary_population(publication):
     sidecar = open_role_sidecar(publication)
     assignments = {g.game_id: dict(g.role_assignment) for g in sidecar.games}
+    return _primary_membership(publication.public_view, assignments, sidecar.sidecar_digest)
+
+
+def _primary_membership(public_view, assignments, sidecar_digest):
     rows = {}
-    for game in publication.public_view.games:
+    for game in public_view.games:
         rows[game.game_id] = {
             p.boundary_id: [seat in p.alive_observer_ids and assignments[game.game_id][seat] != "Werewolf" for seat in PLAYER_IDS]
             for p in game.authoritative_pre_prefixes}
@@ -97,8 +101,8 @@ def select_primary_population(publication):
         "artifact_type": "primary_observer_eligibility",
         "population_identity": "non_wolf_alive",
         "population_selector_version": PRIMARY_SELECTOR_VERSION,
-        "publication_id": publication.public_view.publication_id,
-        "role_sidecar_digest": sidecar.sidecar_digest})
+        "publication_id": public_view.publication_id,
+        "role_sidecar_digest": sidecar_digest})
 
 
 def build_all_alive_eligibility(public_view):
@@ -111,3 +115,9 @@ def build_all_alive_eligibility(public_view):
         "population_identity": "all_alive",
         "population_selector_version": ALL_ALIVE_VERSION,
         "publication_id": public_view.publication_id})
+
+
+def select_final_primary_population(publication):
+    from werewolf.final_publication import final_role_assignments
+    return _primary_membership(publication.public_view, final_role_assignments(publication),
+                               publication.manifest["role_sidecar_digest"])

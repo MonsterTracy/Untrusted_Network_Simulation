@@ -468,3 +468,11 @@ The latter also explicitly continues unfinished prediction/report publication
 after a verified seal. No training or formal artifact creation is part of
 installing this profile. Server filesystem permissions, capacity and runtime
 availability must be checked on the server itself.
+
+## Paired final lifecycle
+
+All-development final fit, terminal model sealing and independent final
+evaluation use the same storage profile and `uns` ownership. See the
+[final lifecycle commands and contracts](final-lifecycle.md). Final preparation
+requires a clean Git checkout and records its actual HEAD. No new numerical CLI
+overrides are accepted, and final data cannot supply temporal capacity.
