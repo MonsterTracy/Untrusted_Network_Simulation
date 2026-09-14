@@ -1,0 +1,288 @@
+"""Intervention-only semantic continuations; never canonical evidence.
+
+PublicQueueEvidence is a caller attestation, not proof recovered from a PRE.
+The caller must supply an auditable, publicly established full phase order.
+This module checks its binding and observed prefix, not its external origin.
+"""
+
+from dataclasses import asdict, dataclass
+from enum import Enum
+from pathlib import Path
+
+import torch
+
+from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.canonical_collection.pre import AuthoritativePREPrefix
+from werewolf.canonical_collection.public_history import PLAYER_IDS, PUBLIC_PHASES
+from werewolf.canonical_collection.speech import V1_ACTIONS
+from werewolf.structured_history import (
+    STRUCTURED_TOKEN_TYPES, StructuredTokenDescriptor, plan_structured_history,
+)
+from werewolf.tom.dataset import ExperimentCapacity, PublicTensors, tensorize_public_pre
+from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
+from werewolf.tom.final_evaluation import SealedFinalPredictor
+
+
+CONSUMER_SCHEMA_VERSION = "counterfactual_tom_consumer_v1"
+CONSUMER_IMPLEMENTATION_VERSION = "counterfactual_tom_consumer_1"
+BUILDER_VERSION = "same_phase_semantic_continuation_v1"
+CONTINUATION_SCHEMA_VERSION = "counterfactual_speech_continuation_v1"
+QUEUE_SCHEMA_VERSION = "public_phase_queue_attestation_v1"
+
+
+class UnsupportedOpportunityError(ValueError):
+    """There is no supported, attested same-phase next speech PRE."""
+
+
+class PlanningAction(str, Enum):
+    ACCUSE_WOLF = "ACCUSE_WOLF"
+    CLEAR = "CLEAR"
+    SUPPORT = "SUPPORT"
+    OPPOSE = "OPPOSE"
+    SELF_DEFEND = "SELF_DEFEND"
+    NO_COMMITMENT = "NO_COMMITMENT"
+
+
+_SEMANTICS = {
+    PlanningAction.ACCUSE_WOLF: "point_as_werewolf",
+    PlanningAction.CLEAR: "point_as_non_werewolf",
+    PlanningAction.SUPPORT: "support",
+    PlanningAction.OPPOSE: "oppose",
+    PlanningAction.SELF_DEFEND: "point_as_non_werewolf",
+    PlanningAction.NO_COMMITMENT: "no_commitment",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CounterfactualSpeechAction:
+    speaker: str
+    action: PlanningAction
+    target: str | None = None
+
+    def __post_init__(self):
+        if self.speaker not in PLAYER_IDS:
+            raise ValueError("speaker must be a canonical player")
+        if not isinstance(self.action, PlanningAction):
+            raise ValueError("unsupported planning action")
+        if self.action in (PlanningAction.SELF_DEFEND, PlanningAction.NO_COMMITMENT):
+            if self.target is not None:
+                raise ValueError("targetless planning action requires target=None")
+        elif self.target not in PLAYER_IDS or self.target == self.speaker:
+            raise ValueError("target must be a non-self canonical player")
+
+
+@dataclass(frozen=True, slots=True)
+class PublicQueueEvidence:
+    """Caller-owned public provenance; order includes already started speakers.
+
+    source_reference must identify public evidence/rules, never a private env
+    dump. Rehashing an invented queue does not establish its authenticity.
+    """
+
+    parent_prefix_digest: str
+    day: int
+    phase: str
+    speaker_order: tuple[str, ...]
+    source_reference: str
+    schema_version: str = QUEUE_SCHEMA_VERSION
+
+    def __post_init__(self):
+        if self.schema_version != QUEUE_SCHEMA_VERSION:
+            raise ValueError("unsupported queue schema")
+        if (not isinstance(self.parent_prefix_digest, str)
+                or len(self.parent_prefix_digest) != 64
+                or any(c not in "0123456789abcdef" for c in self.parent_prefix_digest)):
+            raise ValueError("queue requires a parent SHA-256 digest")
+        if type(self.day) is not int or self.day < 0:
+            raise ValueError("queue day must be nonnegative")
+        if self.phase not in ("discussion", "pk_discussion"):
+            raise UnsupportedOpportunityError("queue phase must be discussion/pk_discussion")
+        if (not isinstance(self.speaker_order, tuple) or not self.speaker_order
+                or any(p not in PLAYER_IDS for p in self.speaker_order)
+                or len(set(self.speaker_order)) != len(self.speaker_order)):
+            raise ValueError("queue requires a nonempty unique canonical player tuple")
+        if not isinstance(self.source_reference, str) or not self.source_reference.strip():
+            raise ValueError("queue requires an auditable public source reference")
+
+    @property
+    def digest(self):
+        return sha256_bytes(canonical_json_bytes(asdict(self)))
+
+
+@dataclass(frozen=True, slots=True)
+class CounterfactualContinuation:
+    """Semantic descriptors only. This is NOT an AuthoritativePREPrefix."""
+
+    schema_version: str
+    consumer_implementation_version: str
+    counterfactual_builder_version: str
+    parent_prefix_digest: str
+    queue_evidence_digest: str
+    speaker: str
+    action: str
+    target: str | None
+    next_speaker: str
+    day: int
+    phase: str
+    token_count: int
+    tokens: tuple[StructuredTokenDescriptor, ...]
+    continuation_digest: str
+
+
+def _validate_opportunity(parent, candidate, next_speaker, queue):
+    state = parent.public_temporal_state
+    phase = state.phase.value
+    if phase not in ("discussion", "pk_discussion"):
+        raise UnsupportedOpportunityError("parent phase is not discussion/pk_discussion")
+    if not isinstance(candidate, CounterfactualSpeechAction):
+        raise TypeError("candidate must be CounterfactualSpeechAction")
+    candidate.__post_init__()
+    if candidate.speaker != parent.current_speaker:
+        raise ValueError("wrong current speaker")
+    if next_speaker is None:
+        raise UnsupportedOpportunityError("no next speaker supplied")
+    if next_speaker == candidate.speaker:
+        raise UnsupportedOpportunityError("next speaker cannot equal current speaker")
+    if next_speaker not in parent.alive_observer_ids:
+        raise UnsupportedOpportunityError("next speaker is not alive")
+    if not isinstance(queue, PublicQueueEvidence):
+        raise TypeError("public queue evidence is required")
+    queue.__post_init__()
+    if (queue.parent_prefix_digest != parent.prefix_digest
+            or queue.day != state.day or queue.phase != phase):
+        raise ValueError("queue evidence does not match parent PRE")
+    alive = set(parent.alive_observer_ids)
+    if not set(queue.speaker_order) <= alive:
+        raise ValueError("queue contains dead players")
+    if phase == "discussion" and set(queue.speaker_order) != alive:
+        raise ValueError("normal discussion queue must cover all alive players")
+    events = parent.public_event_history.events
+    phase_start = max(i for i, event in enumerate(events) if event.event_type == "phase_change")
+    observed = tuple(e.speaker for e in events[phase_start:] if e.event_type == "turn_start")
+    if queue.speaker_order[:len(observed)] != observed:
+        raise ValueError("queue disagrees with observed public turn order")
+    if len(observed) == len(queue.speaker_order):
+        raise UnsupportedOpportunityError("current speaker is the last phase speaker")
+    if next_speaker != queue.speaker_order[len(observed)]:
+        raise UnsupportedOpportunityError("next speaker disagrees with public queue evidence")
+    if candidate.target is not None and candidate.target not in alive:
+        raise ValueError("target is not alive")
+    if candidate.action in (PlanningAction.SUPPORT, PlanningAction.OPPOSE):
+        spoken_today = {e.speaker for e in events
+                        if e.event_type == "public_speech" and e.temporal_state.day == state.day}
+        if candidate.target not in spoken_today:
+            raise ValueError("support/oppose target has not spoken on the current day")
+
+
+def build_continuation(parent, candidate, *, next_speaker, queue_evidence, capacity):
+    """Validate a real PRE, then append exactly three semantic descriptors."""
+    if not isinstance(parent, AuthoritativePREPrefix):
+        raise TypeError("parent must be AuthoritativePREPrefix")
+    if not isinstance(capacity, ExperimentCapacity):
+        raise TypeError("capacity must be ExperimentCapacity")
+    plan = plan_structured_history(parent)
+    validate_final_pre(parent, derived_capacity(capacity.max_seq_len))
+    _validate_opportunity(parent, candidate, next_speaker, queue_evidence)
+    if plan.token_count + 3 > capacity.max_seq_len:
+        raise ValueError("counterfactual exceeds complete sequence capacity; truncation forbidden")
+    day, phase = parent.public_temporal_state.day, parent.public_temporal_state.phase.value
+    semantic_target = candidate.speaker if candidate.action is PlanningAction.SELF_DEFEND else candidate.target
+    start = plan.token_count
+    event_index = len(parent.public_event_history.events)
+    # These IDs label hypothetical token descriptors, never public events.
+    stem = f"hypothetical:{parent.prefix_digest}"
+    additions = (
+        StructuredTokenDescriptor(start, "public_speech", candidate.speaker, None, None,
+                                  day, phase, f"{stem}:speech", event_index, 0),
+        StructuredTokenDescriptor(start + 1, "speech_action", candidate.speaker,
+                                  _SEMANTICS[candidate.action], semantic_target,
+                                  day, phase, f"{stem}:speech", event_index, 1),
+        StructuredTokenDescriptor(start + 2, "turn_start", next_speaker, None, None,
+                                  day, phase, f"{stem}:next", event_index + 1, 0),
+    )
+    values = dict(schema_version=CONTINUATION_SCHEMA_VERSION,
+                  consumer_implementation_version=CONSUMER_IMPLEMENTATION_VERSION,
+                  counterfactual_builder_version=BUILDER_VERSION,
+                  parent_prefix_digest=parent.prefix_digest,
+                  queue_evidence_digest=queue_evidence.digest,
+                  speaker=candidate.speaker, action=candidate.action.value, target=candidate.target,
+                  next_speaker=next_speaker, day=day, phase=phase,
+                  token_count=start + 3, tokens=plan.tokens + additions)
+    record = {**values, "tokens": [t.to_record() for t in values["tokens"]]}
+    return CounterfactualContinuation(**values,
+        continuation_digest=sha256_bytes(canonical_json_bytes(record)))
+
+
+def tensorize_counterfactual(parent, candidate, *, next_speaker, queue_evidence, capacity):
+    """Return independent tensors; no arbitrary continuation/tensor input API.
+
+    The real prefix uses official tensorization. Only the appended descriptors
+    are encoded here, using the official vocabularies (no copied numeric IDs).
+    """
+    continuation = build_continuation(parent, candidate, next_speaker=next_speaker,
+                                     queue_evidence=queue_evidence, capacity=capacity)
+    _, public = tensorize_public_pre(parent, capacity)
+    for token in continuation.tokens[-3:]:
+        i = token.token_index
+        public.event_ids[i] = STRUCTURED_TOKEN_TYPES.index(token.token_type) + 1
+        public.source_ids[i] = 0 if token.source is None else PLAYER_IDS.index(token.source) + 1
+        public.action_ids[i] = 0 if token.action is None else V1_ACTIONS.index(token.action) + 1
+        public.target_ids[i] = 0 if token.target is None else PLAYER_IDS.index(token.target) + 1
+        public.day_ids[i] = token.day
+        public.phase_ids[i] = PUBLIC_PHASES.index(token.phase)
+        public.attention_mask[i] = True
+    return continuation, public
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerProvenance:
+    consumer_schema_version: str
+    consumer_implementation_version: str
+    consumer_source_digest: str
+    parent_experiment_digest: str
+    parent_final_seal_digest: str
+    condition: str
+    checkpoint_digest: str
+    counterfactual_builder_version: str
+
+    def to_record(self):
+        return asdict(self)
+
+
+class CounterfactualToMConsumer:
+    """A NEW inference contract over a model loaded by the unchanged predictor.
+
+    Construction invokes all original seal/runtime/checkpoint checks. No model
+    injection or unchecked tensor inference is exposed. Nothing is published.
+    """
+
+    def __init__(self, experiment, condition):
+        # The original loader initializes CPU parameters before loading weights.
+        # Preserve the caller's CPU RNG without altering any validation gate.
+        with torch.random.fork_rng(devices=[]):
+            self._predictor = SealedFinalPredictor(experiment, condition)
+        self._capacity = ExperimentCapacity(experiment.config.max_seq_len)
+        self.provenance = ConsumerProvenance(
+            CONSUMER_SCHEMA_VERSION, CONSUMER_IMPLEMENTATION_VERSION,
+            sha256_bytes(Path(__file__).read_bytes()), experiment.digest,
+            self._predictor.seal["record_digest"], condition,
+            self._predictor.checkpoint.manifest_digest, BUILDER_VERSION)
+
+    def log_probabilities(self, parent, candidate, *, next_speaker, queue_evidence):
+        _, public = tensorize_counterfactual(parent, candidate, next_speaker=next_speaker,
+                                            queue_evidence=queue_evidence, capacity=self._capacity)
+        inputs = PublicTensors.stack([public])
+        with torch.inference_mode():
+            logp = self._predictor.model(**{
+                k: v.to(self._predictor.experiment.config.device) for k, v in inputs.kwargs().items()
+            })[0].cpu()
+        diagonal = torch.eye(7, dtype=torch.bool)
+        if (logp.shape != (7, 7) or not torch.isneginf(logp[diagonal]).all()
+                or not torch.isfinite(logp[~diagonal]).all()
+                or not torch.allclose(logp.exp().sum(-1), torch.ones(7, dtype=logp.dtype), atol=1e-6)):
+            raise ValueError("counterfactual prediction violates fixed non-self simplex")
+        return logp
+
+    def probabilities(self, parent, candidate, *, next_speaker, queue_evidence):
+        return self.log_probabilities(parent, candidate, next_speaker=next_speaker,
+                                      queue_evidence=queue_evidence).exp()
