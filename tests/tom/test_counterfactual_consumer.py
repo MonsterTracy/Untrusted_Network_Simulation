@@ -225,7 +225,7 @@ def test_last_speaker_unsupported(phase):
 def test_dead_players_excluded_and_public_alive_consistency():
     w = PublicWitness(alive=P[:-1])
     assert cf.derive_public_phase_speaker_order(w.pre()) == P[2:-1] + P[:2]
-    w.events[1]["dead_players"] = []
+    w.alive = P  # Contradict public elimination without changing annotation bindings.
     with pytest.raises(ValueError, match="alive players disagree"):
         tensorize(w.pre())
 
