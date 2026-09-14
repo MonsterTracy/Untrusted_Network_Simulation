@@ -102,22 +102,13 @@ class PublicWitness:
             belief_observation_ids_by_observer={p: f"synthetic-observation-{len(self.events)}-{p}" for p in self.alive})
 
 
-def queue(parent):
-    order = ("player3", "player1", "player2")
-    if parent.public_temporal_state.phase.value == "discussion":
-        order = tuple(p for p in parent.alive_observer_ids if p not in P[:2]) + P[:2]
-    return cf.PublicQueueEvidence(parent.prefix_digest, parent.public_temporal_state.day,
-                                  parent.public_temporal_state.phase.value, order,
-                                  "synthetic-public-queue-witness")
-
-
 def candidate(name="ACCUSE_WOLF"):
     target = None if name in ("SELF_DEFEND", "NO_COMMITMENT") else "player3"
     return cf.CounterfactualSpeechAction("player1", cf.PlanningAction(name), target)
 
 
 def tensorize(parent, action=None, **kwargs):
-    options = dict(next_speaker="player2", queue_evidence=queue(parent), capacity=CAPACITY)
+    options = dict(capacity=CAPACITY)
     options.update(kwargs)
     return cf.tensorize_counterfactual(parent, action or candidate(), **options)
 
@@ -162,8 +153,7 @@ def test_parent_type_digest_phase_and_speaker_fail_closed():
     p = PublicWitness().pre()
     for wrong in (None, {}, p.to_record()):
         with pytest.raises(TypeError, match="AuthoritativePREPrefix"):
-            cf.build_continuation(wrong, candidate(), next_speaker="player2",
-                                 queue_evidence=queue(p), capacity=CAPACITY)
+            cf.build_continuation(wrong, candidate(), capacity=CAPACITY)
     with pytest.raises(ValueError, match="digest mismatch"):
         tensorize(replace(p, prefix_digest="0" * 64))
     with pytest.raises(ValueError, match="wrong current speaker"):
@@ -175,50 +165,170 @@ def test_parent_type_digest_phase_and_speaker_fail_closed():
         terminal = replace(history.events[-1], temporal_state=replace(history.current_state, phase=PublicPhase(phase)))
         bad = replace(p, public_event_history=replace(history, events=history.events[:-1] + (terminal,)))
         with pytest.raises(ValueError):
-            tensorize(bad, queue_evidence=queue(p))
+            tensorize(bad)
 
 
-@pytest.mark.parametrize("next_speaker", [None, "player1", "player4", "player8"])
-def test_invalid_next_speaker(next_speaker):
-    with pytest.raises(cf.UnsupportedOpportunityError):
-        tensorize(PublicWitness().pre(), next_speaker=next_speaker)
+@pytest.mark.parametrize("phase", ["discussion", "pk_discussion"])
+def test_public_order_and_next_are_derived(phase):
+    p = PublicWitness(phase).pre()
+    expected = P[2:] + P[:2] if phase == "discussion" else (P[2], P[0], P[1])
+    assert cf.derive_public_phase_speaker_order(p) == expected
+    assert tensorize(p)[0].next_speaker == "player2"
+    assert tensorize(p)[0].queue_rule_version == cf.QUEUE_RULE_VERSION
 
 
-def test_dead_next_and_last_speaker():
-    p = PublicWitness(alive=P[:-1]).pre()
-    with pytest.raises(cf.UnsupportedOpportunityError, match="not alive"):
-        tensorize(p, next_speaker="player7")
-    w = PublicWitness("pk_discussion")
+@pytest.mark.parametrize("first", P)
+def test_normal_first_public_turn_determines_every_rotation(first):
+    w = PublicWitness()
+    w.events = w.events[:3]
+    w.annotations = []
+    w.event("turn_start", speaker=first)
+    p = w.pre()
+    index = P.index(first)
+    expected = P[index:] + P[:index]
+    assert cf.derive_public_phase_speaker_order(p) == expected
+    action = cf.CounterfactualSpeechAction(first, cf.PlanningAction.NO_COMMITMENT)
+    assert tensorize(p, action)[0].next_speaker == expected[1]
+
+
+def test_missing_first_public_turn_rejected_by_pre_contract():
+    w = PublicWitness()
+    parent = w.pre()
+    history = freeze_public_event_history(w.events[:3])
+    broken = replace(parent, public_event_history=history, public_event_digest=history.digest)
+    with pytest.raises(ValueError, match="turn_start"):
+        cf.derive_public_phase_speaker_order(broken)
+
+
+@pytest.mark.parametrize("field,value", [("next_speaker", None), ("next_speaker", "player1"),
+    ("next_speaker", "player4"), ("next_speaker", "player8"),
+    ("speaker_order", P), ("queue_evidence", object())])
+def test_caller_cannot_override_future_order(field, value):
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        tensorize(PublicWitness().pre(), **{field: value})
+    for method in (cf.CounterfactualToMConsumer.log_probabilities,
+                   cf.CounterfactualToMConsumer.probabilities):
+        assert set(inspect.signature(method).parameters) == {"self", "parent", "candidate"}
+    assert not hasattr(cf, "PublicQueueEvidence")
+
+
+@pytest.mark.parametrize("phase", ["discussion", "pk_discussion"])
+def test_last_speaker_unsupported(phase):
+    w = PublicWitness(phase)
     w.speech("player1", "no_commitment", None, "我暂不表态。")
     w.event("turn_start", speaker="player2")
-    p = w.pre()
     c = cf.CounterfactualSpeechAction("player2", cf.PlanningAction.NO_COMMITMENT)
     with pytest.raises(cf.UnsupportedOpportunityError, match="last phase speaker"):
-        tensorize(p, c, next_speaker="player1")
+        tensorize(w.pre(), c)
 
 
-def test_queue_binding_order_and_caller_contract():
-    p = PublicWitness().pre()
-    q = queue(p)
-    for change in (dict(parent_prefix_digest="0" * 64), dict(day=2), dict(phase="pk_discussion"),
-                   dict(speaker_order=P), dict(speaker_order=("player3", "player1", "player2"))):
-        with pytest.raises(ValueError):
-            tensorize(p, queue_evidence=replace(q, **change))
-    with pytest.raises(TypeError, match="queue evidence"):
-        tensorize(p, queue_evidence=None)
-    # At the first turn, PRE alone cannot distinguish caller-attested suffixes.
-    # This test does not assert that both orders follow the real game's rules.
-    witness = PublicWitness()
-    witness.events = witness.events[:4]  # first turn_start(player3)
-    witness.annotations = []
-    p = witness.pre()
-    q = queue(p)
-    alternate = replace(q, speaker_order=("player3", "player5", "player4", "player6", "player7", "player1", "player2"))
-    action = cf.CounterfactualSpeechAction("player3", cf.PlanningAction.CLEAR, "player1")
-    c, _ = tensorize(p, action, next_speaker="player5", queue_evidence=alternate)
-    assert c.queue_evidence_digest == alternate.digest != q.digest
-    with pytest.raises(cf.UnsupportedOpportunityError, match="queue evidence"):
-        tensorize(p, action, next_speaker="player5", queue_evidence=q)
+def test_dead_players_excluded_and_public_alive_consistency():
+    w = PublicWitness(alive=P[:-1])
+    assert cf.derive_public_phase_speaker_order(w.pre()) == P[2:-1] + P[:2]
+    w.events[1]["dead_players"] = []
+    with pytest.raises(ValueError, match="alive players disagree"):
+        tensorize(w.pre())
+
+
+def test_observed_order_cannot_declare_arbitrary_rotation_suffix():
+    w = PublicWitness()
+    w.events = w.events[:4]
+    w.annotations = []
+    p = w.pre()
+    assert cf.derive_public_phase_speaker_order(p) == P[2:] + P[:2]
+    c = cf.CounterfactualSpeechAction(P[2], cf.PlanningAction.CLEAR, P[0])
+    assert tensorize(p, c)[0].next_speaker == P[3]
+    w.speech(P[2], "no_commitment", None, "我暂不表态。")
+    w.event("turn_start", speaker=P[4])  # skips publicly determined P4
+    with pytest.raises(ValueError, match="cyclic seat-order"):
+        cf.derive_public_phase_speaker_order(w.pre())
+
+
+def test_no_env_or_queue_dependency():
+    import ast
+    tree = ast.parse(Path(cf.__file__).read_text())
+    assert not any(isinstance(n, ast.Attribute) and n.attr == "speech_queue" for n in ast.walk(tree))
+    assert not any(isinstance(n, ast.ImportFrom) and n.module and "env" in n.module.split(".")
+                   for n in ast.walk(tree))
+    assert tuple(inspect.signature(cf.derive_public_phase_speaker_order).parameters) == ("parent_pre",)
+
+
+@pytest.mark.parametrize("malformation", ["missing_vote", "missing_exile", "duplicate_vote",
+    "incomplete_voters", "all_abstain", "unique_winner", "nonempty_exile", "self_vote",
+    "noncandidate_first"])
+def test_pk_insufficient_or_malformed_public_evidence_fails(malformation):
+    from copy import deepcopy
+    w = PublicWitness("pk_discussion")
+    start = next(i for i, e in enumerate(w.events)
+                 if e.get("phase") == "pk_discussion")
+    w.events = w.events[:start + 2]  # retain only the first PK turn
+    w.annotations = [a for a in w.annotations if a.event_index < start]
+    vote = next(e for e in w.events if e["event_type"] == "vote_result")
+    if malformation.startswith("missing_"):
+        kind = "vote_result" if malformation == "missing_vote" else "exile_result"
+        w.events = [e for e in w.events if e["event_type"] != kind]
+    elif malformation == "duplicate_vote":
+        w.events.insert(w.events.index(vote) + 1, deepcopy(vote))
+    elif malformation == "incomplete_voters":
+        vote["votes"].pop()
+    elif malformation == "all_abstain":
+        for ballot in vote["votes"]:
+            ballot["target"] = None
+    elif malformation == "unique_winner":
+        for ballot in vote["votes"]:
+            ballot["target"] = None if ballot["voter"] == P[0] else P[0]
+    elif malformation == "nonempty_exile":
+        next(e for e in w.events if e["event_type"] == "exile_result")["exiled_players"] = [P[6]]
+        w.alive = P[:-1]
+    elif malformation == "self_vote":
+        vote["votes"][0]["target"] = P[0]
+    else:
+        w.events[-1]["speaker"] = P[3]
+    # Only events after the prior real speech annotations move; their bindings
+    # remain intact. These are explicit negative test fixtures, not production.
+    for i, event in enumerate(w.events):
+        event["event_index"], event["event_id"] = i, f"e{i}"
+    parent = w.pre()
+    validate_authoritative_pre_prefix(parent)
+    with pytest.raises(ValueError):
+        cf.derive_public_phase_speaker_order(parent)
+
+
+@pytest.mark.parametrize("action", [cf.PlanningAction.SUPPORT, cf.PlanningAction.OPPOSE])
+def test_same_day_normal_speech_remains_eligible_in_pk(action):
+    w = PublicWitness("pk_discussion")
+    p = w.pre()
+    # P4 spoke in normal discussion, is not a PK speaker, and is still alive.
+    current_phase_speakers = {e.speaker for e in p.public_event_history.events
+                              if e.event_type == "public_speech"
+                              and e.temporal_state.phase.value == "pk_discussion"}
+    assert P[3] not in current_phase_speakers
+    c = cf.CounterfactualSpeechAction(P[0], action, P[3])
+    continuation, _ = tensorize(p, c)
+    assert continuation.tokens[-2].target == P[3]
+    assert continuation.tokens[-2].action == action.value.lower()
+
+
+@pytest.mark.parametrize("action", [cf.PlanningAction.SUPPORT, cf.PlanningAction.OPPOSE])
+def test_previous_day_speech_does_not_satisfy_spoken_today(action):
+    w = PublicWitness()
+    for player in P[:2]:
+        if w.events[-1].get("speaker") != player:
+            w.event("turn_start", speaker=player)
+        w.speech(player, "no_commitment", None, "我暂不表态。")
+    w.event("phase_change", day=1, phase="vote")
+    w.event("vote_result", votes=[{"voter": p, "target": None} for p in P])
+    w.event("exile_result", exiled_players=[])
+    w.event("phase_change", day=1, phase="night")
+    w.event("death_announcement", dead_players=[])
+    w.event("phase_change", day=2, phase="discussion")
+    w.event("turn_start", speaker=P[0])
+    parent = w.pre()
+    assert cf.derive_public_phase_speaker_order(parent) == P
+    assert any(e.event_type == "public_speech" and e.speaker == P[2]
+               for e in parent.public_event_history.events)
+    with pytest.raises(ValueError, match="not spoken on the current day"):
+        tensorize(parent, cf.CounterfactualSpeechAction(P[0], action, P[2]))
 
 
 @pytest.mark.parametrize("name,target", [("vote_intent", "player3"), ("ACCUSE_WOLF", "player3"),
@@ -303,13 +413,13 @@ def test_sealed_inference_matches_real_successor_and_preserves_artifacts(sealed,
             w = PublicWitness(phase)
             p = w.pre()
             parent_before = real_predictor.log_probabilities(p)
-            logp = consumer.log_probabilities(p, candidate(name), next_speaker="player2", queue_evidence=queue(p))
+            logp = consumer.log_probabilities(p, candidate(name))
             w.speech("player1", semantic, target, text)
             w.event("turn_start", speaker="player2")
             assert torch.equal(logp, real_predictor.log_probabilities(w.pre()))
             assert torch.equal(parent_before, real_predictor.log_probabilities(p))
             assert logp.shape == (7, 7) and torch.isneginf(logp.diagonal()).all()
-            assert torch.equal(logp.exp(), consumer.probabilities(p, candidate(name), next_speaker="player2", queue_evidence=queue(p)))
+            assert torch.equal(logp.exp(), consumer.probabilities(p, candidate(name)))
             assert torch.allclose(logp.exp().sum(-1), torch.ones(7), atol=1e-6)
     after = {p: p.read_bytes() for root in (sealed.path, sealed.runs_path)
              for p in root.rglob("*") if p.is_file()}
@@ -393,9 +503,8 @@ def test_model_receives_only_public_tensors(sealed, monkeypatch):
         return original(**kwargs)
     monkeypatch.setattr(consumer._predictor.model, "forward", public_only)
     p = PublicWitness().pre()
-    first = consumer.log_probabilities(p, candidate(), next_speaker="player2", queue_evidence=queue(p))
-    changed_source = replace(queue(p), source_reference="another-public-source-reference")
-    second = consumer.log_probabilities(p, candidate(), next_speaker="player2", queue_evidence=changed_source)
+    first = consumer.log_probabilities(p, candidate())
+    second = consumer.log_probabilities(p, candidate())
     assert torch.equal(first, second)
     assert all(torch.equal(captured[0][k], captured[1][k]) for k in captured[0])
     continuation, _ = tensorize(p)

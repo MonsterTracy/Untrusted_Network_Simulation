@@ -25,39 +25,42 @@ V1 supports only a same-day, same-discussion-phase continuation with a known nex
 speaker. It appends exactly public_speech, speech_action, next turn_start semantic
 descriptors. No canonical event, annotation, raw text, perception attempt or belief
 observation link is manufactured. The immutable continuation carries schema,
-implementation/builder versions, parent/queue digests, speaker/action/target,
+implementation/builder versions, parent digest and queue-rule version, speaker/action/target,
 next speaker, day/phase, token count, descriptors and its own digest.
 
-### Public queue attestation (remaining integration obligation)
+### Deterministic public queue derivation
 
-`PublicQueueEvidence` contains the parent PRE digest, day, phase, complete phase
-speaker order and an auditable `source_reference`. The order includes previously
-started speakers, the current speaker and remaining speakers. Consumer checks:
+`derive_public_phase_speaker_order(parent_pre)` now accepts only a validated
+real PRE. It implements `classic7_public_cyclic_seat_order_v1`, checked against
+`WerewolfTextEnvV0.end_night`, `end_vote`, and `_public_votes_for_current_phase`.
+Normal discussion sorts alive seats; PK sorts the positive highest-vote tied
+seats from the preceding public normal ballot. Both rotate that sorted list to
+start at the phase's first public turn_start. All observed turns must match the
+resulting prefix. The next speaker is derived internally; the last speaker raises
+`UnsupportedOpportunityError`. No caller order, queue evidence or next-speaker
+argument is accepted, and no env object or private queue is read.
 
-- parent/day/phase binding, canonical unique living seats;
-- complete living membership in ordinary discussion;
-- exact agreement with turn_start events since the latest phase_change;
-- requested next speaker is the next queue entry and differs from current;
-- an exhausted queue raises `UnsupportedOpportunityError`.
+Alive membership is checked against cumulative public death/exile announcements.
+PK requires a preceding same-day vote phase containing exactly one vote_result
+followed by one empty exile_result. The ballot must cover all living voters,
+contain legal targets, and establish a positive highest-vote tie of at least two
+players. Missing, contradictory or malformed evidence fails closed. No outcome
+is supplied from the future, and no evidence is repaired.
 
-PK membership/order is caller-attested; consumer does not derive or authenticate
-the public tie-resolution queue from a canonical PRE. Nor can it prove an
-unobserved normal-discussion suffix from a digest/reference string. A test
-explicitly demonstrates that two otherwise consistent caller-attested future
-orders cannot be distinguished by this interface. This is not a claimed proof.
+The caller still supplies authentic real parent evidence: structural/digest
+validation does not authenticate a fabricated whole history. Unlike the former
+attestation interface, however, no separately supplied future order can alter
+inference. The frozen queue rule, first turn and public candidates fully determine
+it. No gameplay integration or new public announcement is required for this
+Phase 1 derivation.
 
-Before gameplay integration, the runtime must bind a public phase order to a
-public announcement or a documented deterministic rule plus its public inputs.
-Retain that evidence and its reference in a separate intervention audit record.
-If the order is known only from a private runtime queue, that is insufficient:
-establish its public provenance first or reject the opportunity. Never pass env,
-full observations, role assignments or a private queue dump to this consumer.
-Final speakers and cross-vote/night continuations are unsupported; no fallback.
+SUPPORT/OPPOSE eligibility is deliberately day-wide: a living non-self target's
+real public speech in ordinary discussion qualifies in later PK on the same day,
+even if that target has not spoken in PK. Previous-day speech alone does not qualify.
 
 ## Tensorization and inference
 
-`tensorize_counterfactual` accepts a real parent, one action, explicit next speaker,
-queue evidence and `ExperimentCapacity`. It returns continuation metadata and
+`tensorize_counterfactual` accepts a real parent, one action and `ExperimentCapacity`. It returns continuation metadata and
 fresh `PublicTensors`. The real prefix comes from `plan_structured_history` and
 official `tensorize_public_pre`; only three appended tokens are encoded locally
 using official vocabulary constants. All seven tensor fields and padding are
@@ -88,7 +91,7 @@ validate_runtime bypass, manifest patch, re-seal or artifact publication occurs.
 SHA-256 of this consumer source file (which includes the builder), parent
 experiment and final-seal digests, condition, checkpoint digest and builder
 version. It performs no writes. The caller should retain this alongside the
-continuation digest and the public queue evidence in a future intervention
+continuation digest and its frozen queue-rule version in a future intervention
 manifest. The peripheral objective source is separate and is not covered by the
 inference consumer's source digest; future scoring provenance must bind it too.
 
@@ -135,7 +138,7 @@ writer rejection, repeatability, non-contamination and objective invariants.
 Scripted parser outputs test tensor/contract equivalence, not natural-language
 perception accuracy or counterfactual scientific validity.
 
-### Local verification, 2026-09-14
+### Historical verification before the public-order correction, 2026-09-14
 
 Base HEAD: `33d580cdf0700f6e38ae5b14648fcfdaa9be2b9a`.
 Python: `/Users/name_yuxiao/anaconda3/envs/3wd/bin/python`.
@@ -155,3 +158,23 @@ TMPDIR=/private/tmp PYTHONDONTWRITEBYTECODE=1 \
 of all 57 protected Python files also matched exactly (including file set).
 Original untracked research material was left untouched. No formal artifacts,
 Agent, environment, prompt, recorder, selector or gameplay wiring were changed.
+
+### Public-order correction: tests pending server execution
+
+Consumer implementation and continuation builder/schema versions are advanced to
+2; the old sealed implementation and its runtime validation remain unchanged.
+The public-order correction has NOT been tested locally. The earlier 88-pass
+result above applies only to the previous committed implementation. All six
+real/hypothetical equivalence assertions are retained in both phases, as are the
+sealed output equivalence assertions. Additional tests reject caller overrides,
+malformed PK evidence and invalid observed order, and freeze day-wide support/
+oppose eligibility. No commit or push was performed for this correction.
+
+After transferring the uncommitted changes to the server and activating its
+project environment, run:
+
+```sh
+cd /home/dell/yuxiao/Untrusted_Network_Simulation
+python -m pytest -q tests/tom/test_counterfactual_consumer.py tests/tom/test_suspicion_objectives.py
+python -m pytest -q
+```
