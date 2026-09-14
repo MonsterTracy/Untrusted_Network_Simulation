@@ -541,6 +541,10 @@ def test_public_view_opens_when_restricted_sidecar_is_physically_unavailable(
 
 
 def test_publication_module_does_not_import_dataset(monkeypatch):
+    import werewolf
+
+    original_module = importlib.import_module("werewolf.development_publication")
+    original_package_attribute = werewolf.development_publication
     original_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
@@ -548,9 +552,17 @@ def test_publication_module_does_not_import_dataset(monkeypatch):
             raise AssertionError(f"forbidden Dataset import: {name}")
         return original_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", guarded_import)
-    sys.modules.pop("werewolf.development_publication", None)
-    module = importlib.import_module("werewolf.development_publication")
-    assert module.STRUCTURED_TOKEN_PLANNER_VERSION == (
-        "classic7_structured_token_planner_v1"
-    )
+    # Reimport only inside a reversible scope: existing consumers retain class
+    # references from the original module and must not see a second generation.
+    with monkeypatch.context() as isolated:
+        isolated.setattr(builtins, "__import__", guarded_import)
+        isolated.delitem(sys.modules, "werewolf.development_publication")
+        isolated.delattr(werewolf, "development_publication")
+        module = importlib.import_module("werewolf.development_publication")
+        assert module is not original_module
+        assert module.STRUCTURED_TOKEN_PLANNER_VERSION == (
+            "classic7_structured_token_planner_v1"
+        )
+
+    assert sys.modules["werewolf.development_publication"] is original_module
+    assert werewolf.development_publication is original_package_attribute
