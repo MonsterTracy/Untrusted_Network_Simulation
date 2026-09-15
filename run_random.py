@@ -44,10 +44,21 @@ def _act_at_boundary(
     )
 
 
-def eval(env, agent_list, roles_, *, canonical_recorder, call_audit):
+def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
+         planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None):
     """Execute one game exclusively through canonical evidence construction."""
     if canonical_recorder is None or call_audit is None:
         raise TypeError("canonical recorder and call audit are required")
+    if planning_mode not in ('original', 'constrained'):
+        raise ValueError("unsupported planning mode")
+    if planning_mode == 'constrained':
+        from scripts.constrained_speech import SpeechTreatment, handle_speech
+        if not callable(plan_provider) or type(ablation_trace) is not list:
+            raise TypeError("constrained mode requires provider and sidecar trace list")
+        if speech_treatment is None:
+            speech_treatment = SpeechTreatment()
+        if not isinstance(speech_treatment, SpeechTreatment):
+            raise TypeError("expected SpeechTreatment")
     for agent in agent_list:
         agent.reset()
     observation = env.reset(roles=roles_)
@@ -62,6 +73,15 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit):
                 speech_kind=env.phase if is_speech else None)
             if is_speech and handoff is None:
                 raise TypeError("public speech requires the collected Speaker PRE Belief Handoff")
+            if is_speech and planning_mode == 'constrained':
+                committed = handle_speech(env=env, actor=agent_list[actor - 1],
+                    recorder=canonical_recorder, provider=plan_provider,
+                    assigned=speech_treatment.assigned(f"player{actor}", env.roles[actor - 1]),
+                    trace=ablation_trace)
+                if committed is not None:
+                    observation, _, done, info = committed
+                    step += 1
+                    continue
             with call_audit.action_context(acting_player_id=actor,
                     boundary_id=handoff.boundary_id if handoff else None, is_public_speech=is_speech):
                 action = _act_at_boundary(agent_list[actor - 1], observation, handoff)

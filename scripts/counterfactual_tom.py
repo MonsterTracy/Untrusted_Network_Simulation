@@ -20,7 +20,6 @@ from werewolf.structured_history import (
 )
 from werewolf.tom.dataset import ExperimentCapacity, PublicTensors, tensorize_public_pre
 from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
-from werewolf.tom.final_evaluation import SealedFinalPredictor
 
 
 CONSUMER_SCHEMA_VERSION = "counterfactual_tom_consumer_v1"
@@ -265,6 +264,7 @@ class CounterfactualToMConsumer:
     """
 
     def __init__(self, experiment, condition):
+        from werewolf.tom.final_evaluation import SealedFinalPredictor
         # The original loader initializes CPU parameters before loading weights.
         # Preserve the caller's CPU RNG without altering any validation gate.
         with torch.random.fork_rng(devices=[]):
