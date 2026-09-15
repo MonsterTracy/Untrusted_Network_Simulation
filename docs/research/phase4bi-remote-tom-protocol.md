@@ -1,187 +1,194 @@
-# Phase 4B-I: frozen-ToM JSONL client protocol
+# Frozen-ToM JSONL adapter
 
-Gameplay baseline: c9f92b9a05c91fed330bada994e817ee42e2ef55.
-Worker source baseline (future work only):
-8886af9505036b55662d54ae9a108b09121e8c71.
-NOT RUN: tests have not been executed. No worker/model/subprocess transport was
-started or implemented; no frozen branch/worktree was created or modified.
+Development stays on ablation/tom-gameplay. The model executes in a server
+checkout detached at 8886af9505036b55662d54ae9a108b09121e8c71 with two copied
+adapter files. No other checkout or Git state was changed for this implementation.
+Tests: NOT RUN. No model or real worker was launched locally.
 
-## Transport and versions
+## Minimal files and responsibilities
 
-REMOTE_TOM_PROTOCOL_VERSION = remote_tom_plan_v1.
-JsonLineTransport.request(line: str) -> str exchanges exactly one newline-terminated
-JSON object per call. The client uses raw JSON lines so duplicate keys remain
-observable and are rejected at every nesting level. Multiple lines, non-objects,
-malformed JSON, NaN/Infinity and unknown response fields are rejected. Worker
-stdout must contain only protocol JSONL; stderr must be separate.
+* scripts/remote_tom_protocol.py: shared strict JSON, request/response schema,
+  identity and canonical bindings. It uses stdlib plus the existing frozen
+  artifact_io canonical JSON/SHA helpers; no planner/Actor/env imports.
+* scripts/remote_tom_worker.py: frozen-checkout bootstrap, official PRE reader,
+  validation, existing planner dispatch and sequential stdin/stdout loop.
+* scripts/remote_tom_provider.py: existing Phase 4A callable boundary, public PRE
+  encoding, private objective supplier and injected JsonLineTransport.
 
-Only the client abstraction is implemented. A future persistent subprocess
-adapter must use explicit argv, shell=False, bounded read/write waits, separate
-stderr draining and explicit exit/EOF errors. No retries, automatic reconnect,
-shared memory, pickle, sys.path/PYTHONPATH changes or cross-worktree imports.
-An arbitrary injected transport must uphold the bounded-wait contract; this
-synchronous provider does not itself interrupt a transport that blocks forever.
+The shared protocol is necessary because client and worker must not maintain
+separate binding/schema implementations. Worker dependencies only allow model-free
+unit tests to spy on existing planner calls; there is no service hierarchy.
+No transport framework, reconnect, retries, heuristic or fallback is added.
+JsonLineTransport remains the existing injected client transport contract: one
+newline-terminated JSON object in/out, bounded waits and explicit timeout/EOF/
+process failures. A process launcher is not added by this worker patch.
 
-CANDIDATE_ORDER_VERSION and QUEUE_RULE_VERSION now live in a lightweight
-scripts/speech_versions.py. Phase 1/2 re-export the same exact values through
-imports. No ontology, ordering or eligibility change. The remote client imports
-neither speech_planning/evaluator nor counterfactual_tom/consumer/model modules.
+## Final identity
 
-## Required request fields
+WorkerIdentity requires exactly:
 
-protocol_version, request_id, request_digest, game_id, boundary_id,
-parent_digest, parent_pre, speaker, day, phase, candidates,
-candidate_order_version, public_queue_rule_version, alive_wolves, condition,
-expected_worker_identity.
+* planner_baseline_commit: 8886af9505036b55662d54ae9a108b09121e8c71;
+* adapter_digest: actual two deployed adapter source files;
+* runtime_digest: SHA256 of canonical JSON of the verified experiment runtime record;
+* source_digest: that verified runtime record's implementation_digest;
+* experiment_digest: verified final experiment manifest digest;
+* seal_digest: original consumer provenance parent_final_seal_digest;
+* checkpoint_digest: original consumer provenance checkpoint_digest;
+* condition: implicit or explicit_day_phase.
 
-Candidates are the complete Phase 4A tuple serialized in its supplied canonical
-order as action/target dictionaries. The client does not reimplement generation
-or eligibility; the trusted input is an already gated PublicOpportunity. It
-checks nonempty tuple, duplicate candidates, valid parent and matching speaker.
-The future worker must regenerate and compare the full canonical tuple, not
-trust a caller-declared ordering or subset.
+The baseline is a 40-character lowercase Git SHA; digest fields are 64-character
+lowercase SHA-256 values. Required fields cannot be None/unknown/latest. The
+worker measures/verifies its own identity; CLI accepts only experiment path and
+condition, not user-declared digests.
 
-alive_wolves contains only objective-required living wolf seats, sorted by
-canonical seat order. The client requires a nonempty, unique living subset,
-including the acting speaker, and at least one living non-wolf observer. The
-researcher/runner is responsible for supplying lawful membership; it cannot be
-inferred from public PRE. No complete private role table is transmitted.
+adapter_digest = SHA256 of the concatenation, in this exact order:
 
-## PRE representation
+1. scripts/remote_tom_protocol.py
+2. scripts/remote_tom_worker.py
 
-parent_pre is the unchanged AuthoritativePREPrefix.to_record() after validation
-by validate_authoritative_pre_prefix. It includes schema/game/boundary/step/
-trigger/speaker/day/phase, alive_observer_ids, public_events and their schema/
-digest, V1 annotations with actual attempts and their schema/digest, maximum
-public day, belief observation links, speaker observation ID and prefix_digest.
-No boundary/provenance fields are removed. Private belief contents or role truth
-are not part of this representation.
+For each file append UTF-8 relative filename, NUL, ASCII decimal byte length,
+colon, then raw file bytes. Runtime identity covers frozen model execution;
+adapter identity covers only the RPC code. No additional repository hash is
+introduced. Protocol parsing verifies expected identity by exact dictionary
+comparison, including absence of unknown fields.
 
-This is the existing canonical record, not a second PRE semantics. In 4B-II the
-worker must reconstruct existing public-history, annotation and PRE value types
-from that full record, call their official binding/validation functions and
-require exact canonical round-trip equality, including all supplied digests and
-observation links. Prefix validity is not proof that an untrusted sender really
-ran the game: authentic opportunity provenance remains the trusted runner's
-responsibility, as in existing Phase 1.
+## Bootstrap
 
-## Digest and deterministic request identity
+Run with python -m scripts.remote_tom_worker from the frozen checkout root.
+Bootstrap checks that cwd is the adapter checkout, actual HEAD equals the fixed
+baseline, HEAD is detached, and protected files have no tracked diff against
+HEAD. Original runtime validation additionally checks all runtime Python source
+content and numeric environment.
 
-1. Build all request fields except request_id and request_digest.
-2. request_id = "rtom-" + SHA256(canonical_json_bytes(those fields)).
-3. Add request_id; request_digest = SHA256(canonical_json_bytes(the resulting object)).
-4. Add request_digest and serialize the JSONL request.
+open_final_experiment validates the experiment artifact/config/capacity and
+initial-state records. open_publication verifies the development publication;
+its digest, publication ID and game IDs must match the experiment's recorded
+publication. CounterfactualToMConsumer is constructed ONCE; its unchanged
+SealedFinalPredictor executes verify_final_seal, validate_runtime,
+verify_final_terminal and load_model_state. No training entrypoint or
+actual_clean_revision training requirement is bypassed/called to accommodate
+adapters. Adding the two adapter files does not change the original runtime
+source inventory (werewolf/**/*.py and run_random.py).
 
-Thus all decision-relevant fields, including full PRE, its digest, ordered
-candidates, version strings, private alive_wolves, condition and expected worker
-identity are bound. Identical semantic inputs produce identical IDs/digests;
-repeated identical requests are not assigned fresh random IDs. Python hash()
-is never used. The worker must recompute both bindings before inference.
+Only after successful bootstrap is the measured identity logged to stderr and
+service started. Any bootstrap failure prints a diagnostic to stderr and exits
+nonzero. Artifact paths/publication paths and the numeric runtime must match the
+sealed experiment; errors are not repaired. Bootstrap/model initialization is
+not repeated per request.
 
-Both request_id and request_digest are planner-private metadata: the small
-wolf-seat domain permits enumeration even when only a digest is exposed. They
-must not enter SpeechPlan, Actor payloads, canonical public events, game logs
-or agent-visible/public SpeechTrace. Allowed locations are RPC request/response,
-worker-private logs and planner-private research sidecars. Existing public
-game_id/boundary_id provide correlation without these private bindings; no new
-public correlation field is needed. Equal alive_wolves sets, regardless of
-supplier order, produce identical canonical requests and bindings. Duplicate
-or invalid IDs are rejected rather than silently deduplicated.
+## Request and PRE
 
-## Worker identity
+Version remains remote_tom_plan_v1; incompatible old field shapes are rejected,
+with no compatibility fields. Required request keys:
+protocol_version, request_id, request_digest, game_id, boundary_id, parent_digest,
+parent_pre, speaker, day, phase, candidates, candidate_order_version,
+public_queue_rule_version, alive_wolves, condition, expected_worker_identity.
 
-WorkerIdentity requires planner_baseline_commit and worker_commit (each 40
-lowercase hex), runtime_digest,
-source_digest, experiment_digest, seal_digest, checkpoint_digest (each 64
-lowercase hex), and condition (implicit or explicit_day_phase). All fields are
-required configuration; no unknown/latest/None placeholders are supported.
-Tests use explicitly artificial fixture digests, not claimed runtime values.
+parent_pre is the existing AuthoritativePREPrefix.to_record(), with all event,
+annotation/attempt, observation-link, boundary and digest data. The pinned official
+werewolf.canonical_collection.game_bundle._prefix_from_record is used directly:
+it reconstructs history/annotations using canonical constructors, reconstructs
+the PRE, and requires record equality. The worker additionally invokes
+validate_authoritative_pre_prefix and exact canonical-byte round-trip comparison.
+The internal helper's use is deliberate and pinned to this baseline. No fake PRE,
+publication or perception evidence is built by the adapter.
 
-planner_baseline_commit identifies the source lineage baseline:
-8886af9505036b55662d54ae9a108b09121e8c71. worker_commit must identify the actual
-Phase 4B-II worker worktree HEAD after the worker adapter has been committed.
-Do not claim the baseline hash is that later HEAD. Both fields are required,
-covered by request_id/request_digest, and compared in the complete response
-worker_identity. Configuration validates hash syntax; the future worker must
-verify actual Git HEAD and baseline lineage. Fixture worker_commit is synthetic
-and deliberately different from the baseline.
+Request binding uses the existing canonical JSON/SHA-256 contract:
+1. Build the complete record except request_id/request_digest.
+2. request_id = "rtom-" + SHA256 of those bytes.
+3. Add request_id, then request_digest = SHA256 of the resulting canonical bytes.
+4. Send with request_digest and one newline.
 
-runtime_digest identifies the canonical frozen runtime inputs; source_digest
-binds the actual worker source/adapter release to be agreed in 4B-II. Model
-experiment/seal/checkpoint digests must come from verified artifacts. The actual
-worker must independently measure/verify these identities, never merely echo
-client expectations. This local IPC protocol is an integrity/binding contract,
-not cryptographic authentication against a malicious executable.
+Both ID and digest are PLANNER-PRIVATE: alive wolf seats are enumerable. They
+may appear only in RPC or planner-private logs/sidecars, never Actor/SpeechPlan,
+public events/game logs or agent-visible SpeechTrace. Existing public game and
+boundary IDs remain the public correlation mechanism.
 
-## Response
+alive_wolves is a unique nonempty canonical seat-ordered list. Duplicate,
+invalid or unsorted wire IDs fail. Provider canonicalizes supplier ordering.
+The worker checks living membership, acting-speaker membership and a nonempty
+living non-wolf population. No complete role table is sent; the trusted objective
+supplier is responsible for lawful membership.
 
-Success has exactly: protocol_version, request_id, request_digest, status="ok",
-selected_index, selected_plan, worker_identity. Index must be a JSON integer
-(not bool), in range; the returned plan must exactly match that indexed request
-candidate. The provider returns the corresponding ORIGINAL candidate object.
+## Before any candidate evaluation or model forward
 
-Error has exactly: protocol_version, request_id, request_digest, status="error",
-error_code, error_message, worker_identity. Strings must be nonempty and all
-bindings/identity must match. Missing identity is rejected as malformed rather
-than accepted as a successful handshake. Unavailable/failed startup may instead
-raise a transport error. Any worker error is terminal. Worker messages are not
-copied into gameplay exceptions/public traces.
+Worker.handle performs, in order:
 
-Unknown fields, including scores/matrices/diagnostics, are rejected. No candidate
-substitution, local selector, fallback, retry or silent repair exists.
+1. Shared exact schema, request ID/digest, protocol and expected identity checks;
+2. fixed baseline/adapter/condition and candidate-order/queue-rule versions;
+3. canonical wolf IDs and official PRE reconstruction/validation;
+4. game/boundary/digest/speaker/day/phase agreement and living objective population;
+5. frozen public phase-order derivation, reject final same-phase speaker;
+6. existing capacity validation, including room for three continuation tokens;
+7. local generate_candidates and exact ordered incoming candidate equality.
 
-## Provider and information boundaries
+Only then: evaluate_candidates(parent, candidates, existing_consumer,
+alive_wolves=...) -> select_minimum_suspicion(candidates, evaluations).
+The worker does not implement tensorization, objective, probability interpretation,
+argmin or tie-breaking. It does not request a baseline prediction/Delta.
 
-RemoteToMPlanProvider holds transport, complete WorkerIdentity and an explicit
-alive_wolves_for(public_opportunity) private objective-state supplier. It has no
-env/Actor/perceiver/recorder argument or field. The supplier is an integration
-seam for lawful current membership, not an implemented game-state collector.
-Phase 4A already treats provider errors as eligible execution failure and does
-not call Original Agent afterward.
+## Responses and loop
 
-The outbound wire and transport are planner-private and must not be copied into
-public logs. Provider returns only a SpeechPlan; Phase 4A trace/Actor/public
-canonical evidence are unchanged. No execution-metadata sidecar is added in this
-phase. Future worker diagnostics stay on a worker-private sidecar.
+Success keys exactly: protocol_version, request_id, request_digest, status=ok,
+selected_candidate_index, selected_plan, worker_identity. Provider checks binding,
+identity, non-bool integer index/range and exact indexed plan, then returns the
+original candidate object. No matrices/scores/alive_wolves/diagnostics are returned.
 
-## Validation
+Error keys: protocol_version, status=error, error_code, error_message,
+worker_identity after bootstrap, and request_id only if shared binding validation
+succeeded. The provider rejects worker errors even when no trusted request ID
+is available. Error messages are generic, not a copy of private request content.
+Unknown fields and duplicate JSON keys at any depth are rejected.
 
-Fake transport tests cover normal/PK requests, deterministic digests, candidate
-order/full PRE/private state binding, valid canonical-object return, all response
-bindings/worker identity fields, malformed/duplicate JSON, missing/unknown fields,
-worker errors, bad indices/plans, timeout/unavailability/exit exceptions, no retry,
-Phase 4A failure propagation, original/nonassigned/last-speaker zero transport
-calls, and fresh-process absence of model/evaluator imports.
+One input line produces one output line and flush. Invalid request/JSON/planning
+errors do not end the loop; the next request is handled independently. Bootstrap
+failure never enters the loop. Planner/import prints are redirected to stderr;
+stdout contains protocol JSON only. No recovery decision is made by gameplay:
+provider errors still terminate eligible execution via unchanged Phase 4A logic.
 
-From the server repository root:
+## Static boundaries and tests
+
+No protected source changes: werewolf/**, run_random.py, Phase 1/2 planner and
+objective, eligibility, Actor, verifier and verified commit remain unchanged.
+No sys.path/PYTHONPATH modification, cross-checkout imports, pickle, HTTP/gRPC,
+threads or asynchronous server framework. The provider imports only the protocol
+and existing public PRE encoding helpers, not worker/planner/model code.
+
+Tests use a fake consumer with real Phase 2 evaluator/selector, spies, official
+PRE reconstruction and in-memory StringIO JSONL transport. They cover both phases,
+invalid request zero evaluation/forward, candidate regeneration, identity/adapter/
+digest/PRE/order/population tampering, response agreement, error then success,
+stdout isolation, adapter content hashing, bootstrap failure exit and provider
+round-trip. Existing Phase 4A failure/original-mode tests remain in the regression
+suite. No real model, worker process or frozen checkout is required by new tests.
 
 ```sh
-python -m pytest -q tests/tom/test_remote_tom_provider.py
+python -m pytest -q tests/tom/test_remote_tom_worker.py tests/tom/test_remote_tom_provider.py
 python -m pytest -q tests/tom/test_constrained_speech.py
 python -m pytest -q tests/tom/test_verified_speech_commit.py tests/tom/test_speech_realization.py tests/tom/test_speech_planning.py tests/tom/test_counterfactual_consumer.py tests/tom/test_suspicion_objectives.py
 python -m pytest -q
 ```
 
-## Phase 4B-II exact plan (not performed)
+## Server deployment outline (not executed)
 
-1. Create an independent worker branch/worktree FROM
-   8886af9505036b55662d54ae9a108b09121e8c71, never from current gameplay HEAD.
-2. Add only worker entrypoint, protocol adapter, worker tests/docs. Do not modify
-   werewolf/**, run_random.py or Phase 1/2 model semantics; do not cherry-pick
-   gameplay integration commits. Check protected source diffs before loading.
-3. Commit the worker adapter and configure worker_commit from its actual HEAD,
-   retaining planner_baseline_commit=8886af9505036b55662d54ae9a108b09121e8c71.
-   Configure/measure actual runtime/source/experiment/seal/checkpoint identities.
-   Retain all existing seal/runtime/checkpoint validation; reject incompatible
-   artifacts instead of disabling checks.
-4. Implement strict request framing/schema/binding validation, official PRE
-   reconstruction and canonical round-trip checks. Verify versions, condition,
-   public order/eligibility and regenerated candidate tuple BEFORE model inference.
-5. Use existing Phase 1 consumer and Phase 2 evaluation/argmin unchanged. Private
-   alive_wolves flows only into the existing objective. Return one bound candidate
-   or explicit error; never return model matrices/score tables by default.
-6. Implement and test persistent JSONL lifecycle separately with explicit argv,
-   deadlines, clean EOF/exit handling, separate stderr and no retry/reconnect.
-7. Run worker-side semantic/tensor/seal regressions and end-to-end process tests
-   on the server. No worker implementation, launch, handshake or IPC infrastructure
-   is included in this Phase 4B-I patch.
+Prepare the existing/planned server worker directory as a detached checkout of
+8886af9505036b55662d54ae9a108b09121e8c71. Do not cherry-pick gameplay changes.
+Copy ONLY these two current adapter files into its scripts directory:
+remote_tom_worker.py and remote_tom_protocol.py. No speech_versions.py or current
+Phase 1/2 files are required. Verify their adapter_digest, retaining all frozen
+protected source bytes unchanged.
+
+```sh
+# From the server gameplay repository; frozen directory must already be prepared.
+cp scripts/remote_tom_worker.py scripts/remote_tom_protocol.py /home/dell/yuxiao/Untrusted_Network_Simulation-worker/scripts/
+cd /home/dell/yuxiao/Untrusted_Network_Simulation-worker
+# Use the exact Python/numeric environment of the sealed experiment.
+python -m scripts.remote_tom_worker --experiment /absolute/path/to/verified-final-experiment --condition implicit 2>worker-private.log
+```
+
+stdin/stdout are the private JSONL pipe. Obtain measured identity from bootstrap
+stderr and configure the gameplay provider with that exact identity; do not
+invent digests. The injected transport must own process lifecycle/deadlines and
+keep stderr separate. Real model compatibility and deployment remain to be
+verified on the server. The adapter does not silently repair a mismatched seal,
+runtime, publication path, checkpoint or request.

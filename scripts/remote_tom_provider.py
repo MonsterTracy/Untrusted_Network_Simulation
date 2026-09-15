@@ -1,20 +1,14 @@
-"""Gameplay-side JSONL protocol client. No worker/model/evaluator imports."""
-from dataclasses import asdict, dataclass
-import json
-import re
+"""Gameplay-side provider; all shared wire semantics live in the protocol."""
+from dataclasses import asdict
 from typing import Protocol
-
-from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.artifact_io import canonical_json_bytes
 from werewolf.canonical_collection.pre import validate_authoritative_pre_prefix
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from scripts.speech_versions import CANDIDATE_ORDER_VERSION, QUEUE_RULE_VERSION
-
-REMOTE_TOM_PROTOCOL_VERSION = "remote_tom_plan_v1"
-
-
-class RemoteToMError(RuntimeError):
-    pass
-
+from scripts.remote_tom_protocol import (
+    WorkerIdentity, RemoteToMError, REMOTE_TOM_PROTOCOL_VERSION,
+    decode_json_line, encode_json_line, bind_request, validate_response,
+)
 
 class JsonLineTransport(Protocol):
     def request(self, line: str) -> str:
@@ -23,56 +17,6 @@ class JsonLineTransport(Protocol):
         reconnect. stdout is protocol-only, stderr separate. No worker here.
         """
         ...
-
-
-@dataclass(frozen=True)
-class WorkerIdentity:
-    planner_baseline_commit: str
-    worker_commit: str
-    runtime_digest: str
-    source_digest: str
-    experiment_digest: str
-    seal_digest: str
-    checkpoint_digest: str
-    condition: str
-
-    def __post_init__(self):
-        for name, value in asdict(self).items():
-            if name == 'condition':
-                if value not in ('implicit', 'explicit_day_phase'):
-                    raise ValueError('unsupported temporal condition')
-            elif type(value) is not str or re.fullmatch(
-                    '[0-9a-f]{40}' if name in ('planner_baseline_commit', 'worker_commit') else '[0-9a-f]{64}', value) is None:
-                raise ValueError(f'complete explicit worker identity required: {name}')
-
-
-def _unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise RemoteToMError('duplicate JSON field')
-        result[key] = value
-    return result
-
-
-def _invalid_constant(value):
-    raise RemoteToMError('non-JSON numeric constant')
-
-
-def decode_json_line(line):
-    if type(line) is not str or not line.endswith('\n') or '\n' in line[:-1] or '\r' in line:
-        raise RemoteToMError('expected exactly one newline-terminated JSON line')
-    try:
-        value = json.loads(line, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
-    except (ValueError, TypeError) as error:
-        raise RemoteToMError('malformed JSON response') from error
-    if type(value) is not dict:
-        raise RemoteToMError('expected JSON object')
-    return value
-
-
-def encode_json_line(record):
-    return canonical_json_bytes(record).decode('utf-8') + '\n'
 
 
 def build_request(opportunity, *, alive_wolves, worker_identity):
@@ -106,34 +50,7 @@ def build_request(opportunity, *, alive_wolves, worker_identity):
     }
     # Both bindings are planner-private: small wolf-seat sets are enumerable.
     # Never use them as public/Actor/agent-visible trace correlation IDs.
-    record['request_id'] = 'rtom-' + sha256_bytes(canonical_json_bytes(record))
-    record['request_digest'] = sha256_bytes(canonical_json_bytes(record))
-    return record
-
-
-def validate_response(response, request):
-    status = response.get('status')
-    shared = {'protocol_version', 'request_id', 'request_digest', 'status', 'worker_identity'}
-    required = shared | ({'selected_index', 'selected_plan'} if status == 'ok'
-                         else {'error_code', 'error_message'})
-    if status not in ('ok', 'error') or set(response) != required:
-        raise RemoteToMError('response schema mismatch')
-    for key in ('protocol_version', 'request_id', 'request_digest'):
-        if response[key] != request[key]:
-            raise RemoteToMError(f'response binding mismatch: {key}')
-    if response['worker_identity'] != request['expected_worker_identity']:
-        raise RemoteToMError('worker identity mismatch')
-    if status == 'error':
-        if any(type(response[k]) is not str or not response[k].strip() for k in ('error_code', 'error_message')):
-            raise RemoteToMError('malformed worker error')
-        # Do not reflect worker messages/private diagnostics into public logs.
-        raise RemoteToMError('worker reported execution failure')
-    index = response['selected_index']
-    if type(index) is not int or not 0 <= index < len(request['candidates']):
-        raise RemoteToMError('selected index out of range')
-    if response['selected_plan'] != request['candidates'][index]:
-        raise RemoteToMError('selected plan/index mismatch')
-    return index
+    return bind_request(record)
 
 
 class RemoteToMPlanProvider:

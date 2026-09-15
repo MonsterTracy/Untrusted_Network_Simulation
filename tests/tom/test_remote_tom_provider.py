@@ -19,7 +19,7 @@ from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 
 
 IDENTITY = r.WorkerIdentity('8886af9505036b55662d54ae9a108b09121e8c71',
-    'a'*40, '1'*64, '2'*64, '3'*64, '4'*64, '5'*64, 'implicit')  # Fixture worker HEAD/digests only.
+    'a'*64, '1'*64, '2'*64, '3'*64, '4'*64, '5'*64, 'implicit')  # Fixture adapter/runtime digests only.
 
 
 def opportunity(phase='discussion'):
@@ -29,7 +29,7 @@ def opportunity(phase='discussion'):
 def success(request):
     index = next(i for i, p in enumerate(request['candidates']) if p['action'] == 'NO_COMMITMENT')
     return dict(protocol_version=request['protocol_version'], request_id=request['request_id'],
-        request_digest=request['request_digest'], status='ok', selected_index=index,
+        request_digest=request['request_digest'], status='ok', selected_candidate_index=index,
         selected_plan=request['candidates'][index], worker_identity=request['expected_worker_identity'])
 
 
@@ -98,18 +98,18 @@ def test_worker_identity_mismatch(field):
 def test_invalid_response_fail_closed(case):
     def mutate(response):
         if case in ('negative', 'large', 'bool'):
-            response['selected_index'] = {'negative': -1, 'large': 999, 'bool': True}[case]
+            response['selected_candidate_index'] = {'negative': -1, 'large': 999, 'bool': True}[case]
         elif case == 'unknown_plan':
             response['selected_plan'] = {'action': 'vote_intent', 'target': 'player2'}
         elif case == 'index_plan':
-            response['selected_index'] = 0
+            response['selected_candidate_index'] = 0
         elif case == 'missing':
             del response['selected_plan']
         elif case in ('score', 'matrix'):
             response[case] = []
         else:
             response['status'] = 'error'
-            del response['selected_index'], response['selected_plan']
+            del response['selected_candidate_index'], response['selected_plan'], response['request_digest']
             response.update(error_code='INFERENCE_FAILED', error_message='private worker details')
     transport = FakeTransport(mutate)
     with pytest.raises(r.RemoteToMError) as exc:
@@ -218,11 +218,11 @@ def test_remote_success_does_not_expose_private_request_to_actor_or_trace():
         assert request['request_digest'] not in public_surfaces
 
 
-@pytest.mark.parametrize('field', ['planner_baseline_commit', 'worker_commit'])
-def test_both_git_identities_are_required_and_bound(field):
+@pytest.mark.parametrize('field', ['planner_baseline_commit', 'adapter_digest'])
+def test_baseline_and_adapter_identities_are_required_and_bound(field):
     op = opportunity()
     request = r.build_request(op, alive_wolves=(P[0],), worker_identity=IDENTITY)
-    changed = replace(IDENTITY, **{field: 'b'*40})
+    changed = replace(IDENTITY, **{field: 'b'*(40 if field == 'planner_baseline_commit' else 64)})
     other = r.build_request(op, alive_wolves=(P[0],), worker_identity=changed)
     assert request['expected_worker_identity'][field] == getattr(IDENTITY, field)
     assert request['request_id'] != other['request_id']
