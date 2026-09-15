@@ -92,7 +92,7 @@ class VerifiedRealization:
     perception: SpeechParseAuditResult
 
 
-def realize_parse_verify(payload, context, *, actor, perceiver, perception_context=None):
+def realize_parse_verify(payload, context, *, actor, perceiver, actor_context=None, perception_context=None):
     """Return speech and the same perception for a future commit adapter.
 
     Context must contain authentic public claims. Candidate eligibility belongs
@@ -105,9 +105,10 @@ def realize_parse_verify(payload, context, *, actor, perceiver, perception_conte
     expected = expected_action(payload, context.speaker)
     intent = actor_intent(payload, context.speaker)
     temperature, max_tokens = actor._request_limits()
-    speech = actor._generate_public_speech(
-        context.observation(), discussion_acts=intent, claim_catalog=context.claims,
-        temperature=temperature, max_tokens=max_tokens)
+    with nullcontext() if actor_context is None else actor_context:
+        speech = actor._generate_public_speech(
+            context.observation(), discussion_acts=intent, claim_catalog=context.claims,
+            temperature=temperature, max_tokens=max_tokens)
     with nullcontext() if perception_context is None else perception_context:
         perception = perceiver.parse_with_audit(
             speaker=PLAYER_IDS.index(context.speaker) + 1, speech=speech,

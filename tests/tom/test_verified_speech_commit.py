@@ -179,6 +179,42 @@ def test_envelope_fields_contain_no_planner_diagnostics():
         'model_id', 'perception', 'snapshot', 'digest'}
 
 
+@pytest.mark.parametrize("semantic_match", [True, False])
+def test_audited_contexts_are_sequential_and_exit_on_semantic_failure(semantic_match):
+    from werewolf.canonical_collection.call_audit import audited_backends
+    from werewolf.canonical_collection.trajectory_evidence import BackendCallPurpose
+    from scripts.speech_realization import SemanticVerificationError
+
+    env, recorder, backend = prepare()
+    handoff = pending(env, recorder)
+    audit = recorder.call_audit
+    speaker = f'player{env.current_act_idx + 1}'
+    payload = SpeechPlan(A.NO_COMMITMENT).public_payload()
+    actor, _ = actor_for(expected_action(payload, speaker))
+    actor.backend = audited_backends({'actor': actor.backend}, audit)['actor']
+    backend.perception_response = f'{speaker} | no_commitment | NONE' if semantic_match else 'NONE'
+    env.speech_perceiver.parse_with_audit = Mock(wraps=env.speech_perceiver.parse_with_audit)
+    before = len(audit.records)
+    if semantic_match:
+        realize_and_commit(payload, env=env, actor=actor, recorder=recorder)
+    else:
+        with pytest.raises(SemanticVerificationError):
+            realize_and_commit(payload, env=env, actor=actor, recorder=recorder)
+    calls = audit.records[before:]
+    assert [call.purpose for call in calls] == [
+        BackendCallPurpose.SPEECH_GENERATION, BackendCallPurpose.SPEECH_PERCEPTION]
+    assert all(call.boundary_id == handoff.boundary_id for call in calls)
+    assert env.speech_perceiver.parse_with_audit.call_count == 1
+    # Public context API proves cleanup without inspecting or changing _active.
+    with audit.action_context(acting_player_id=int(speaker[-1]),
+            boundary_id=handoff.boundary_id, is_public_speech=True):
+        # The no-nesting contract remains enforced after both outcomes.
+        with pytest.raises(RuntimeError, match='backend call contexts cannot be nested'):
+            with audit.speech_perception_context(event_id='cleanup-probe',
+                    boundary_id=handoff.boundary_id, speaker_id=int(speaker[-1])):
+                pytest.fail('nested context was accepted')
+
+
 @pytest.mark.parametrize("phase", ['speech', 'speech_pk'])
 def test_original_and_verified_env_semantics_and_progression_match(phase):
     left, _, _ = prepare(phase)

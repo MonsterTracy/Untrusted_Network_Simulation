@@ -25,12 +25,12 @@ def realize_and_commit(payload, *, env, actor, recorder):
     context = PublicRealizationContext(speaker, env.day,
         'discussion' if env.phase == 'speech' else 'pk_discussion',
         build_public_claim_catalog(env.get_observation()))
-    with recorder.call_audit.action_context(acting_player_id=env.current_act_idx + 1,
-            boundary_id=pending.handoff.boundary_id, is_public_speech=True):
-        realized = realize_parse_verify(payload, context, actor=actor, perceiver=env.speech_perceiver,
-            perception_context=recorder.call_audit.speech_perception_context(
-                event_id=f"event-{len(env.public_events):06d}",
-                boundary_id=pending.handoff.boundary_id, speaker_id=env.current_act_idx + 1))
+    realized = realize_parse_verify(payload, context, actor=actor, perceiver=env.speech_perceiver,
+        actor_context=recorder.call_audit.action_context(acting_player_id=env.current_act_idx + 1,
+            boundary_id=pending.handoff.boundary_id, is_public_speech=True),
+        perception_context=recorder.call_audit.speech_perception_context(
+            event_id=f"event-{len(env.public_events):06d}",
+            boundary_id=pending.handoff.boundary_id, speaker_id=env.current_act_idx + 1))
     envelope = bind_verified_speech(speech=realized.speech, expected=realized.expected,
         perception=realized.perception, day=context.day, phase=env.phase,
         public_history_digest=history_digest, perceiver=env.speech_perceiver)
