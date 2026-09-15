@@ -3,6 +3,7 @@
 No planner/ToM imports, cognition, environment commit, or semantic retry.
 """
 from dataclasses import dataclass
+from contextlib import nullcontext
 
 from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.agents.prompt_template_v0 import DiscussionAct, PublicClaim
@@ -91,7 +92,7 @@ class VerifiedRealization:
     perception: SpeechParseAuditResult
 
 
-def realize_parse_verify(payload, context, *, actor, perceiver):
+def realize_parse_verify(payload, context, *, actor, perceiver, perception_context=None):
     """Return speech and the same perception for a future commit adapter.
 
     Context must contain authentic public claims. Candidate eligibility belongs
@@ -107,8 +108,9 @@ def realize_parse_verify(payload, context, *, actor, perceiver):
     speech = actor._generate_public_speech(
         context.observation(), discussion_acts=intent, claim_catalog=context.claims,
         temperature=temperature, max_tokens=max_tokens)
-    perception = perceiver.parse_with_audit(
-        speaker=PLAYER_IDS.index(context.speaker) + 1, speech=speech,
-        day=context.day, phase=context.phase)
+    with nullcontext() if perception_context is None else perception_context:
+        perception = perceiver.parse_with_audit(
+            speaker=PLAYER_IDS.index(context.speaker) + 1, speech=speech,
+            day=context.day, phase=context.phase)
     verify_semantics(payload, context.speaker, perception)
     return VerifiedRealization(speech, expected, perception)

@@ -1,5 +1,5 @@
 import random
-from copy import deepcopy
+from copy import copy, deepcopy
 import json, os
 import numpy as np
 import gymnasium as gym
@@ -242,7 +242,42 @@ class WerewolfTextEnvV0(gym.Env):
         observation, reward, done, info = self.next_phase(action)
         return observation, reward, done, info
 
-    def next_phase(self, action):
+    def _stage_verified_speech(self, envelope):
+        from werewolf.speech.verified_commit import VerifiedSpeechCommit, perception_identity
+        if not isinstance(envelope, VerifiedSpeechCommit):
+            raise TypeError("expected VerifiedSpeechCommit")
+        audit = envelope.validated_perception()
+        if (self.phase not in ('speech', 'speech_pk')
+                or envelope.phase != self.phase or envelope.day != self.day
+                or envelope.expected.subject != normalize_player(self.current_act_idx + 1)
+                or envelope.public_history_digest != freeze_public_event_history(self.public_events).digest
+                or (envelope.backend_id, envelope.model_id) != perception_identity(self.speech_perceiver)):
+            raise ValueError("verified speech opportunity mismatch")
+        staged = copy(self)
+        # Only these fields can change along a speech -> next turn/vote step.
+        for name in ('public_events', 'speech_annotations', 'game_log', 'speech_queue', 'vote_queue'):
+            setattr(staged, name, deepcopy(getattr(self, name)))
+        result = staged.next_phase((self.phase, envelope.speech), _verified_audit=audit)
+        return staged, result
+
+    def _publish_verified_speech(self, staged):
+        self.__dict__.update(staged.__dict__)
+
+    def step_verified_speech(self, envelope):
+        """Explicit pre-parsed path; canonical recording uses the recorder wrapper."""
+        staged, result = self._stage_verified_speech(envelope)
+        self._mark_speech_annotation(staged.speech_annotations[-1])
+        self._publish_verified_speech(staged)
+        return result
+
+    def _mark_speech_annotation(self, annotation):
+        mark = getattr(getattr(self.speech_perceiver, "backend", None), "mark_semantic_attempt", None)
+        if callable(mark):
+            for attempt in annotation.attempts:
+                mark(attempt.call_id, success=attempt.status is not V1AnnotationStatus.ERROR,
+                     error_category=attempt.error_category, error_message=attempt.error_message)
+
+    def next_phase(self, action, *, _verified_audit=None):
         done = False
         reward = [0 for _ in range(self.n_player)]
         info = {}
@@ -354,7 +389,7 @@ class WerewolfTextEnvV0(gym.Env):
             if not isinstance(action_content, str):
                 raise TypeError("speech content must be text")
             raw_text = action_content
-            audit = self.speech_perceiver.parse_with_audit(
+            audit = _verified_audit if _verified_audit is not None else self.speech_perceiver.parse_with_audit(
                 speaker=self.current_act_idx + 1,
                 speech=raw_text,
                 day=self.day,
@@ -426,19 +461,8 @@ class WerewolfTextEnvV0(gym.Env):
                 attempts=tuple(attempts),
             )
             self.speech_annotations.append(annotation)
-            mark_semantic_attempt = getattr(
-                getattr(self.speech_perceiver, "backend", None),
-                "mark_semantic_attempt",
-                None,
-            )
-            if callable(mark_semantic_attempt):
-                for attempt in annotation.attempts:
-                    mark_semantic_attempt(
-                        attempt.call_id,
-                        success=attempt.status is not V1AnnotationStatus.ERROR,
-                        error_category=attempt.error_category,
-                        error_message=attempt.error_message,
-                    )
+            if _verified_audit is None:
+                self._mark_speech_annotation(annotation)
 
             if status is V1AnnotationStatus.ERROR:
                 raise V1SpeechPerceptionExhausted(annotation)

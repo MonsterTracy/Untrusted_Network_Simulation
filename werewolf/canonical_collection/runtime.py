@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -293,6 +293,32 @@ class CanonicalGameRecorder:
         if self._pending is None or self._pending.raw_action is not None:
             raise RuntimeError("runtime action has no unique pending slot")
         self._pending.raw_action = deepcopy(action)
+
+    def commit_verified_speech(self, env, envelope):
+        """Publish a verified speech against an already collected real PRE.
+
+        No recorder evidence is added unless the whole staged step validates.
+        """
+        pending = self._pending
+        if (self._env is not env or pending is None or pending.raw_action is not None
+                or pending.prefix is None or pending.handoff is None
+                or pending.actor_id != envelope.expected.subject
+                or pending.event_count_before != len(env.public_events)
+                or pending.prefix.public_event_history.digest != envelope.public_history_digest):
+            raise ValueError("verified commit requires matching pending speech PRE")
+        staged_env, result = env._stage_verified_speech(envelope)
+        staged = copy(self)
+        staged._pending = deepcopy(pending)
+        staged.submitted_gameplay_actions = list(self.submitted_gameplay_actions)
+        staged._raw_actions = deepcopy(self._raw_actions)
+        staged.after_agent_act((env.phase, envelope.speech))
+        staged.after_env_step(staged_env, observation_after=result[0], terminal_after=result[2])
+        env._mark_speech_annotation(staged_env.speech_annotations[-1])
+        env._publish_verified_speech(staged_env)
+        self._pending = staged._pending
+        self.submitted_gameplay_actions = staged.submitted_gameplay_actions
+        self._raw_actions = staged._raw_actions
+        return result
 
     def after_env_step(self, env, *, observation_after, terminal_after) -> None:
         del observation_after, terminal_after
