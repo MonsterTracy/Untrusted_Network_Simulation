@@ -95,9 +95,11 @@ def test_six_actions_four_layers_and_single_perception(action):
     expected = expected_action(plan.public_payload(), speaker)
     continuation = build_continuation(
         recorder._pending.prefix, plan.for_speaker(speaker), capacity=CAPACITY)
-    assert continuation.tokens[-2].speaker == expected.subject
-    assert continuation.tokens[-2].action == expected.action
-    assert continuation.tokens[-2].target == expected.object
+    semantic = continuation.tokens[-2]
+    assert semantic.token_type == "speech_action"
+    assert semantic.source == expected.subject
+    assert semantic.action == expected.action
+    assert semantic.target == expected.object
     backend.perception_response = response_for(expected)
     env.speech_perceiver.parse_with_audit = Mock(wraps=env.speech_perceiver.parse_with_audit)
     actor, text = actor_for(expected)
