@@ -20,13 +20,13 @@ from werewolf.structured_history import (
 )
 from werewolf.tom.dataset import ExperimentCapacity, PublicTensors, tensorize_public_pre
 from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
+from scripts.speech_versions import QUEUE_RULE_VERSION
 
 
 CONSUMER_SCHEMA_VERSION = "counterfactual_tom_consumer_v1"
 CONSUMER_IMPLEMENTATION_VERSION = "counterfactual_tom_consumer_2"
 BUILDER_VERSION = "same_phase_semantic_continuation_v2"
 CONTINUATION_SCHEMA_VERSION = "counterfactual_speech_continuation_v2"
-QUEUE_RULE_VERSION = "classic7_public_cyclic_seat_order_v1"
 
 
 class UnsupportedOpportunityError(ValueError):

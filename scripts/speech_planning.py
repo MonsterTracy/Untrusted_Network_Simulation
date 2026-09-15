@@ -9,9 +9,9 @@ from scripts.counterfactual_tom import (
 )
 from scripts.suspicion_objectives import WolfSuspicionMass, wolf_suspicion_mass
 from werewolf.canonical_collection.public_history import PLAYER_IDS
+from scripts.speech_versions import CANDIDATE_ORDER_VERSION
 
 
-CANDIDATE_ORDER_VERSION = "speech_plan_action_then_seat_v1"
 SELECTOR_VERSION = "alive_conditional_argmin_exact_tie_v1"
 # Frozen Phase 1 enum declaration order, then canonical player seat order.
 ACTION_ORDER = tuple(PlanningAction)
