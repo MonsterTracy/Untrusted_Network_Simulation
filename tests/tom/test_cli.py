@@ -6,7 +6,8 @@ def test_scientific_lifecycle_commands_and_isolated_capacity_check():
     parser = build_parser()
     commands = parser._subparsers._group_actions[0].choices
     assert set(commands) == {"collect", "publish-development", "prepare-experiment", "run-development-oof", "validate-artifact", "capacity-check", "prepare-final-experiment", "run-final-fit",
-        "seal-final-models", "publish-final-evaluation", "run-final-evaluation"}
+        "seal-final-models", "publish-final-evaluation", "run-final-evaluation",
+        "prepare-paper-study-contract", "prepare-observer-agnostic-initial"}
     for command in commands.values():
         options = {option for action in command._actions for option in action.option_strings}
         assert not options & {"--scope", "--population", "--pilot", "--private", "--resume-step", "--test", "--best", "--backbone"}
