@@ -23,6 +23,13 @@ def build_parser():
     initial.add_argument("--experiment", type=Path, required=True)
     initial.add_argument("--fold", type=int, choices=range(5), required=True)
     initial.add_argument("--destination", type=Path, required=True)
+    paper = commands.add_parser("prepare-paper-tom-study")
+    paper.add_argument("--study-contract", type=Path, required=True)
+    paper.add_argument("--publication", type=Path, required=True)
+    paper.add_argument("--protocol", type=Path, required=True)
+    paper.add_argument("--destination", type=Path, required=True)
+    paper_run = commands.add_parser("run-paper-tom-study")
+    paper_run.add_argument("--study", type=Path, required=True)
     collect = commands.add_parser("collect")
     collect.add_argument("--plan", type=Path, required=True)
     collect.add_argument("--runtime-config", type=Path, required=True)
@@ -201,6 +208,19 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command in {"prepare-paper-tom-study", "run-paper-tom-study"}:
+        from werewolf.tom.paper_study_execution import prepare_study, run_study
+        if args.command == "prepare-paper-tom-study":
+            from werewolf.development_publication import open_publication
+            from werewolf.tom.experiment import ExperimentConfig
+            publication = open_publication(_artifact_path(root, args.publication, "publications"))
+            config = ExperimentConfig(**json.loads(args.protocol.read_bytes()))
+            study = prepare_study(_artifact_path(root, args.study_contract), publication, config,
+                                  _artifact_path(root, args.destination))
+            print(study.artifact.manifest_digest)
+        else:
+            print(run_study(_artifact_path(root, args.study))["record_digest"])
+        return 0
     if args.command in {"prepare-paper-study-contract", "prepare-observer-agnostic-initial"}:
         from werewolf.tom.paper_study import prepare_contract, open_contract
         destination = _artifact_path(root, args.destination)
