@@ -382,6 +382,10 @@ def _terminal_entries(study, *, recovery):
     for experiment in (study.full, study.agnostic):
         if experiment.runs_path.exists():
             for path in experiment.runs_path.iterdir():
+                # Only the sealed Full branch may own existing formal evaluation outputs.
+                if study.seal_path.is_file() and experiment is study.full and path.name in {
+                        "checkpoint_set_manifest.json", "reports"}:
+                    continue
                 if path.name not in TEMPORAL_CONDITIONS or not path.is_dir():
                     raise ValueError("unexpected study run entry")
                 if any(p.name not in {str(f) for f in range(5)} or not p.is_dir() for p in path.iterdir()):
@@ -392,6 +396,9 @@ def _terminal_entries(study, *, recovery):
         if lineage.exists():
             allowed = {"study_lineage.json", "training_manifest.json", "training_log.jsonl",
                        "run_provenance.json", "terminal_checkpoint", "recovery", "failure.json"}
+            if study.seal_path.is_file() and family == FAMILIES[0]:
+                allowed |= {"prediction_manifest.json", "held_out_predictions.jsonl",
+                            "primary_development_oof", "all_alive_identifiability_stress"}
             if any(p.name not in allowed and not p.name.startswith(".") for p in lineage.iterdir()):
                 raise ValueError("unexpected study lineage entry")
         terminal = _verify_terminal(study, family, condition, fold, recovery=recovery)

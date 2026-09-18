@@ -30,6 +30,8 @@ def build_parser():
     paper.add_argument("--destination", type=Path, required=True)
     paper_run = commands.add_parser("run-paper-tom-study")
     paper_run.add_argument("--study", type=Path, required=True)
+    paper_evaluate = commands.add_parser("evaluate-paper-tom-study")
+    paper_evaluate.add_argument("--study", type=Path, required=True)
     collect = commands.add_parser("collect")
     collect.add_argument("--plan", type=Path, required=True)
     collect.add_argument("--runtime-config", type=Path, required=True)
@@ -208,6 +210,10 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command == "evaluate-paper-tom-study":
+        from werewolf.tom.paper_study_evaluation import evaluate_study
+        print(evaluate_study(_artifact_path(root, args.study)).manifest_digest)
+        return 0
     if args.command in {"prepare-paper-tom-study", "run-paper-tom-study"}:
         from werewolf.tom.paper_study_execution import prepare_study, run_study
         if args.command == "prepare-paper-tom-study":
