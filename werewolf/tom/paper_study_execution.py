@@ -133,7 +133,6 @@ def prepare_study(contract_path, publication, config, destination):
     c = contract.manifest["contract"]
     source = contract.manifest["source"]
     if (publication.public_view.publication_id != c["publication_id"]
-            or config.source_revision != source["source_revision"]
             or config.bootstrap_replicates != c["bootstrap"]["replicates"]
             or config.confidence_level != c["bootstrap"]["confidence"]):
         raise ValueError("paper study publication/config binding mismatch")
@@ -166,7 +165,6 @@ def open_study(path):
     validate_runtime(full)
     source = contract.manifest["source"]
     if (contract.manifest_digest != m["contract_digest"] or full.digest != m["full_experiment_digest"]
-            or full.config.source_revision != source["source_revision"]
             or full.manifest["runtime"]["implementation_digest"] != source["implementation_digest"]
             or full.manifest["publication_id"] != contract.manifest["contract"]["publication_id"]
             or full.config.bootstrap_replicates != contract.manifest["contract"]["bootstrap"]["replicates"]

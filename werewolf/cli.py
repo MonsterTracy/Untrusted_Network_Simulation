@@ -18,11 +18,6 @@ def build_parser():
     study = commands.add_parser("prepare-paper-study-contract")
     study.add_argument("--config", type=Path, required=True)
     study.add_argument("--destination", type=Path, required=True)
-    initial = commands.add_parser("prepare-observer-agnostic-initial")
-    initial.add_argument("--study-contract", type=Path, required=True)
-    initial.add_argument("--experiment", type=Path, required=True)
-    initial.add_argument("--fold", type=int, choices=range(5), required=True)
-    initial.add_argument("--destination", type=Path, required=True)
     paper = commands.add_parser("prepare-paper-tom-study")
     paper.add_argument("--study-contract", type=Path, required=True)
     paper.add_argument("--publication", type=Path, required=True)
@@ -227,26 +222,9 @@ def main(argv=None):
         else:
             print(run_study(_artifact_path(root, args.study))["record_digest"])
         return 0
-    if args.command in {"prepare-paper-study-contract", "prepare-observer-agnostic-initial"}:
-        from werewolf.tom.paper_study import prepare_contract, open_contract
-        destination = _artifact_path(root, args.destination)
-        if args.command == "prepare-paper-study-contract":
-            artifact = prepare_contract(args.config, destination)
-        else:
-            from werewolf.tom.experiment import open_experiment
-            from werewolf.tom.observer_agnostic_state import publish_initial_state
-            contract = open_contract(_artifact_path(root, args.study_contract))
-            experiment = open_experiment(_experiment_path(root, args.experiment))
-            if experiment.manifest["publication_id"] != contract.manifest["contract"]["publication_id"]:
-                raise ValueError("paper study publication identity mismatch")
-            source = contract.manifest["source"]
-            if (experiment.config.source_revision != source["source_revision"]
-                    or experiment.manifest["runtime"]["source_revision"] != source["source_revision"]
-                    or experiment.manifest["runtime"]["implementation_digest"] != source["implementation_digest"]):
-                raise ValueError("Full initial experiment source differs from paper study")
-            artifact = publish_initial_state(experiment.path / "folds" / str(args.fold) / "initial_state",
-                experiment.fold(args.fold)["paired_initial_state_digest"], destination,
-                initialization_seed=experiment.config.initialization_seed, fold=args.fold).artifact
+    if args.command == "prepare-paper-study-contract":
+        from werewolf.tom.paper_study import prepare_contract
+        artifact = prepare_contract(args.config, _artifact_path(root, args.destination))
         print(artifact.manifest_digest)
         return 0
     if args.command in {"prepare-final-experiment", "run-final-fit", "seal-final-models", "publish-final-evaluation", "run-final-evaluation"}:

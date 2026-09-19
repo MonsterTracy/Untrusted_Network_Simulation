@@ -40,6 +40,75 @@ def source_attestation(monkeypatch):
     monkeypatch.setattr(m, 'open_contract', synthetic_contract)
 
 
+def test_scientific_revision_is_separate_from_execution_attestation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from werewolf.tom import paper_study as contracts
+
+    _, handles = _publication(tmp_path)
+    config = replace(experiment_config(handles.public.public_view.max_structured_token_count),
+                     bootstrap_replicates=10000, source_revision='old-scientific-revision')
+    design = deepcopy(CONTRACT)
+    design['publication_id'] = handles.public.public_view.publication_id
+    monkeypatch.setattr(contracts, 'CONTRACT', design)
+    # Only the external Git attestation is synthetic. Do not replace open_contract:
+    # its real HEAD/digest checks must run in both lifecycle entry points.
+    source = {'source_revision': 'current-execution-revision',
+              'implementation_digest': runtime_provenance(config)['implementation_digest']}
+    monkeypatch.setattr(contracts, 'attest_source', lambda: dict(source))
+    monkeypatch.setattr(m, 'open_contract', contracts.open_contract)
+    design_path = tmp_path/'design.json'
+    design_path.write_bytes(canonical_json_bytes(design))
+    protocol_path = tmp_path/'protocol.json'
+    protocol_bytes = canonical_json_bytes(asdict(config))
+    protocol_path.write_bytes(protocol_bytes)
+    contract = contracts.prepare_contract(design_path, tmp_path/'contract')
+    study = m.prepare_study(contract.path, handles.public, config, tmp_path/'study')
+    reopened = m.open_study(study.artifact.path)
+    assert reopened.artifact.manifest_digest == study.artifact.manifest_digest
+    assert reopened.full.config.source_revision == 'old-scientific-revision'
+    assert reopened.full.manifest['runtime']['source_revision'] == 'old-scientific-revision'
+    assert contract.manifest['source']['source_revision'] == 'current-execution-revision'
+    assert reopened.full.manifest['runtime']['implementation_digest'] == source['implementation_digest']
+
+    for field, wrong, message in (
+        ('source_revision', 'different-execution-revision', 'current HEAD'),
+        ('implementation_digest', '0'*64, 'implementation digest')):
+        with monkeypatch.context() as patch:
+            patch.setattr(contracts, 'attest_source', lambda: {**source, field: wrong})
+            with pytest.raises(ValueError, match=message):
+                m.open_study(study.artifact.path)
+            with pytest.raises(ValueError, match=message):
+                m.prepare_study(contract.path, handles.public, config, tmp_path/'rejected')
+            assert not (tmp_path/'rejected').exists()
+
+    def corrupt_runtime(value):
+        value['runtime']['implementation_digest'] = '0'*64
+    with rewritten(study.full.path/'experiment_manifest.json', corrupt_runtime, 'manifest_digest'):
+        with pytest.raises(ValueError):
+            m.open_study(study.artifact.path)
+    with monkeypatch.context() as patch:
+        runtime = {**study.full.manifest['runtime'], 'implementation_digest': '0'*64}
+        patch.setattr(m, 'prepare_experiment', lambda *a: SimpleNamespace(manifest={'runtime': runtime}))
+        with pytest.raises(ValueError, match='implementation binding mismatch'):
+            m.prepare_study(contract.path, handles.public, config, tmp_path/'bad-runtime')
+        assert not (tmp_path/'bad-runtime/execution').exists()
+
+    with pytest.raises(ValueError, match='publication/config binding'):
+        m.prepare_study(contract.path, handles.public, replace(config, bootstrap_replicates=9999),
+                        tmp_path/'bad-control')
+    def corrupt_publication(value):
+        value['contract']['publication_id'] = 'different-publication'
+    with monkeypatch.context() as patch:
+        patch.setattr(contracts, 'CONTRACT', {**design, 'publication_id': 'different-publication'})
+        with rewritten(contract.path/'manifest.json', corrupt_publication, 'manifest_digest'):
+            with pytest.raises(ValueError, match='publication/config binding'):
+                m.prepare_study(contract.path, handles.public, config, tmp_path/'bad-publication')
+            with pytest.raises(ValueError, match='parent/source/control'):
+                m.open_study(study.artifact.path)
+    assert protocol_path.read_bytes() == protocol_bytes
+    assert config.source_revision == 'old-scientific-revision'
+
+
 @pytest.fixture(scope='module')
 def completed(tmp_path_factory):
     with pytest.MonkeyPatch.context() as patch:

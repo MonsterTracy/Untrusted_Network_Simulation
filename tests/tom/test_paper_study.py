@@ -88,36 +88,6 @@ def test_formal_cli_contract_path(tmp_path,monkeypatch,capsys):
     assert len(capsys.readouterr().out.strip())==64
 
 
-@pytest.mark.parametrize('mismatch', [False, True])
-def test_initial_cli_binds_full_source_before_construction(tmp_path,monkeypatch,capsys,mismatch):
-    from werewolf.cli import main
-    from werewolf.tom import experiment as experiments, observer_agnostic_state as states
-    mock_git(monkeypatch)
-    contract=m.prepare_contract(ROOT/'configs/paper/tom-study-v1.json',tmp_path/'contract')
-    profile=tmp_path/'storage.json'; profile.write_text(json.dumps({'artifact_root':str(tmp_path)}))
-    path=tmp_path/'experiments/full/experiments/experiment'
-    experiment=SimpleNamespace(path=path,
-        config=SimpleNamespace(source_revision=REV,initialization_seed=101),
-        manifest={'publication_id':m.CONTRACT['publication_id'], 'runtime':{
-            'source_revision':REV, 'implementation_digest':('b'*64 if mismatch else contract.manifest['source']['implementation_digest'])}},
-        fold=lambda index: {'paired_initial_state_digest':'c'*64})
-    monkeypatch.setattr(experiments,'open_experiment',lambda p: experiment)
-    calls=[]
-    def publish(parent,digest,destination,**kwargs):
-        calls.append((parent,digest,destination,kwargs))
-        return SimpleNamespace(artifact=SimpleNamespace(manifest_digest='d'*64))
-    monkeypatch.setattr(states,'publish_initial_state',publish)
-    args=['--storage-profile',str(profile),'prepare-observer-agnostic-initial',
-        '--study-contract','contract','--experiment',str(path),'--fold','2','--destination','initial']
-    if mismatch:
-        with pytest.raises(ValueError,match='source differs'): main(args)
-        assert not calls
-    else:
-        assert main(args)==0
-        assert calls==[(path/'folds/2/initial_state','c'*64,tmp_path/'initial',{'initialization_seed':101,'fold':2})]
-        assert capsys.readouterr().out.strip()=='d'*64
-
-
 @pytest.fixture
 def synthetic_git(tmp_path,monkeypatch):
     import os
