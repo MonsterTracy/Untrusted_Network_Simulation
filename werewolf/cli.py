@@ -15,6 +15,12 @@ def build_parser():
     parser.add_argument("--storage-profile", type=Path, default=os.environ.get("UNS_STORAGE_PROFILE"),
         help="explicit deployment JSON path (or UNS_STORAGE_PROFILE)")
     commands = parser.add_subparsers(dest="command", required=True)
+    backbone = commands.add_parser("prepare-backbone-tom-study")
+    backbone.add_argument("--config", type=Path, required=True)
+    backbone.add_argument("--publication", type=Path, required=True)
+    backbone.add_argument("--destination", type=Path, required=True)
+    backbone_open = commands.add_parser("open-backbone-tom-study")
+    backbone_open.add_argument("--study", type=Path, required=True)
     study = commands.add_parser("prepare-paper-study-contract")
     study.add_argument("--config", type=Path, required=True)
     study.add_argument("--destination", type=Path, required=True)
@@ -205,6 +211,16 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command in {"prepare-backbone-tom-study", "open-backbone-tom-study"}:
+        from werewolf.tom.backbone_study import prepare_study, open_study
+        if args.command == "prepare-backbone-tom-study":
+            artifact = prepare_study(args.config,
+                _artifact_path(root, args.publication, "publications"),
+                _artifact_path(root, args.destination))
+        else:
+            artifact = open_study(_artifact_path(root, args.study))
+        print(artifact.manifest_digest)
+        return 0
     if args.command == "evaluate-paper-tom-study":
         from werewolf.tom.paper_study_evaluation import evaluate_study
         print(evaluate_study(_artifact_path(root, args.study)).manifest_digest)
