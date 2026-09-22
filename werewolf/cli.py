@@ -15,6 +15,16 @@ def build_parser():
     parser.add_argument("--storage-profile", type=Path, default=os.environ.get("UNS_STORAGE_PROFILE"),
         help="explicit deployment JSON path (or UNS_STORAGE_PROFILE)")
     commands = parser.add_subparsers(dest="command", required=True)
+    execution = commands.add_parser("prepare-backbone-tom-execution")
+    execution.add_argument("--study", type=Path, required=True)
+    execution.add_argument("--prepared-manifest-digest", required=True)
+    execution.add_argument("--engineering", action="store_true")
+    backbone_run = commands.add_parser("run-backbone-tom-study")
+    backbone_run.add_argument("--execution", type=Path, required=True)
+    backbone_run.add_argument("--architecture", choices=("gpt2", "qwen2", "qwen3", "gemma3_text"), required=True)
+    backbone_run.add_argument("--fold", type=int, choices=range(5), required=True)
+    backbone_seal = commands.add_parser("seal-backbone-tom-study")
+    backbone_seal.add_argument("--execution", type=Path, required=True)
     backbone = commands.add_parser("prepare-backbone-tom-study")
     backbone.add_argument("--config", type=Path, required=True)
     backbone.add_argument("--publication", type=Path, required=True)
@@ -211,6 +221,17 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command in {"prepare-backbone-tom-execution", "run-backbone-tom-study", "seal-backbone-tom-study"}:
+        from werewolf.tom.backbone_execution import create_execution, run_lineage, seal_execution
+        if args.command == "prepare-backbone-tom-execution":
+            execution = create_execution(_artifact_path(root, args.study), args.prepared_manifest_digest,
+                                         engineering=args.engineering)
+            print(json.dumps({"execution": str(execution.root), "digest": execution.artifact.manifest_digest}))
+        elif args.command == "run-backbone-tom-study":
+            print(json.dumps(run_lineage(_artifact_path(root, args.execution), args.architecture, args.fold)))
+        else:
+            print(seal_execution(_artifact_path(root, args.execution)).manifest_digest)
+        return 0
     if args.command in {"prepare-backbone-tom-study", "open-backbone-tom-study"}:
         from werewolf.tom.backbone_study import prepare_study, open_study
         if args.command == "prepare-backbone-tom-study":

@@ -9,6 +9,7 @@ def test_scientific_lifecycle_commands_and_isolated_capacity_check():
         "seal-final-models", "publish-final-evaluation", "run-final-evaluation",
         "prepare-paper-study-contract",
         "prepare-backbone-tom-study", "open-backbone-tom-study",
+        "prepare-backbone-tom-execution", "run-backbone-tom-study", "seal-backbone-tom-study",
         "prepare-paper-tom-study", "run-paper-tom-study", "evaluate-paper-tom-study"}
     for command in commands.values():
         options = {option for action in command._actions for option in action.option_strings}
