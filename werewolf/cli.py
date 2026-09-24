@@ -25,6 +25,17 @@ def build_parser():
     backbone_run.add_argument("--fold", type=int, choices=range(5), required=True)
     backbone_seal = commands.add_parser("seal-backbone-tom-study")
     backbone_seal.add_argument("--execution", type=Path, required=True)
+    backbone_evaluation = commands.add_parser("prepare-backbone-tom-evaluation")
+    backbone_evaluation.add_argument("--execution", type=Path, required=True)
+    backbone_evaluation.add_argument("--execution-digest", required=True)
+    backbone_evaluation.add_argument("--seal-digest", required=True)
+    backbone_evaluation.add_argument("--training-revision", required=True)
+    backbone_predict = commands.add_parser("evaluate-backbone-tom-fold")
+    backbone_predict.add_argument("--evaluation", type=Path, required=True)
+    backbone_predict.add_argument("--architecture", choices=("gpt2", "qwen2", "qwen3", "gemma3_text"), required=True)
+    backbone_predict.add_argument("--fold", type=int, choices=range(5), required=True)
+    backbone_report = commands.add_parser("seal-backbone-tom-evaluation")
+    backbone_report.add_argument("--evaluation", type=Path, required=True)
     backbone = commands.add_parser("prepare-backbone-tom-study")
     backbone.add_argument("--config", type=Path, required=True)
     backbone.add_argument("--publication", type=Path, required=True)
@@ -221,6 +232,17 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command in {"prepare-backbone-tom-evaluation", "evaluate-backbone-tom-fold", "seal-backbone-tom-evaluation"}:
+        from werewolf.tom.backbone_evaluation import prepare_evaluation, evaluate_fold, seal_evaluation
+        if args.command == "prepare-backbone-tom-evaluation":
+            artifact = prepare_evaluation(_artifact_path(root, args.execution), args.execution_digest,
+                                          args.seal_digest, args.training_revision)
+        elif args.command == "evaluate-backbone-tom-fold":
+            artifact = evaluate_fold(_artifact_path(root, args.evaluation), args.architecture, args.fold)
+        else:
+            artifact = seal_evaluation(_artifact_path(root, args.evaluation))
+        print(artifact.manifest_digest)
+        return 0
     if args.command in {"prepare-backbone-tom-execution", "run-backbone-tom-study", "seal-backbone-tom-study"}:
         from werewolf.tom.backbone_execution import create_execution, run_lineage, seal_execution
         if args.command == "prepare-backbone-tom-execution":
