@@ -42,6 +42,18 @@ def build_parser():
     backbone.add_argument("--destination", type=Path, required=True)
     backbone_open = commands.add_parser("open-backbone-tom-study")
     backbone_open.add_argument("--study", type=Path, required=True)
+    qwen3_prepare = commands.add_parser("prepare-qwen3-final-fit")
+    qwen3_prepare.add_argument("--study", type=Path, required=True)
+    qwen3_prepare.add_argument("--study-digest", required=True)
+    qwen3_prepare.add_argument("--publication", type=Path, required=True)
+    qwen3_prepare.add_argument("--destination", type=Path, required=True)
+    qwen3_run = commands.add_parser("run-qwen3-final-fit")
+    qwen3_run.add_argument("--experiment", type=Path, required=True)
+    qwen3_run.add_argument("--resume", action="store_true")
+    qwen3_seal = commands.add_parser("seal-qwen3-final-fit")
+    qwen3_seal.add_argument("--experiment", type=Path, required=True)
+    qwen3_validate = commands.add_parser("validate-qwen3-final-fit")
+    qwen3_validate.add_argument("--experiment", type=Path, required=True)
     study = commands.add_parser("prepare-paper-study-contract")
     study.add_argument("--config", type=Path, required=True)
     study.add_argument("--destination", type=Path, required=True)
@@ -232,6 +244,27 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command in {"prepare-qwen3-final-fit", "run-qwen3-final-fit",
+                        "seal-qwen3-final-fit", "validate-qwen3-final-fit"}:
+        from werewolf.tom.qwen3_final import open_fit, prepare, run, seal, verify_seal
+        if args.command == "prepare-qwen3-final-fit":
+            fit = prepare(_artifact_path(root, args.publication, "publications"),
+                _artifact_path(root, args.study), args.study_digest,
+                _experiment_path(root, args.destination))
+            identity = fit.digest
+        else:
+            fit = open_fit(_experiment_path(root, args.experiment))
+            _artifact_path(root, fit.manifest["publication_path"])
+            _artifact_path(root, fit.manifest["study_path"])
+            _artifact_path(root, fit.runs_path)
+            if args.command == "run-qwen3-final-fit":
+                identity = run(fit, resume=args.resume).manifest_digest
+            elif args.command == "seal-qwen3-final-fit":
+                identity = seal(fit).manifest_digest
+            else:
+                identity = verify_seal(fit).manifest_digest
+        print(identity)
+        return 0
     if args.command in {"prepare-backbone-tom-evaluation", "evaluate-backbone-tom-fold", "seal-backbone-tom-evaluation"}:
         from werewolf.tom.backbone_evaluation import prepare_evaluation, evaluate_fold, seal_evaluation
         if args.command == "prepare-backbone-tom-evaluation":
