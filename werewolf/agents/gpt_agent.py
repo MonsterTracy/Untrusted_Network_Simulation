@@ -74,6 +74,7 @@ class GPTAgent(LLMAgent):
         observation,
         *,
         pre_speech_belief,
+        tom_context=None,
     ):
         """Generate speech from the exact immutable PRE self-report."""
 
@@ -91,12 +92,15 @@ class GPTAgent(LLMAgent):
             raise ValueError("PRE-belief observer does not match current speaker")
         if "speech" not in observation.get("phase", ""):
             raise ValueError("PRE-belief handoff is only valid for speech")
+        if tom_context is not None and (not isinstance(tom_context, str) or not tom_context):
+            raise TypeError("ToM context must be non-empty text")
         return self._act(
             observation,
             pre_speech_belief=pre_speech_belief,
+            tom_context=tom_context,
         )
 
-    def _act(self, observation, *, pre_speech_belief):
+    def _act(self, observation, *, pre_speech_belief, tom_context=None):
         phase = observation["phase"]
         is_speech = "speech" in phase
         speech_kind = "speech_pk" if "speech_pk" in phase else "speech"
@@ -117,6 +121,7 @@ class GPTAgent(LLMAgent):
                 self._generate_day_cognition(
                     observation,
                     pre_speech_belief=pre_speech_belief,
+                    tom_context=tom_context,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
@@ -255,6 +260,7 @@ class GPTAgent(LLMAgent):
         observation,
         *,
         pre_speech_belief,
+        tom_context=None,
         temperature,
         max_tokens,
     ):
@@ -263,6 +269,7 @@ class GPTAgent(LLMAgent):
             generate=lambda attempt, _last_error: self._generate_day_cognition_once(
                 observation,
                 pre_speech_belief=pre_speech_belief,
+                tom_context=tom_context,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 attempt=attempt,
@@ -274,6 +281,7 @@ class GPTAgent(LLMAgent):
         observation,
         *,
         pre_speech_belief,
+        tom_context=None,
         temperature,
         max_tokens,
         attempt,
@@ -288,6 +296,7 @@ class GPTAgent(LLMAgent):
             candidate_snapshot=candidate_snapshot,
             claim_catalog=claim_catalog,
             pre_speech_belief=pre_speech_belief,
+            tom_context=tom_context,
         )
         content, metadata = self._chat_with_metadata(
             [{"role": "user", "content": prompt}],

@@ -26,8 +26,12 @@ def _act_at_boundary(
     acting_agent,
     observation,
     pre_speech_belief,
+    *,
+    tom_context=None,
 ):
     if pre_speech_belief is None:
+        if tom_context is not None:
+            raise TypeError("speech ToM context requires a PRE-belief handoff")
         return acting_agent.act(observation)
     belief_aware_act = getattr(
         acting_agent,
@@ -38,19 +42,25 @@ def _act_at_boundary(
         raise TypeError(
             "speech agent must support immutable PRE-belief cognition handoff"
         )
-    return belief_aware_act(
-        observation,
-        pre_speech_belief=pre_speech_belief,
-    )
+    if tom_context is not None:
+        return belief_aware_act(
+            observation,
+            pre_speech_belief=pre_speech_belief,
+            tom_context=tom_context,
+        )
+    return belief_aware_act(observation, pre_speech_belief=pre_speech_belief)
 
 
 def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
-         planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None):
+         planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
+         wolf_speech_tom=None):
     """Execute one game exclusively through canonical evidence construction."""
     if canonical_recorder is None or call_audit is None:
         raise TypeError("canonical recorder and call audit are required")
     if planning_mode not in ('original', 'constrained'):
         raise ValueError("unsupported planning mode")
+    if wolf_speech_tom is not None and (not callable(wolf_speech_tom) or planning_mode != 'original'):
+        raise TypeError("wolf speech ToM requires an original-mode callable")
     if planning_mode == 'constrained':
         from scripts.constrained_speech import SpeechTreatment, handle_speech
         if not callable(plan_provider) or type(ablation_trace) is not list:
@@ -84,7 +94,23 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                     continue
             with call_audit.action_context(acting_player_id=actor,
                     boundary_id=handoff.boundary_id if handoff else None, is_public_speech=is_speech):
-                action = _act_at_boundary(agent_list[actor - 1], observation, handoff)
+                if (wolf_speech_tom is not None and is_speech
+                        and observation.get("identity") == "Werewolf"
+                        and actor in observation["authoritative_public_state"]["alive_players"]):
+                    if handoff is None:
+                        raise ValueError("wolf speech ToM requires a PRE-belief handoff")
+                    prefix = canonical_recorder._pending.prefix
+                    if (prefix is None or prefix.boundary_id != handoff.boundary_id
+                            or prefix.prefix_digest != handoff.prefix_digest
+                            or prefix.current_speaker != handoff.observer_id):
+                        raise ValueError("wolf speech ToM PRE/handoff mismatch")
+                    tom_context = wolf_speech_tom(prefix, observation)
+                    if not isinstance(tom_context, str) or not tom_context:
+                        raise ValueError("wolf speech ToM context must be non-empty text")
+                    action = _act_at_boundary(agent_list[actor - 1], observation, handoff,
+                                              tom_context=tom_context)
+                else:
+                    action = _act_at_boundary(agent_list[actor - 1], observation, handoff)
             canonical_recorder.after_agent_act(action)
             context = call_audit.speech_perception_context(
                 event_id=f"event-{len(env.public_events):06d}",

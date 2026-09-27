@@ -1005,6 +1005,7 @@ def build_day_cognition_prompt(
     candidate_snapshot,
     claim_catalog,
     pre_speech_belief,
+    tom_context=None,
 ):
     """Select public discussion intent from one frozen PRE belief."""
 
@@ -1043,9 +1044,20 @@ Use it as the fixed private wolf-suspicion support for this cognition; do not
 regenerate, add, delete or reinterpret its entries. Internal belief and public
 communication may strategically differ, so it does not force a matching public
 claim or vote stance."""
+    tom_block = ""
+    if tom_context is not None:
+        if not isinstance(tom_context, str) or not tom_context:
+            raise TypeError("ToM context must be non-empty text")
+        tom_block = (
+            "\n\nPRIVATE ToM INFORMATION\n"
+            "Each row gives the model-predicted distribution of the named observer's\n"
+            "suspected_werewolves self-report over target_ids.\n"
+            "These values are not ground-truth role probabilities.\n"
+            + tom_context
+        )
     return f"""{context}
 
-{pre_speech_belief_block}
+{pre_speech_belief_block}{tom_block}
 
 DISCUSSION ACTION SEMANTICS
 {_render_discussion_action_glossary()}
