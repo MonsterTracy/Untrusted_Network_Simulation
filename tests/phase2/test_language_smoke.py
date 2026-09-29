@@ -1,6 +1,9 @@
 """Offline smoke-runner tests; no real model, game, or server is used."""
 
 from dataclasses import dataclass
+import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -59,6 +62,7 @@ def test_deterministic_58_case_layout_and_pk_probe_exhaustion():
     pk_probe = [c for c in first if c.context.phase == "speech_pk" and c.action is Action.PROBE]
     assert {c.pre_identity for c in pk_probe} == {c.pre_identity for c in eligible if c.action is Action.PROBE and c.context.phase == "speech_pk"}
     assert all(smoke.probe_continuation(c.context, c.candidate_j) is not None for c in pk_probe)
+    assert smoke.selection_digest(first) == "c95766a110937b2abb7d683b516d3524f227f2c90dcfd61e63c38b522cea2259"
 
 
 def test_unique_pre_shortage_fails_without_resampling():
@@ -262,16 +266,118 @@ def test_systematic_extra_commitment_fails_gate():
 
 def test_artifact_canonical_serialization_and_no_overwrite(tmp_path, monkeypatch):
     cases = smoke.select_cases(eligible_cases())
-    monkeypatch.setattr(smoke, "source_provenance", lambda: {"commit": "a" * 40})
+    monkeypatch.setattr(smoke, "source_provenance", lambda: pytest.fail("publisher reread Git"))
+    source = {"commit": "a" * 40, "tracked_worktree_clean": True,
+              "staged_tracked_changes": False, "source_sha256": {"runner.py": "c" * 64}}
     rows = [{**case.to_record(), "plan": {}, "audit": {"attempts": []}} for case in cases]
     metrics = {"overall": {"case_count": 58}}
     model = {"served_model_name": "qwen35-9b", "hf_revision": "b" * 40}
     first = tmp_path / "one"
     second = tmp_path / "two"
-    d1 = smoke.publish_smoke(first, cases=cases, rows=rows, metrics=metrics, model=model, mapper=Mapper())
-    d2 = smoke.publish_smoke(second, cases=cases, rows=rows, metrics=metrics, model=model, mapper=Mapper())
+    d1 = smoke.publish_smoke(first, cases=cases, rows=rows, metrics=metrics, model=model, mapper=Mapper(), source=source)
+    d2 = smoke.publish_smoke(second, cases=cases, rows=rows, metrics=metrics, model=model, mapper=Mapper(), source=source)
     assert d1 == d2
-    assert verify_artifact(first, expected_artifact_type="phase2_language_execution_smoke",
-                           expected_schema_version=smoke.VERSION).manifest_digest == d1
+    artifact = verify_artifact(first, expected_artifact_type="phase2_language_execution_smoke",
+                               expected_schema_version=smoke.VERSION)
+    assert artifact.manifest_digest == d1
+    assert artifact.manifest["source"] == source
+    assert artifact.manifest["role_sidecar_digest_legality_only"] == smoke.offline.ROLE_SIDECAR_DIGEST
+    assert "role_sidecar_digest_audit_only" not in artifact.manifest
+    assert artifact.manifest["case_selection"]["digest"] == smoke.selection_digest(cases)
     with pytest.raises(smoke.SmokeStudyError, match="already exists"):
-        smoke.publish_smoke(first, cases=cases, rows=rows, metrics=metrics, model=model, mapper=Mapper())
+        smoke.publish_smoke(first, cases=cases, rows=rows, metrics=metrics,
+                            model=model, mapper=Mapper(), source=source)
+
+
+@pytest.fixture
+def source_repo(tmp_path, monkeypatch):
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(("git", "init", "-q", str(repo)), check=True)
+    tracked = repo / "runner.py"
+    tracked.write_text("version = 1\n")
+    subprocess.run(("git", "-C", str(repo), "add", "runner.py"), check=True)
+    subprocess.run(("git", "-C", str(repo), "-c", "user.name=Smoke Test",
+                    "-c", "user.email=smoke@example.invalid", "commit", "-q", "-m", "baseline"), check=True)
+    monkeypatch.setattr(smoke, "REPOSITORY", repo)
+    monkeypatch.setattr(smoke, "SOURCE_FILES", ("runner.py",))
+    return repo
+
+
+def test_tracked_worktree_dirty_stops_formal_run_before_data_or_llm(source_repo, monkeypatch):
+    (source_repo / "runner.py").write_text("version = 2\n")
+    monkeypatch.setattr(smoke, "open_publication", lambda path: pytest.fail("formal run passed dirty guard"))
+    with pytest.raises(smoke.SmokeStudyError, match="clean tracked working tree"):
+        smoke.main(["--storage-profile", str(source_repo / "missing.json")])
+
+
+def test_staged_tracked_change_stops_formal_run_before_data_or_llm(source_repo, monkeypatch):
+    (source_repo / "runner.py").write_text("version = 2\n")
+    subprocess.run(("git", "-C", str(source_repo), "add", "runner.py"), check=True)
+    monkeypatch.setattr(smoke, "open_publication", lambda path: pytest.fail("formal run passed staged guard"))
+    with pytest.raises(smoke.SmokeStudyError, match="clean staged tracked changes"):
+        smoke.main(["--storage-profile", str(source_repo / "missing.json")])
+
+
+def test_unrelated_untracked_document_does_not_block_formal_run(source_repo, monkeypatch):
+    (source_repo / "unrelated-research.md").write_text("leave me alone\n")
+    captured = smoke.source_provenance()
+    assert captured["tracked_worktree_clean"] and not captured["staged_tracked_changes"]
+    assert "unrelated-research.md" not in json.dumps(captured)
+    class ReachedPublication(Exception):
+        pass
+    monkeypatch.setattr(smoke, "open_publication", lambda path: (_ for _ in ()).throw(ReachedPublication()))
+    with pytest.raises(ReachedPublication):
+        smoke.main(["--storage-profile", str(source_repo / "missing.json")])
+
+
+def test_formal_run_freezes_source_once_before_execution(tmp_path, monkeypatch):
+    cases = smoke.select_cases(eligible_cases())
+    snapshot = {"commit": "a" * 40, "source_sha256": {"runner.py": "b" * 64}}
+    calls = []
+    def capture_source():
+        calls.append("source")
+        if calls.count("source") != 1:
+            pytest.fail("source provenance collected twice")
+        return snapshot
+    monkeypatch.setattr(smoke, "source_provenance", capture_source)
+    monkeypatch.setattr(smoke, "open_publication", lambda path: calls.append("publication") or object())
+    monkeypatch.setattr(smoke, "open_role_sidecar", lambda publication: object())
+    monkeypatch.setattr(smoke, "collect_eligible", lambda publication, sidecar: eligible_cases())
+    monkeypatch.setattr(smoke, "selected_oof_q", lambda publication, selected, root: {})
+    monkeypatch.setattr(smoke, "make_plan", lambda case, q, mapper: object())
+    import werewolf.phase2_mapper_runtime as runtime
+    monkeypatch.setattr(runtime, "load_runtime_mapper", lambda path, expected_manifest_digest: Mapper())
+    fake_runtime = tmp_path / "runtime.yaml"
+    fake_runtime.write_text("{}\n")
+    fake_operator = SimpleNamespace(
+        RUNTIME=fake_runtime,
+        inspect_inputs=lambda: ({"served_model_name": "qwen35-9b"}, "http://127.0.0.1:8000/v1"),
+        live_preflight=lambda base_url, name: None)
+    monkeypatch.setitem(sys.modules, "scripts.collect_games", fake_operator)
+    import scripts
+    monkeypatch.setattr(scripts, "collect_games", fake_operator, raising=False)
+    fake_factory = SimpleNamespace(load_named_backends=lambda *args, **kwargs: {"local_qwen": object()})
+    monkeypatch.setitem(sys.modules, "werewolf.backends.factory", fake_factory)
+    class FakeActor:
+        def __init__(self, backend, model):
+            pass
+    class FakePerceiver:
+        def __init__(self, backend, model):
+            pass
+    monkeypatch.setattr(smoke, "Phase2LanguageActorV1", FakeActor)
+    monkeypatch.setattr(smoke, "Phase2SemanticPerceiverV1", FakePerceiver)
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"artifact_root": str(tmp_path / "artifacts")}))
+    def fake_execute(selected, **kwargs):
+        calls.append("execute")
+        assert len(selected) == 58 and calls[0] == "source"
+        return [], {"gate": {"passed": True}}
+    def fake_publish(destination, **kwargs):
+        calls.append("publish")
+        assert kwargs["source"] is snapshot
+        return "d" * 64
+    monkeypatch.setattr(smoke, "execute", fake_execute)
+    monkeypatch.setattr(smoke, "publish_smoke", fake_publish)
+    assert smoke.main(["--storage-profile", str(profile)]) == 0
+    assert calls == ["source", "publication", "execute", "publish"]

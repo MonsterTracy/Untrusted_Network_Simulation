@@ -268,23 +268,31 @@ def execute(cases: tuple[Case, ...], *, q_by_pre, mapper, actor, perceiver) -> t
 
 
 def source_provenance() -> dict:
+    """Freeze a clean tracked source snapshot; unrelated untracked files are allowed."""
+    for label, command in (("tracked working tree", ("git", "diff", "--quiet", "--exit-code", "--")),
+                           ("staged tracked changes", ("git", "diff", "--cached", "--quiet", "--exit-code", "--"))):
+        result = subprocess.run(command, cwd=REPOSITORY, capture_output=True, text=True, check=False)
+        if result.returncode == 1:
+            raise SmokeStudyError(f"formal smoke requires clean {label}")
+        if result.returncode != 0:
+            raise SmokeStudyError(f"cannot verify {label}: {result.stderr.strip()}")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPOSITORY, text=True).strip()
     branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=REPOSITORY, text=True).strip()
-    status = subprocess.check_output(["git", "status", "--short"], cwd=REPOSITORY, text=True).splitlines()
-    return {"commit": head, "branch": branch, "status_short": status,
+    return {"commit": head, "branch": branch, "tracked_worktree_clean": True,
+            "staged_tracked_changes": False,
             "source_sha256": {name: sha256_bytes((REPOSITORY / name).read_bytes()) for name in SOURCE_FILES}}
 
 
 def publish_smoke(destination: Path, *, cases: tuple[Case, ...], rows: list[dict], metrics: dict,
-                  model: dict, mapper) -> str:
+                  model: dict, mapper, source: dict) -> str:
     if os.path.lexists(destination):
         raise SmokeStudyError(f"smoke destination already exists: {destination}")
     selected = [case.to_record() for case in cases]
     manifest = {"artifact_type": "phase2_language_execution_smoke",
                 "schema_version": VERSION, "study_name": NAME,
-                "source": source_provenance(), "model_deployment": model,
+                "source": source, "model_deployment": model,
                 "publication_digest": offline.PUBLICATION_DIGEST,
-                "role_sidecar_digest_audit_only": offline.ROLE_SIDECAR_DIGEST,
+                "role_sidecar_digest_legality_only": offline.ROLE_SIDECAR_DIGEST,
                 "oof_seal_digest_redirect_only": offline.OOF_SEAL_DIGEST,
                 "action_contract_version": CONTRACT_VERSION,
                 "language_semantic_version": LANGUAGE_VERSION,
@@ -320,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--storage-profile", type=Path, default=REPOSITORY / "configs/server.json")
     parser.add_argument("--preflight", action="store_true", help="validate and print selected cases; no LLM call or artifact")
     args = parser.parse_args(argv)
+    frozen_source = None if args.preflight else source_provenance()
     publication = open_publication(args.publication)
     sidecar = open_role_sidecar(publication)
     cases = select_cases(collect_eligible(publication, sidecar))
@@ -354,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
     rows, metrics = execute(cases, q_by_pre=q_by_pre, mapper=runtime_mapper,
                             actor=actor, perceiver=perceiver)
     digest = publish_smoke(destination, cases=cases, rows=rows, metrics=metrics,
-                           model=model, mapper=runtime_mapper)
+                           model=model, mapper=runtime_mapper, source=frozen_source)
     print(json.dumps({"artifact": str(destination), "manifest_digest": digest,
                       "metrics": metrics}, ensure_ascii=False, sort_keys=True))
     return 0
