@@ -27,5 +27,8 @@ setup(
         "dev": [
             "pytest",
         ],
+        "mapper": [
+            "scikit-learn>=1.4,<2.0",
+        ],
     },
 )
