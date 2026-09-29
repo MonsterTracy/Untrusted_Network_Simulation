@@ -51,6 +51,9 @@ def eligible_cases():
 
 
 def test_deterministic_58_case_layout_and_pk_probe_exhaustion():
+    assert smoke.NAME == "paper-phase2-language-smoke-v2"
+    assert smoke.SEED == "phase2-language-smoke-v1:20260929"
+    assert smoke.EXPECTED_CASE_SELECTION_DIGEST == "9ab58cb73fdee18fee63795ee71df37e5ff00c2c320939c2f48221c3167e192e"
     eligible = eligible_cases()
     first = smoke.select_cases(eligible)
     second = smoke.select_cases(tuple(reversed(eligible)))
@@ -333,6 +336,7 @@ def test_unrelated_untracked_document_does_not_block_formal_run(source_repo, mon
 
 def test_formal_run_freezes_source_once_before_execution(tmp_path, monkeypatch):
     cases = smoke.select_cases(eligible_cases())
+    monkeypatch.setattr(smoke, "EXPECTED_CASE_SELECTION_DIGEST", smoke.selection_digest(cases))
     snapshot = {"commit": "a" * 40, "source_sha256": {"runner.py": "b" * 64}}
     calls = []
     def capture_source():
@@ -381,3 +385,12 @@ def test_formal_run_freezes_source_once_before_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "publish_smoke", fake_publish)
     assert smoke.main(["--storage-profile", str(profile)]) == 0
     assert calls == ["source", "publication", "execute", "publish"]
+
+
+def test_v2_rejects_changed_selection_before_mapper_or_llm(monkeypatch):
+    monkeypatch.setattr(smoke, "source_provenance", lambda: {"commit": "a" * 40})
+    monkeypatch.setattr(smoke, "open_publication", lambda path: object())
+    monkeypatch.setattr(smoke, "open_role_sidecar", lambda publication: object())
+    monkeypatch.setattr(smoke, "collect_eligible", lambda publication, sidecar: eligible_cases())
+    with pytest.raises(smoke.SmokeStudyError, match="differ from the sealed smoke-v1 selection"):
+        smoke.main([])

@@ -6,8 +6,9 @@ event. The perceiver interface receives public text/context, never a plan.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
+import re
 from typing import Any
 
 from werewolf.canonical_collection.pre import validate_authoritative_pre_prefix
@@ -18,7 +19,7 @@ from werewolf.phase2_actions import (
 )
 
 
-LANGUAGE_VERSION = "phase2_speech_semantic_v1"
+LANGUAGE_VERSION = "phase2_speech_semantic_v1_1"
 OTHER_REQUEST = "OTHER"
 
 
@@ -151,13 +152,15 @@ class Phase2SpeechSemanticV1:
                 "private_fact_claim": self.private_fact_claim}
 
 
-def parse_perceived_semantics(raw: str) -> Phase2SpeechSemanticV1:
-    """Strictly decode the independent perceiver's JSON transport."""
+def parse_perceived_semantics(raw: str, context: PublicLanguageContextV1) -> Phase2SpeechSemanticV1:
+    """Decode language-only fields; bind opportunity metadata from public PRE."""
+    if not isinstance(context, PublicLanguageContextV1):
+        raise Phase2LanguageError("PERCEPTION_PUBLIC_CONTEXT_INVALID")
     try:
         value = json.loads(raw)
     except (TypeError, json.JSONDecodeError) as error:
         raise Phase2LanguageError("PERCEPTION_JSON_INVALID") from error
-    fields = {"speaker", "phase", "commitment_targets", "rejected_targets",
+    fields = {"commitment_targets", "rejected_targets",
               "vote_intent_targets", "information_requests", "abstain_intent",
               "private_fact_claim"}
     if not isinstance(value, dict) or set(value) != fields:
@@ -171,13 +174,52 @@ def parse_perceived_semantics(raw: str) -> Phase2SpeechSemanticV1:
         raise Phase2LanguageError("PERCEPTION_REQUEST_INVALID")
     try:
         return Phase2SpeechSemanticV1(
-            value["speaker"], value["phase"],
+            context.speaker, context.phase,
             tuple(value["commitment_targets"]), tuple(value["rejected_targets"]),
             tuple(value["vote_intent_targets"]),
             tuple(InformationRequestV1(**r) for r in requests),
             value["abstain_intent"], value["private_fact_claim"])
     except (TypeError, ValueError) as error:
         raise Phase2LanguageError("PERCEPTION_SEMANTICS_INVALID") from error
+
+
+def _ground_explicit_semantics(text: str, perceived: Phase2SpeechSemanticV1) -> Phase2SpeechSemanticV1:
+    """Check narrow, literal speech cues without consulting the requested plan."""
+    commitments = list(perceived.commitment_targets)
+    votes = list(perceived.vote_intent_targets)
+    # A direct addressee question about current suspicion and public reasons is
+    # a request about that addressee, even when other players are mentioned.
+    addressed = re.match(r"\s*(player[1-7])\s*[,，:：]", text)
+    requests = list(perceived.information_requests)
+    if (addressed and re.search(r"(?:当前|目前).{0,12}(?:怀疑|投票判断|投票给)", text)
+            and re.search(r"(?:依据|公开信息|已公开的信息)", text)):
+        target = addressed.group(1)
+        request = InformationRequestV1(target, target)
+        if request not in requests:
+            requests.append(request)
+    # These explicit round-vote clauses say both what to push and where to vote.
+    # Add evidence; never erase a conflicting model extraction.
+    for match in re.finditer(
+            r"(?:本轮|今天)[^。！？\n]{0,30}?(?:放逐票|投票)[^。！？\n]{0,16}?(?:投向|投给|投到|投)\s*(player[1-7])",
+            text):
+        target = match.group(1)
+        if target not in commitments:
+            commitments.append(target)
+        if target not in votes:
+            votes.append(target)
+    # Mentioning or criticizing players does not reject them as this round's
+    # main target. Retain modeled rejection whenever an explicit refusal exists.
+    rejected = perceived.rejected_targets
+    if (len(rejected) > 1 and not re.search(
+            r"(?:不|别|拒绝|暂缓|搁置|排除).{0,16}(?:投|放逐|处理|主要|目标|targeting|考虑)", text)):
+        rejected = ()
+    # A concrete vote clause with no abstention wording cannot be abstention.
+    abstain = perceived.abstain_intent
+    if votes and not re.search(r"弃票|弃权|不投|不参与.{0,4}投票|放弃.{0,4}投票|不表态", text):
+        abstain = False
+    return replace(perceived, commitment_targets=tuple(commitments),
+                   rejected_targets=rejected, vote_intent_targets=tuple(votes),
+                   information_requests=tuple(requests), abstain_intent=abstain)
 
 
 @dataclass(frozen=True)
@@ -252,7 +294,10 @@ def build_realization_prompt(plan: Phase2SemanticPlanV1,
     if failure_reason is not None and (not isinstance(failure_reason, str) or not failure_reason):
         raise Phase2LanguageError("repair reason must be non-empty text")
     if plan.action is Action.PUSH:
-        instruction = f"明确推动{plan.candidate_j}作为本轮主要投票/放逐目标。不得再推动另一主要目标。"
+        instruction = (f"上游已冻结唯一目标{plan.candidate_j}；你只负责表达，绝不是目标选择器。"
+                       f"本轮明确推动把票投给并放逐{plan.candidate_j}。"
+                       "无论公开上下文提到谁，都不得改选目标；只可从已经公开的信息中寻找支持这一目标的理由。"
+                       "不得加入其他承诺、拒绝目标、弃票表态或信息请求。")
     elif plan.action is Action.REDIRECT:
         instruction = (f"明确说明本轮不以{plan.candidate_j}为主要放逐目标，"
                        f"并明确转而推动{plan.redirect_target}。拒绝前者不等于断言其是好人。")
@@ -263,10 +308,13 @@ def build_realization_prompt(plan: Phase2SemanticPlanV1,
         raise Phase2LanguageError("unknown Phase-2 action")
     repair = "" if failure_reason is None else (
         f"\n上次独立验证未通过，原因代码：{failure_reason}。"
-        "仅重新表达同一冻结计划；不可改变动作或目标，也不可引用上次发言。")
+        "再次严格执行同一冻结语义：" + instruction +
+        "不可改变动作、目标或请求，也不可引用上次发言。")
+    length = ("优先只输出1至2句简洁自然的公开发言" if plan.action is Action.PUSH
+              else "只输出1至4句公开发言")
     return ("你只负责把已冻结的 Phase-2 公开策略语义写成一段自然的中文狼人杀发言。\n"
             + _public_block(context) + "\n冻结语义：" + instruction + repair +
-            "\n只输出1至4句公开发言，玩家用player1至player7指称。"
+            "\n" + length + "，玩家用player1至player7指称。"
             "不得声称掌握尚未公开的身份、夜间信息或未来结果；"
             "不得增加与冻结语义冲突的承诺、信息请求或角色断言。"
             "不要输出结构化字段、JSON或解释。")
@@ -278,18 +326,30 @@ def build_perception_prompt(text: str, context: PublicLanguageContextV1) -> str:
         raise Phase2LanguageError("speech text must be non-empty")
     return ("只根据以下公开发言及公开阶段信息，独立提取 Phase-2 言语语义。"
             "你不知道生成者原计划，不能猜测其期望动作。"
+            "当前发言者和阶段已经由可信公开上下文确定；不要从发言文字猜测谁在说话，"
+            "被称呼或被推动的玩家不是发言者。JSON只输出言语语义字段，不输出speaker或phase。"
             "历史只用于判断信息是否已经公开，不可把历史发言的动作算作本轮动作。\n"
             + _public_block(context) +
             "\n待解析的本轮公开发言：\n" + text +
             "\ncommitment_targets：所有被明确推动为本轮主要投票/放逐目标的玩家；"
             "即使出现互相冲突的多个目标，也须全部列出。"
+            "本轮投X、本轮放逐X、推动大家投X、坚决处理X、坚决将放逐票投给X、"
+            "坚决将放逐票投向X，"
+            "都同时表示对X的主要目标承诺和投票意图。"
             "rejected_targets：所有被明确表示本轮不作为主要放逐目标的玩家；"
+            "仅提及、比较或讨论其他玩家，不等于拒绝其为本轮目标，不得列入rejected_targets。"
             "不要把这解释为好人身份断言。"
             "vote_intent_targets：所有被明确提出要投票的玩家；没有则为空。"
             "information_requests：每个明确公开提问的主题玩家、被问玩家和请求类型；"
             "只有要求被问者说明其当前主要怀疑/投票判断及公开依据时，"
             f"类型才是{REQUEST_TYPE}，其他问题为{OTHER_REQUEST}。"
-            "abstain_intent 仅在明确表示弃票时为 true。"
+            f"例如“player3，你当前主要怀疑或投票判断是谁？依据哪些已公开信息？”"
+            f"应提取一个target_j=player3、addressee_j=player3、request_type={REQUEST_TYPE}的请求，"
+            "且没有投票承诺。"
+            "例如“本轮坚决将放逐票投给player4”应同时提取commitment_targets=[player4]"
+            "和vote_intent_targets=[player4]。"
+            "abstain_intent 仅在发言者明确表示自己弃票时为 true；"
+            "谈论别人弃票、否认弃票或明确投票都不是弃票表态。"
             "private_fact_claim 仅在将尚未公开的身份、夜间信息或未来结果声称为已知事实时为 true。"
             "猜测某人身份本身不是私密事实。只输出规定 JSON，不推断未明确表达的语义。")
 
@@ -301,12 +361,10 @@ def perception_response_format() -> dict[str, Any]:
     return {"type": "json_schema", "json_schema": {
         "name": LANGUAGE_VERSION, "strict": True,
         "schema": {"type": "object", "additionalProperties": False,
-                   "required": ["speaker", "phase", "commitment_targets", "rejected_targets",
+                   "required": ["commitment_targets", "rejected_targets",
                                 "vote_intent_targets", "information_requests", "abstain_intent",
                                 "private_fact_claim"],
                    "properties": {
-                       "speaker": {"type": "string", "enum": list(PLAYER_IDS)},
-                       "phase": {"type": "string", "enum": ["speech", "speech_pk"]},
                        "commitment_targets": seat_array,
                        "rejected_targets": seat_array,
                        "vote_intent_targets": seat_array,
@@ -361,4 +419,4 @@ class Phase2SemanticPerceiverV1:
             response_format=perception_response_format())
         if isinstance(metadata, dict) and metadata.get("finish_reason") == "length":
             raise Phase2LanguageError("PERCEPTION_TRUNCATED")
-        return parse_perceived_semantics(content)
+        return _ground_explicit_semantics(text, parse_perceived_semantics(content, context))

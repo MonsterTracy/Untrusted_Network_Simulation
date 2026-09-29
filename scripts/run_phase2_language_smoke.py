@@ -37,9 +37,10 @@ from werewolf.phase2_language import (
 from werewolf.phase2_language_audit import LANGUAGE_AUDIT_VERSION
 
 
-NAME = "paper-phase2-language-smoke-v1"
-VERSION = "phase2_language_smoke_v1"
+NAME = "paper-phase2-language-smoke-v2"
+VERSION = "phase2_language_smoke_v2"
 SEED = "phase2-language-smoke-v1:20260929"
+EXPECTED_CASE_SELECTION_DIGEST = "9ab58cb73fdee18fee63795ee71df37e5ff00c2c320939c2f48221c3167e192e"
 # Reserve the entire scarce PK Probe stratum before all other draws.
 LAYOUT = (("speech_pk", Action.PROBE, 8), ("speech", Action.PROBE, 10),
           ("speech_pk", Action.REDIRECT, 10), ("speech", Action.REDIRECT, 10),
@@ -321,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         "Requires the frozen 1500-game publication, sealed Qwen3 OOF evaluation, "
         "full M3 mapper, configs/server.json, local Qwen3.5-9B vLLM at "
         "127.0.0.1:8000, and the configured client/vLLM environments. "
-        "See docs/research/phase2-language-smoke-runbook.md."))
+        "See docs/research/phase2-language-smoke-v2-runbook.md."))
     parser.add_argument("--publication", type=Path, default=PUBLICATION)
     parser.add_argument("--evaluation-root", type=Path, default=EVALUATION)
     parser.add_argument("--mapper", type=Path, default=MAPPER)
@@ -332,13 +333,16 @@ def main(argv: list[str] | None = None) -> int:
     publication = open_publication(args.publication)
     sidecar = open_role_sidecar(publication)
     cases = select_cases(collect_eligible(publication, sidecar))
+    selected_digest = selection_digest(cases)
+    if selected_digest != EXPECTED_CASE_SELECTION_DIGEST:
+        raise SmokeStudyError("smoke-v2 cases differ from the sealed smoke-v1 selection")
     from werewolf.phase2_mapper_runtime import load_runtime_mapper
     runtime_mapper = load_runtime_mapper(args.mapper, expected_manifest_digest=MAPPER_DIGEST)
     q_by_pre = selected_oof_q(publication, cases, args.evaluation_root)
     # Construct every plan before a first LLM call; any Q/mapper error cannot create a partial run.
     for case in cases:
         make_plan(case, q_by_pre, runtime_mapper)
-    print(json.dumps({"case_count": len(cases), "case_selection_digest": selection_digest(cases),
+    print(json.dumps({"case_count": len(cases), "case_selection_digest": selected_digest,
                       "layout": [{"phase": p, "action": a.value, "count": n} for p, a, n in LAYOUT],
                       "mapper_digest": runtime_mapper.artifact_digest}, sort_keys=True))
     if args.preflight:
