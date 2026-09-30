@@ -26,7 +26,7 @@ from scripts.run_phase2_online_intervention_pilot import (
     OnlineTerminalPilotRunnerV1, OnlinePilotRuntimeBundleV1,
     run_online_game, run_online_campaign, publish_online_pilot,
 )
-from scripts.phase2_intervention_preflight import PilotPreflightV1
+from werewolf.phase2_online_preflight import PilotPreflightV1
 from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.phase2_pilot_dataset import build_phase2_online_dataset_from_ledger
 from run_random import eval as run_game
@@ -173,7 +173,7 @@ def test_uncertain_post_commit_error_is_interrupted_not_false_failure(tmp_path,
         model_name="fixture-model-v1", reference_tables=values(),
         reference_artifact_digest=reference_tables_digest(values()), ledger=ledger)
     pilot.start_game(recorder.game_id)
-    import scripts.run_phase2_online_intervention_pilot as runner_module
+    import werewolf.phase2_online_runner as runner_module
     def uncertain_commit(**kwargs):
         env.public_events.append({"event_type": "public_speech", "raw_text": "partial"})
         raise RuntimeError("after public event")
@@ -337,7 +337,7 @@ def test_campaign_resume_skips_prior_games_and_stops_at_assignment_target(tmp_pa
     def execute(env, agents, roles, *, recorder, call_audit, pilot, preflight):
         ledger.start_game(recorder.game_id)
         ledger.persist_assignment(_game_assignment(plan, recorder.game_id))
-    import scripts.run_phase2_online_intervention_pilot as runner_module
+    import werewolf.phase2_online_runner as runner_module
     monkeypatch.setattr(runner_module, "run_online_game", execute)
     result = run_online_campaign(tuple(f"g{i}" for i in range(12)), factory,
                                  ledger=ledger)
@@ -445,3 +445,64 @@ def test_full_canonical_game_accepts_phase2_runtime_call_audit():
     assert len([call for call in audit.records
                 if call.operation_id.startswith("phase2-")]) == 2
     assert evidence.game_id == recorder.game_id
+
+
+@pytest.mark.parametrize("success", (True, False))
+def test_server_canonical_stage_verifier_reads_real_execution_and_day_evidence(tmp_path, success):
+    from werewolf.phase2_online_server import ServerRuntimeFactory, _publish_json
+    env, _, audit, recorder, raw, observation, handoff, opp = _speech_pre()
+    proof = object.__new__(ServerRuntimeFactory)
+    proof.work_directory = tmp_path
+    proof.game_plan = recorder.plan
+    proof.game_ids = (recorder.game_id,)
+    proof.reference = values()
+    proof.args = SimpleNamespace(reference_tables_digest=reference_tables_digest(values()))
+    proof.evidence_digests = {}
+    _publish_json(tmp_path / "claims" / f"{recorder.game_id}.json",
+                  {"record_type": "claim", **recorder.claim.to_record()})
+    raw.supports_json_schema = True
+    text = "本轮放逐票投给player3。" if success else "本轮弃票。"
+    semantic = {"commitment_targets": ["player3"] if success else [],
+                "rejected_targets": [], "vote_intent_targets": ["player3"] if success else [],
+                "information_requests": [], "abstain_intent": not success, "private_fact_claim": False}
+    raw.chat_with_metadata = lambda **kwargs: (
+        json.dumps(semantic) if "response_format" in kwargs else text, {"finish_reason": "stop"})
+    plan = Phase2OnlinePilotPlanV1("synthetic", _seed_for(opp, Action.PUSH))
+    ledger = OnlinePilotAssignmentLedgerV1(tmp_path / "ledger.jsonl", plan=plan, source_commit="a" * 40)
+    pilot = OnlineTerminalPilotRunnerV1(
+        plan=plan, predictor=SimpleNamespace(predict=lambda _: q_matrix(), seal_digest="b" * 64),
+        mapper=Mapper(), backend=env.speech_perceiver.backend, model_name="fixture-model-v1",
+        reference_tables=values(), reference_artifact_digest=reference_tables_digest(values()), ledger=ledger,
+        record_evidence=lambda stage, row: proof.persist_stage_evidence(
+            recorder.game_id, recorder.claim, recorder, stage, row))
+    pilot.start_game(recorder.game_id)
+    result = pilot.handle_pre(env=env, recorder=recorder, call_audit=audit,
+                              observation=observation, handoff=handoff)
+    if success:
+        pilot.after_step(env=env, done=result[2], info=result[3])
+        for _ in range(30):
+            if pilot.records[recorder.game_id].day_outcome is not None:
+                break
+            current = env.get_observation()
+            if env.phase in ("speech", "speech_pk"):
+                action = (env.phase, "继续按原策略讨论。")
+                context = audit.speech_perception_context(
+                    event_id=f"event-{len(env.public_events):06d}", boundary_id="synthetic-followup",
+                    speaker_id=env.current_act_idx + 1)
+            else:
+                action = next((item for item in current["valid_action"] if item[1] != -1),
+                              current["valid_action"][0])
+                context = nullcontext()
+            with context:
+                _, _, done, info = env.step(action)
+            pilot.after_step(env=env, done=done, info=info)
+        assert pilot.records[recorder.game_id].day_outcome is not None
+    stages = ledger.snapshot()["games"][recorder.game_id]
+    assert proof.verify_execution(recorder.game_id, stages) is True
+    dataset = build_phase2_online_dataset_from_ledger(ledger, execution_verifier=proof.verify_execution)
+    assert len(dataset.consequences) == int(success)
+    assert len(proof.evidence_digests) == (2 if success else 1)
+    changed = deepcopy(stages)
+    changed["EXECUTION"]["execution"]["language_audit_digest"] = "0" * 64
+    with pytest.raises(ValueError, match="proof differs"):
+        proof.verify_execution(recorder.game_id, changed)

@@ -1,6 +1,6 @@
 # Phase-2 Online Pilot-T：执行前 runbook
 
-**状态：待服务器 qualification；当前不得运行真实实验。** 主 protocol 是自然游戏中一次性在线随机 P/N 干预。完整 PRE checkpoint/restore 只用于未来可选的 paired-counterfactual replay；它不再是在线因果识别的前置条件。
+**状态：服务器 Smoke-V3 已通过（操作者报告）；正式 CLI 待提交后在 clean source 上预检，再进入 qualification。** 本轮本地没有运行真实 LLM、qualification 或正式 publication。主 protocol 是自然游戏中一次性在线随机 P/N 干预。完整 PRE checkpoint/restore 只用于未来可选的 paired-counterfactual replay；它不再是在线因果识别的前置条件。
 
 ## 方法和冻结顺序
 
@@ -17,7 +17,7 @@
 
 重启时校验全部账本哈希和 plan/source，恢复已用的 game ID 与 assignment 计数。没有完整 PRE checkpoint 时，已有 assignment 但缺 execution、或成功 execution 缺 consequence 的旧 game 标记 `INTERRUPTED`；旧 game ID 不再重演或重新抽样，后续只能使用新 game ID。10/120 次计数始终以落盘 assignment 为准。
 
-服务器装配须提供预先确定的 game ID 序列与无模型调用的 `runtime_factory(game_id)`，由显式 opt-in 的 `run_online_campaign` 顺序运行。factory 为每局建立 canonical env/agents/recorder/call audit、冻结 predictor/mapper、同一账本和该局通过的 preflight；异常使 campaign 停止，账本供下次从**新** game ID 继续。该 API 不在默认 gameplay 入口自动启用，也不包含本轮服务器部署配置。
+正式 CLI 读取预先冻结的 canonical `CollectionPlan`，以其有序 seed pool 派生 game ID，由显式 opt-in 的 `run_online_campaign` 顺序运行。`ServerRuntimeFactory` 复用 `Classic7RuntimeFactory`，为每局建立 canonical env/agents/recorder/call audit、冻结 predictor/mapper、同一账本和该局通过的 preflight；异常使 campaign 停止，账本供下次从**新** game ID 继续。该 API 不在默认 gameplay 入口自动启用。
 
 语言 actor 在已选 P/N 和目标下生成，独立 perceiver 只看 generated text 与 trusted public context，原 verifier 最多 repair 一次。每次 realization、repair、perception 都在返回前逐笔 `fsync` 到独立 `BACKEND_CALL` 账本事件，记录 pilot/assignment/treatment、role、sequence、attempt、model/backend、request/response digest、PRE 与 canonical call ID；不得覆盖 assignment，也不得冒充 V1 `SPEECH_PERCEPTION` annotation。perception 请求必须逐字等于仅由文本/公开 context 构造的 prompt。sidecar 不保存 secrets。
 
@@ -40,7 +40,118 @@ qualification 与 formal artifact 名分别固定为 `paper-phase2-online-termin
 
 ## Preflight 与后续阶段
 
-`phase2_intervention_preflight.py` 分开 `online_randomized_pilot_ready` 和 `paired_branch_replay_ready`。Online Pilot-T 要求 clean tracked source、验证过的 frozen artifacts、运行时 Q/mapper lineage、冻结 V1 plan、Smoke-V3 canonical gate、现有 canonical commit/bound backend audit、持久化账本、reference table 及空目的地。checkpoint/branch replay 可以继续为 false，**不能因此使 online ready 失败**。当前 Smoke-V3 尚未运行、source 仍未提交，因此正式 preflight 应失败。完整 checkpoint 的剩余状态闭包及 fail-closed API 见 [checkpoint/commit contract](phase2-checkpoint-and-commit-contract.md)。
+`phase2_intervention_preflight.py` 只是 static capability diagnostic；不能用其有限参数认证真实 qualification。正式 runner 装配 runtime 后调用同一个 `assess_pilot_preflight` / `PilotPreflightV1`，分开 `online_randomized_pilot_ready` 和 `paired_branch_replay_ready`。Online Pilot-T 要求 clean tracked source、验证过的 frozen artifacts、运行时 Q/mapper lineage、冻结 V1 plan、Smoke-V3 canonical gate、现有 canonical commit/bound backend audit、持久化账本、reference table 及空目的地。checkpoint/branch replay 可以继续为 false，**不能因此使 online ready 失败**。CLI 的新增源码和已有 tracked 改动未提交时，正式预检应失败；无关 untracked 研究文档不阻断。完整 checkpoint 的剩余状态闭包及 fail-closed API 见 [checkpoint/commit contract](phase2-checkpoint-and-commit-contract.md)。
+
+## 正式服务器入口与输入
+
+在待执行 checkout 使用服务器 client 环境安装 editable package（含 mapper/ToM 依赖）：`python -m pip install -e '.[mapper,tom]'`。实际执行包必须来自 `--repo`；不得用另一个 checkout 的 installed package 执行当前 source。推荐 module invocation；direct script invocation 也支持，不修改 `sys.path`。两种 `--help` 在解析参数后立即退出，只依赖标准库，不创建 ledger/artifact、不启动 worker、不连接 gameplay。
+
+CLI 接受以下基础设施参数，不提供策略、propensity、threshold 或 assignment-count 覆盖：
+
+| 参数 | 冻结输入/含义 |
+|---|---|
+| `--campaign-purpose` | `qualification`（10 assignments）或 `pilot`（120）；不自动串联 |
+| `--plan` | `Phase2OnlineTerminalPilotPlanV1.to_record()` 的完整 JSON；purpose 必须匹配 |
+| `--game-plan` | canonical `CollectionPlan.to_record()` 完整 JSON，含有序 seeds、runtime provenance 和 source pin |
+| `--runtime-config` / `--deployment-config` | 已冻结 runtime/loopback deployment YAML，与 game-plan 中摘要和模型身份一致 |
+| `--publication` / `--evaluation-root` | sealed 1500-game publication / OOF；复用 offline loader 只读重建 reference tables，无训练 |
+| `--mapper` / `--mapper-manifest-digest` | sealed final mapper 与独立预注册摘要 |
+| `--reference-tables-digest` | 独立预注册的 reference table 内容摘要 |
+| `--smoke-v3` / `--smoke-v3-manifest-digest` | 已存在不可覆盖 Smoke-V3 artifact 与 manifest 摘要 |
+| `--q-checkout` / `--q-fit` / `--q-python` | pinned final-Q checkout、sealed fit 和 worker Python；最后一项默认当前 Python |
+| `--source-commit` / `--repo` | 本次 CLI commit 后冻结的 clean HEAD / 当前 checkout；repo 默认入口所在 checkout |
+| `--work-directory` | 独立、持久、受限的运行目录；首次必须不存在 |
+| `--destination` | 固定名称的正式 artifact 目的地；必须不存在，与 work directory 不嵌套 |
+| `--resume` | 显式恢复完全相同 inputs 和 ledger；无隐式重启 |
+| `--preflight-only` | 完整装配及 Q handshake，使用临时 ledger；不开始 game/assignment/语言处理，不发布 |
+
+先由研究者冻结两份 purpose 独立的 Pilot-T plan / canonical game plan，不在 CLI 中生成研究参数。canonical `collection_id` 必须等于对应 `pilot_id`；其 `source_revision` 必须等于提交 CLI 后的 `--source-commit`。Pilot-T plan 的 `max_games_attempted` 必须为显式有限上限，且不超过有序 seed pool；pool 至少覆盖固定 assignment count。canonical plan 复用 `scripts.collect_games.plan_fields` 的生产 metadata、prompt/retry identities 和 call budget，配置摘要也须由实际配置计算。canonical `target_canonical_success_count` 是该 plan 的 metadata，**不改变** Pilot-T 的 10/120 assignment 停止条件。不得借此改变纳入规则或重新选择 seeds。
+
+正式目录仅保存冻结表、摘要与 support；运行目录另保留 append-only `assignment-ledger.jsonl`、不可覆盖 `run_inputs.json`、canonical claims，以及每次 execution/consequence 的 canonical partial evidence。证据包含真实 PRE、public event 和 canonical backend request/response；按受限数据保留，不作为公开 prompt。发布前 verifier 从这些持久证据核对实际 commit、audit 和投票日终，失败则不发布。其文件摘要进入 manifest 的 `server_run_provenance`，因此恢复后不依赖先前进程的内存。
+
+## 服务器命令顺序
+
+以下是实际 argparse 参数模板；`/absolute/...` 和摘要变量须替换为操作者已核验的绝对路径/预注册值，不代表新增研究默认值。当前报告的 Smoke-V3 manifest 为 `22ed81165668c3cc92f05882efca62ce07bf819d98744d662462b40c6c6327f8`，来源 HEAD 为 `da0cf3a5b00ba73c33ef5227eec1789358876923`。
+
+**Step 1：核验已通过的 Smoke-V3。** 原 preflight 校验 manifest/gate、58-case digest、mapper 和 Language V1.2，未要求 Smoke commit 等于 pilot HEAD，也未核对 Smoke source-file digests。正式 CLI 在原 gate 外增加全部七个 Smoke `SOURCE_FILES` 的逐字摘要比对，并保留 clean-source 要求：CLI commit 本身不强制重跑；任何这些文件的字节变化都必须重跑。不得通过更改 guard 复用不一致 artifact。若必须重跑，先依 runbook 使用新的、尚不存在的 storage destination；以下 full smoke 命令会调用真实 LLM，本轮不执行：
+
+```bash
+python -m scripts.run_phase2_language_smoke \
+  --publication /absolute/development-publication \
+  --evaluation-root /absolute/sealed-oof-evaluation \
+  --mapper /absolute/paper-phase2-mapper-final-v1 \
+  --storage-profile /absolute/smoke-storage-profile.json
+```
+
+加 `--preflight` 只验证 selection 与 frozen plans，不能替代真实 Smoke gate。不可覆盖已有 `paper-phase2-language-smoke-v3`。
+
+**Step 2：完整 online preflight。** 在项目根目录执行。先设置 `PILOT_SOURCE_COMMIT` 为提交本轮 CLI 后人工核验的 HEAD、`REFERENCE_TABLES_DIGEST` 为预注册 table 摘要。以下数组复用于 qualification 和未来独立 pilot：
+
+```bash
+COMMON=(
+  --repo /absolute/Untrusted_Network_Simulation
+  --source-commit "$PILOT_SOURCE_COMMIT"
+  --runtime-config /absolute/Untrusted_Network_Simulation/configs/runtime/local-qwen35-9b.yaml
+  --deployment-config /absolute/Untrusted_Network_Simulation/configs/deployment/qwen35-9b.yaml
+  --publication /absolute/development-publication
+  --evaluation-root /absolute/sealed-oof-evaluation
+  --mapper /absolute/paper-phase2-mapper-final-v1
+  --mapper-manifest-digest 8ab529972a5722e61e0a81ec37f089677d1276c21cb83921aa842b2ce33995c3
+  --reference-tables-digest "$REFERENCE_TABLES_DIGEST"
+  --smoke-v3 /absolute/paper-phase2-language-smoke-v3
+  --smoke-v3-manifest-digest 22ed81165668c3cc92f05882efca62ce07bf819d98744d662462b40c6c6327f8
+  --q-checkout /absolute/pinned-final-q-checkout
+  --q-fit /absolute/sealed-final-q-fit
+  --q-python /absolute/final-q-environment/bin/python
+)
+QUALIFICATION=(
+  --campaign-purpose qualification
+  --plan /absolute/qualification-pilot-plan.json
+  --game-plan /absolute/qualification-canonical-game-plan.json
+  --work-directory /absolute/qualification-work
+  --destination /absolute/publications/paper-phase2-online-terminal-qualification-v1
+)
+python -m scripts.run_phase2_online_intervention_pilot \
+  "${COMMON[@]}" "${QUALIFICATION[@]}" --preflight-only
+```
+
+若重跑 Smoke，替换上面的 manifest pin 为已核验的新摘要。预检先读取/比对 plan、source、配置、mapper、reference、Smoke；再启动并验证 Q worker，构造真实 canonical runtime 和临时 ledger，调用唯一 full preflight。Q 握手不进行 prediction；不调用语言 backend。失败 exit nonzero；不创建正式 work directory、assignment 或 publication。
+
+**Step 3：独立 10-assignment qualification。** 仅在 Step 2 passed 后移除 `--preflight-only`；runner 自身仍重新完整预检：
+
+```bash
+python -m scripts.run_phase2_online_intervention_pilot \
+  "${COMMON[@]}" "${QUALIFICATION[@]}"
+```
+
+运行中的输入/ledger 已存在时必须明确恢复：
+
+```bash
+python -m scripts.run_phase2_online_intervention_pilot \
+  "${COMMON[@]}" "${QUALIFICATION[@]}" --resume --preflight-only
+python -m scripts.run_phase2_online_intervention_pilot \
+  "${COMMON[@]}" "${QUALIFICATION[@]}" --resume
+```
+
+恢复必须保持 inputs、source、configs、pins、paths、seed pool 与 ledger 完全一致，不重抽旧 assignment、不重演旧 game。缺 execution/day consequence 的旧 assignment 按现有 ledger 记 `INTERRUPTED`，以新 game ID 继续。如果计数已达标、进程仅在 publication 前中断，runner 只验证/发布，不启动新 game；该 publication-only preflight 不能用于 gameplay。完整目的地一旦存在，含 `--resume` 也拒绝覆盖。
+
+**Step 4：人工审阅 qualification artifact 和 evidence。** `COMPLETE` 不自动通过工程审查；人工确认 backend audit、canonical commit、实际 vote/exile、失败/中断、support 和恢复证据。qualification 不进入 λ 数据集。
+
+**Step 5：未来另行启动 120-assignment Pilot-T。** 仅在人工通过后，用独立的预注册 plans / seeds / work / destination 执行；qualification 不会自动启动此步骤：
+
+```bash
+PILOT=(
+  --campaign-purpose pilot
+  --plan /absolute/formal-pilot-plan.json
+  --game-plan /absolute/formal-canonical-game-plan.json
+  --work-directory /absolute/formal-pilot-work
+  --destination /absolute/publications/paper-phase2-online-terminal-pilot-v1
+)
+python -m scripts.run_phase2_online_intervention_pilot \
+  "${COMMON[@]}" "${PILOT[@]}" --preflight-only
+python -m scripts.run_phase2_online_intervention_pilot \
+  "${COMMON[@]}" "${PILOT[@]}"
+```
 
 未来 consequence / λ / production-loss 数据加载统一经过 `require_online_dataset_access`：默认仅接受已完成的单一 formal 120-assignment campaign；qualification、synthetic、混合 campaign 全部拒绝。`audit_only=True` 可读这些数据，但返回对象的 `estimator_eligible` 恒为 false。此保护只约束数据用途，不代表 formal support 已经通过科学审阅。
 

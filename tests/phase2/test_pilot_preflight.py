@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from scripts.phase2_intervention_preflight import (
+from werewolf.phase2_online_preflight import (
     FrozenArtifactRequirement, _frozen_q_runtime_ready, _smoke_v3_gate,
     assess_pilot_preflight,
     freeze_online_source_provenance, tracked_source_clean,
@@ -25,7 +25,7 @@ def _git(repo: Path, *args):
 
 def test_preflight_ignores_untracked_but_rejects_staged_and_tracked_dirty(tmp_path,
                                                                          monkeypatch):
-    import scripts.phase2_intervention_preflight as preflight
+    import werewolf.phase2_online_preflight as preflight
     monkeypatch.setattr(preflight, "SOURCE_FILES", ("tracked.txt",))
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
@@ -98,7 +98,7 @@ def test_q_seal_string_on_duck_typed_predictor_is_not_frozen_runtime():
 
 def test_untracked_pilot_source_is_blocked_without_blocking_unrelated_untracked(tmp_path,
                                                                                monkeypatch):
-    import scripts.phase2_intervention_preflight as preflight
+    import werewolf.phase2_online_preflight as preflight
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
