@@ -12,6 +12,7 @@ from scripts import run_phase2_language_smoke as smoke
 from werewolf.artifact_io import verify_artifact
 from werewolf.phase2_actions import Action, ActionContextV1, InformationRequestV1
 from werewolf.phase2_language import Phase2SpeechSemanticV1, PublicLanguageContextV1
+from werewolf.phase2_language import LANGUAGE_VERSION
 
 
 ALIVE = tuple(f"player{i}" for i in range(1, 8))
@@ -51,7 +52,9 @@ def eligible_cases():
 
 
 def test_deterministic_58_case_layout_and_pk_probe_exhaustion():
-    assert smoke.NAME == "paper-phase2-language-smoke-v2"
+    assert smoke.NAME == "paper-phase2-language-smoke-v3"
+    assert smoke.VERSION == "phase2_language_smoke_v3"
+    assert LANGUAGE_VERSION == "phase2_speech_semantic_v1_2"
     assert smoke.SEED == "phase2-language-smoke-v1:20260929"
     assert smoke.EXPECTED_CASE_SELECTION_DIGEST == "9ab58cb73fdee18fee63795ee71df37e5ff00c2c320939c2f48221c3167e192e"
     eligible = eligible_cases()
@@ -387,10 +390,10 @@ def test_formal_run_freezes_source_once_before_execution(tmp_path, monkeypatch):
     assert calls == ["source", "publication", "execute", "publish"]
 
 
-def test_v2_rejects_changed_selection_before_mapper_or_llm(monkeypatch):
+def test_v3_rejects_changed_selection_before_mapper_or_llm(monkeypatch):
     monkeypatch.setattr(smoke, "source_provenance", lambda: {"commit": "a" * 40})
     monkeypatch.setattr(smoke, "open_publication", lambda path: object())
     monkeypatch.setattr(smoke, "open_role_sidecar", lambda publication: object())
     monkeypatch.setattr(smoke, "collect_eligible", lambda publication, sidecar: eligible_cases())
-    with pytest.raises(smoke.SmokeStudyError, match="differ from the sealed smoke-v1 selection"):
+    with pytest.raises(smoke.SmokeStudyError, match="differ from the sealed smoke-v1/v2 selection"):
         smoke.main([])

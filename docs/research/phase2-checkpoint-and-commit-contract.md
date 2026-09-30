@@ -1,0 +1,32 @@
+# Phase-2 CheckpointClosureV1 与 canonical speech commit 审阅
+
+状态：**完整 checkpoint、restore 与 paired branch executor 仍未实现，接口继续 fail closed；它们现定位为可选的 paired-counterfactual enhancement，不阻断单路径 Online Pilot-T。** Phase-2 → canonical commit 窄路径已实现，其真实 env/recorder 逻辑用临时 `/tmp` 依赖 shim 和脚本化 backend 跑通；当前机器缺少原生 `gymnasium`/`openai` 依赖，仍需服务器验收。本文不改变 Action Contract V1、canonical V1 speech ontology、真实投票或冻结 ToM/mapper。
+
+## PRE 的完整状态闭包
+
+目标截点是 `CanonicalGameRecorder.before_agent_act` 已完成所有存活 observer 的 PRE self-report、已有 `_pending.prefix` 和 handoff、但尚未调用当前狼的 `after_agent_act`。只复制 public PRE JSON 会丢失以下影响未来的状态：
+
+| 所有者 | 必须捕获/恢复的维度 | 现状 |
+|---|---|---|
+| `WerewolfTextEnvV0` | 七人角色与 `WOLF_IDX/SEER_IDX/WITCH_IDX/VILLAGER_IDX`、存活向量、日/昼夜/阶段/当前行动者、night kill/seer/witch 决策与药剂使用历史、普通/PK 发言和投票队列、PK 候选、逐人 `vote_target`、私密 `game_log`、公共 `public_events`、V1 `speech_annotations`、胜场计数、配置、`_rng.getstate()` | 状态分散在整个 `__dict__`，没有经审计的完整序列化/恢复 API；`_stage_verified_speech` 只复制一次发言可能修改的五个字段，不是 mid-game clone。 |
+| 七个 `GPTAgent/LLMAgent` | 模型/temperature/max tokens/prompt profile、`nlp_action_to_env_action` 和任何动态 notes/vote_reason/本地记忆、日志句柄及后端引用 | `reset()` 是 no-op；belief collector 的 `_snapshot_agent_state` 只为只读 self-report 拷贝非 external 字段，不提供恢复；日志、backend 不能直接 deepcopy。 |
+| `CanonicalGameRecorder` | 已收集 prefixes/observations/submitted actions/raw actions、当前 `_pending` 的 prefix/handoff/event count、`_roles`、winner、绑定的 env、collector/reporter/agents | 无 checkpoint API；pending 是当前唯一待提交动作槽。 |
+| `CanonicalCallAudit` 与 backend wrapper | `_records`、`_operation_attempts`、dispatch/runtime-action 序号、预算、active context、语义标记；collector/reporters 和 backend/session 引用 | 有可观察记录与计数，但无克隆/恢复协议。共享这些对象会造成分支串扰和错误的 call IDs。 |
+| 进程与外部生成 | `random.getstate()`、环境独立 `_rng`、未来如果使用的 NumPy/torch RNG、backend request 配置、model revision、temperature/seed、远端响应 | `run_random.build_runtime` 在开局 `random.seed`，env 使用独立 `random.Random`；没有中途 paired-seed 注入。当前 `OpenAICompatibleBackend.chat_with_metadata` 每次发送完整 `messages` 的 `chat.completions.create` 请求，代码中没有 server-side conversation id；但远端采样的精确可复现性/seed 支持未被证明。 |
+| ToM/Phase-2 | 冻结 predictor/mapper 的 artifact identity、当前 PRE Q/R2/p 的来源、任何 runtime cache；分支后必须从新 PRE 重算 | 不能把 T0 p-panel 当成 Probe T3 panel。当前 callback `wolf_speech_tom(prefix, observation)` 在发言边界调用，但并非 checkpoint。 |
+
+`Phase2CheckpointClosureV1` 只保存当前 `(game_id,boundary_id,prefix_digest,acting_wolf,phase,public_history_digest)`、本地环境状态指纹、固定 blocker 列表和 `executable=false`，使用 canonical JSON 得到确定 digest。`local_env_state_digest` 指纹覆盖 env 除外部 speech perceiver 以外的字段，仅用于检测提交前后环境漂移；它**不是**可恢复状态，也不覆盖 agent/recorder/backend，绝不能叫作完整 `checkpoint_state_digest`。`assess_phase2_checkpoint_closure` 核对 live recorder/env 与机会身份；它**不**保存私密状态，**不是** checkpoint。`capture_intervention_checkpoint`、`clone_phase2_checkpoint`、`restore_intervention_checkpoint`、`run_intervention_branch` 全部 fail closed。不存在可信 `checkpoint_state_digest`，因为尚无完整 state codec。任何宣称 restore 等价的测试此时都不可能成立。已有测试仅验证 lineage、确定性规划 ID 与拒绝执行，不把它们冒充 branch-isolation 测试。
+
+未来可执行 V1 必须使用不可变、版本化、完整闭包字节，包含上述所有本地状态、随机状态、backend 配置/能力及源 PRE 身份；每次 clone 后在**隔离的 env、agent、recorder、audit、backend wrapper** 上计算同一 full-state digest。测试必须执行 `capture → mutate live → restore → digest equal`，以及 `clone A/B → 修改 A 的公私日志、角色/存活、队列、vote、agent memory、RNG、audit → B 和原 checkpoint 内容不变`。未知字段或 backend session/seed 不可恢复时 `executable=false`。配对随机数应把同一 checkpoint 的 branch-independent downstream seed 与 action namespace 分开，branch ID 由 checkpoint digest、treatment ID 和 seed 确定；外部 LLM 若不支持固定采样种子，只能声明环境随机数配对，不能声称语言结果完全配对。
+
+## Canonical public speech 的真实事务路径
+
+常规 `run_random.eval`：recorder `before_agent_act` 收集 PRE/handoff → agent 生成文本 → recorder `after_agent_act` 保存提交动作 → env `step/next_phase` 用 `SpeechPerceiver.parse_with_audit` 解析 → 追加唯一 `public_speech`、V1 annotation 与 game log → 更新发言/投票队列 → recorder `after_env_step` 写 submitted-action evidence。现有 constrained path 经 `scripts.verified_speech_commit.realize_and_commit` 调用 V1 realization/perception，`bind_verified_speech` 生成带原文、期望**单个** `V1SpeechAction`、day/phase/history/backend identity 和 parser audit 的 digest envelope；`recorder.commit_verified_speech` 先对 staging env 和 staging recorder 校验，成功后一次 publish，失败不提交。这是现有 exactly-once 槽：提交后 `_pending=None`，同 envelope 再次提交被拒。`env.step_verified_speech` 则没有 recorder evidence，不能替代 recorder 入口。
+
+Phase-2 `Phase2VerifiedSpeechResultV1` 是独立、plan-blinded perception 的证明；其 `requested_plan_digest`、`generated_text_digest` 和最终 `language_execution_valid` 可绑定文本与动作。**它不是 canonical V1 `SpeechParseAuditResult`**。尤其 Probe 请求没有必然对应的单个 V1 action，Redirect 往往含多条 V1 命题，故不能伪造 `expected=V1SpeechAction` 或把 Phase-2 parser 输出写入 V1 annotation。原有 `VerifiedSpeechCommit` 强制 `normalized_actions == [expected]`；新增独立的 `AuditedPublicSpeechCommit` 用真实 canonical parser 审计容纳 0..N 条动作。
+
+`werewolf.phase2_canonical_commit.commit_phase2_verified_speech` 已按这一顺序实现窄 adapter：核对 live PRE、speaker、phase、prefix/history digest、treatment/plan digest、Phase-2 audit 最后一次成功文本及其 SHA256；再对**同一文本**调用既有 canonical V1 `SpeechPerceiver.parse_with_audit`（不重写、不按 requested plan 篡改结果），允许该 parser 在 V1 ontology 内产生 0、1 或多条合法动作；最后通过 recorder 的 staged commit 事务发布。`AuditedPublicSpeechCommit` 是沿用原 V1 parser audit 的独立 envelope，不改变 V1 annotation schema。canonical parse 失败应产生零 public event；成功时文本逐字不变，sidecar 单独关联 canonical event ID/digest、Phase-2 audit digest、treatment ID、当前**非可执行** checkpoint-closure digest。这里的 closure digest 不能冒充 full checkpoint ID。不得把 PROBE/REDIRECT 写入 V1 ontology。speech `vote_intent` 只是语言命题；`vote_target` 只能由后来独立的 `vote/vote_pk` 阶段写入。
+
+多动作/零动作 envelope 的纯测试已通过；真实 env/recorder 的 Push、Redirect、Probe、重复提交、audit 篡改、PRE 漂移、actual vote 不变集成测试以临时 `/tmp` 的 `gymnasium.Env`、`openai`、`dotenv` import shim 和脚本化 backend 跑通。shim 只补齐导入，不替代游戏引擎逻辑；仍需在原生生产依赖环境重跑，故 **canonical commit binding 尚未获得生产环境验收**。此外仍需将真正 full checkpoint ID 代替 closure digest，才能为 branch artifact 提供完整 lineage。
+
+现有 `CanonicalCallAudit` 要求每个调用处于显式 context；`construct_canonical_game_evidence` 又要求 `SPEECH_PERCEPTION` 调用与 canonical V1 annotation attempts 精确相等。因此 Phase-2 额外 perception 调用不能直接使用 canonical `speech_perception_context`。Online Pilot-T 新增独立的 `Phase2BackendCallAuditV1`，以 `RUNTIME` 类别记录 canonical dispatch，同时 sidecar 记录角色、序号、attempt、请求/响应 hash、PRE/treatment 身份和 call ID；perception prompt 必须由生成文本和可信公开 context 重构验证，不接收 requested plan。脚本化完整日终游戏已验证该类记录与 canonical evidence 共存；生产环境仍需原生依赖和真实 Smoke-V3 验收。完整 checkpoint/restore 与 paired branch executor 可留待未来，不属于 Online Pilot-T preflight blocker。

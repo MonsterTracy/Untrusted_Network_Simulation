@@ -294,19 +294,27 @@ class CanonicalGameRecorder:
             raise RuntimeError("runtime action has no unique pending slot")
         self._pending.raw_action = deepcopy(action)
 
-    def commit_verified_speech(self, env, envelope):
+    def commit_verified_speech(self, env, envelope, *, expected_event=None):
         """Publish a verified speech against an already collected real PRE.
 
         No recorder evidence is added unless the whole staged step validates.
         """
         pending = self._pending
+        from werewolf.speech.verified_commit import AuditedPublicSpeechCommit, VerifiedSpeechCommit
+        if not isinstance(envelope, (VerifiedSpeechCommit, AuditedPublicSpeechCommit)):
+            raise TypeError("expected canonical speech commit envelope")
+        speaker = (envelope.expected.subject if isinstance(envelope, VerifiedSpeechCommit)
+                   else envelope.speaker)
         if (self._env is not env or pending is None or pending.raw_action is not None
                 or pending.prefix is None or pending.handoff is None
-                or pending.actor_id != envelope.expected.subject
+                or pending.actor_id != speaker
                 or pending.event_count_before != len(env.public_events)
                 or pending.prefix.public_event_history.digest != envelope.public_history_digest):
             raise ValueError("verified commit requires matching pending speech PRE")
         staged_env, result = env._stage_verified_speech(envelope)
+        if expected_event is not None and (
+                staged_env.public_events[pending.event_count_before] != expected_event):
+            raise ValueError("staged public speech differs from verified event")
         staged = copy(self)
         staged._pending = deepcopy(pending)
         staged.submitted_gameplay_actions = list(self.submitted_gameplay_actions)

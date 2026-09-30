@@ -37,8 +37,8 @@ from werewolf.phase2_language import (
 from werewolf.phase2_language_audit import LANGUAGE_AUDIT_VERSION
 
 
-NAME = "paper-phase2-language-smoke-v2"
-VERSION = "phase2_language_smoke_v2"
+NAME = "paper-phase2-language-smoke-v3"
+VERSION = "phase2_language_smoke_v3"
 SEED = "phase2-language-smoke-v1:20260929"
 EXPECTED_CASE_SELECTION_DIGEST = "9ab58cb73fdee18fee63795ee71df37e5ff00c2c320939c2f48221c3167e192e"
 # Reserve the entire scarce PK Probe stratum before all other draws.
@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         "Requires the frozen 1500-game publication, sealed Qwen3 OOF evaluation, "
         "full M3 mapper, configs/server.json, local Qwen3.5-9B vLLM at "
         "127.0.0.1:8000, and the configured client/vLLM environments. "
-        "See docs/research/phase2-language-smoke-v2-runbook.md."))
+        "See docs/research/phase2-language-smoke-v3-runbook.md."))
     parser.add_argument("--publication", type=Path, default=PUBLICATION)
     parser.add_argument("--evaluation-root", type=Path, default=EVALUATION)
     parser.add_argument("--mapper", type=Path, default=MAPPER)
@@ -335,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     cases = select_cases(collect_eligible(publication, sidecar))
     selected_digest = selection_digest(cases)
     if selected_digest != EXPECTED_CASE_SELECTION_DIGEST:
-        raise SmokeStudyError("smoke-v2 cases differ from the sealed smoke-v1 selection")
+        raise SmokeStudyError("smoke-v3 cases differ from the sealed smoke-v1/v2 selection")
     from werewolf.phase2_mapper_runtime import load_runtime_mapper
     runtime_mapper = load_runtime_mapper(args.mapper, expected_manifest_digest=MAPPER_DIGEST)
     q_by_pre = selected_oof_q(publication, cases, args.evaluation_root)

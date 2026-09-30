@@ -105,10 +105,11 @@ def replay(row, attempt_number=2):
     return perceived, verify_language_execution(plan, perceived, context)
 
 
-def test_real_fixture_provenance_and_v2_selection_lock():
+def test_real_fixture_provenance_and_v3_selection_lock():
     rows = real_fixtures()
     assert len(rows) == 8
-    assert smoke.NAME == "paper-phase2-language-smoke-v2"
+    assert smoke.NAME == "paper-phase2-language-smoke-v3"
+    assert smoke.VERSION == "phase2_language_smoke_v3"
     assert smoke.EXPECTED_CASE_SELECTION_DIGEST == SELECTION_DIGEST
     assert sum(quota for _, _, quota in smoke.LAYOUT) == 58
 

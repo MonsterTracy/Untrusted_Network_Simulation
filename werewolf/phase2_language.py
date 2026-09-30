@@ -19,7 +19,7 @@ from werewolf.phase2_actions import (
 )
 
 
-LANGUAGE_VERSION = "phase2_speech_semantic_v1_1"
+LANGUAGE_VERSION = "phase2_speech_semantic_v1_2"
 OTHER_REQUEST = "OTHER"
 
 
@@ -187,6 +187,7 @@ def _ground_explicit_semantics(text: str, perceived: Phase2SpeechSemanticV1) -> 
     """Check narrow, literal speech cues without consulting the requested plan."""
     commitments = list(perceived.commitment_targets)
     votes = list(perceived.vote_intent_targets)
+    rejected = list(perceived.rejected_targets)
     # A direct addressee question about current suspicion and public reasons is
     # a request about that addressee, even when other players are mentioned.
     addressed = re.match(r"\s*(player[1-7])\s*[,，:：]", text)
@@ -194,31 +195,80 @@ def _ground_explicit_semantics(text: str, perceived: Phase2SpeechSemanticV1) -> 
     if (addressed and re.search(r"(?:当前|目前).{0,12}(?:怀疑|投票判断|投票给)", text)
             and re.search(r"(?:依据|公开信息|已公开的信息)", text)):
         target = addressed.group(1)
+        # If this turn directly addresses only one player, a question about
+        # whom that player suspects is not addressed to the suspected player.
+        other_addressees = re.findall(
+            r"(?:^|[。！？；;，,\n])\s*(player[1-7])\s*[,，:：]", text)
+        other_addressees += re.findall(
+            r"(?:请问|想问|再问|也问)\s*(player[1-7])", text)
+        other_addressees += re.findall(
+            r"(player[1-7])\s*(?:你|请)\s*(?:也|再|能否|是否|当前|目前|说)", text)
+        if not any(player != target for player in other_addressees):
+            requests = [request for request in requests
+                        if request.addressee_j == target]
         request = InformationRequestV1(target, target)
         if request not in requests:
             requests.append(request)
-    # These explicit round-vote clauses say both what to push and where to vote.
-    # Add evidence; never erase a conflicting model extraction.
-    for match in re.finditer(
-            r"(?:本轮|今天)[^。！？\n]{0,30}?(?:放逐票|投票)[^。！？\n]{0,16}?(?:投向|投给|投到|投)\s*(player[1-7])",
-            text):
-        target = match.group(1)
-        if target not in commitments:
-            commitments.append(target)
-        if target not in votes:
-            votes.append(target)
+    # Explicit rejection has priority over lexical "投" inside its own scope.
+    rejection_patterns = (
+        r"(?:绝不能|绝不应|不应|不要|不|别|反对|拒绝)\s*(?:将|把)?\s*(?:票|放逐票)?\s*(?:投向|投给|投到|投|放逐|处理)\s*(player[1-7])",
+        r"不以\s*(player[1-7])\s*为.{0,8}(?:主要|放逐|目标)",
+        r"(player[1-7])\s*不是\s*(?:当前|本轮)?\s*(?:主要)?\s*(?:处理|放逐|投票)目标",
+        r"(player[1-7])\s*并非我(?:当前|本轮)的主要放逐目标",
+    )
+    explicitly_rejected = set()
+    rejection_matches = []
+    for pattern in rejection_patterns:
+        for match in re.finditer(pattern, text):
+            rejection_matches.append(match)
+            target = match.group(1)
+            explicitly_rejected.add(target)
+            if target not in rejected:
+                rejected.append(target)
+    # Add only positive expressions. A negated seat can never be manufactured
+    # into a positive commitment merely because the word "投" appears.
+    positive_patterns = (
+        r"(?:本轮|今天)[^。！？\n]{0,30}?(?:放逐票|投票)[^。！？\n]{0,16}?(?:投向|投给|投到|投)\s*(player[1-7])",
+        r"(?:本轮|今天|现在)\s*(?:投向|投给|投到|投|放逐|推动放逐|主要处理)\s*(player[1-7])",
+        r"(?:票|目标)\s*(?:转向|转投)\s*(player[1-7])",
+        r"(?:^|[，,。！？；;]|我|我们|大家)\s*(?:投向|投给|投|推动放逐|主要处理)\s*(player[1-7])",
+    )
+    explicitly_positive = set()
+    for pattern in positive_patterns:
+        for match in re.finditer(pattern, text):
+            target = match.group(1)
+            if any(rejection.start() <= match.start(1) < rejection.end()
+                   for rejection in rejection_matches) or re.search(
+                    r"(?:不|别|不要|绝不能|反对|拒绝)[^。！？，,；;\n]{0,8}$",
+                    text[max(0, match.start() - 12):match.start()]):
+                continue
+            explicitly_positive.add(target)
+            if target not in commitments:
+                commitments.append(target)
+            if target not in votes:
+                votes.append(target)
+    if explicitly_rejected:
+        commitments = [target for target in commitments
+                       if target not in explicitly_rejected or target in explicitly_positive]
+        votes = [target for target in votes
+                 if target not in explicitly_rejected or target in explicitly_positive]
     # Mentioning or criticizing players does not reject them as this round's
     # main target. Retain modeled rejection whenever an explicit refusal exists.
-    rejected = perceived.rejected_targets
     if (len(rejected) > 1 and not re.search(
             r"(?:不|别|拒绝|暂缓|搁置|排除).{0,16}(?:投|放逐|处理|主要|目标|targeting|考虑)", text)):
-        rejected = ()
+        rejected = []
     # A concrete vote clause with no abstention wording cannot be abstention.
     abstain = perceived.abstain_intent
-    if votes and not re.search(r"弃票|弃权|不投|不参与.{0,4}投票|放弃.{0,4}投票|不表态", text):
+    explicit_abstain = re.search(
+        r"(?:暂时不投(?!\s*player[1-7])|本轮弃票|今天弃票|我弃票|不投任何人|我不投票)",
+        text)
+    if explicit_abstain:
+        abstain = True
+    if votes and not explicit_abstain and not re.search(
+            r"弃票|弃权|不参与.{0,4}投票|放弃.{0,4}投票|不表态", text):
         abstain = False
     return replace(perceived, commitment_targets=tuple(commitments),
-                   rejected_targets=rejected, vote_intent_targets=tuple(votes),
+                   rejected_targets=tuple(rejected), vote_intent_targets=tuple(votes),
                    information_requests=tuple(requests), abstain_intent=abstain)
 
 
@@ -299,8 +349,10 @@ def build_realization_prompt(plan: Phase2SemanticPlanV1,
                        "无论公开上下文提到谁，都不得改选目标；只可从已经公开的信息中寻找支持这一目标的理由。"
                        "不得加入其他承诺、拒绝目标、弃票表态或信息请求。")
     elif plan.action is Action.REDIRECT:
-        instruction = (f"明确说明本轮不以{plan.candidate_j}为主要放逐目标，"
-                       f"并明确转而推动{plan.redirect_target}。拒绝前者不等于断言其是好人。")
+        instruction = (f"上游已冻结拒绝目标{plan.candidate_j}和唯一转向目标{plan.redirect_target}。"
+                       f"明确说明本轮不以{plan.candidate_j}为主要放逐目标，"
+                       f"并明确转而推动{plan.redirect_target}，本轮放逐票明确投给{plan.redirect_target}。"
+                       "拒绝前者不等于断言其是好人；不得增加第三目标、弃票、提问或私密身份断言。")
     elif plan.action is Action.PROBE:
         instruction = (f"直接向{plan.candidate_j}提问：其当前主要怀疑或投票判断是什么，"
                        "依据哪些已经公开的信息。不要推动任何人的放逐票，也不要弃票表态。")
@@ -310,7 +362,7 @@ def build_realization_prompt(plan: Phase2SemanticPlanV1,
         f"\n上次独立验证未通过，原因代码：{failure_reason}。"
         "再次严格执行同一冻结语义：" + instruction +
         "不可改变动作、目标或请求，也不可引用上次发言。")
-    length = ("优先只输出1至2句简洁自然的公开发言" if plan.action is Action.PUSH
+    length = ("优先只输出1至2句简洁自然的公开发言" if plan.action in (Action.PUSH, Action.REDIRECT)
               else "只输出1至4句公开发言")
     return ("你只负责把已冻结的 Phase-2 公开策略语义写成一段自然的中文狼人杀发言。\n"
             + _public_block(context) + "\n冻结语义：" + instruction + repair +
@@ -338,6 +390,9 @@ def build_perception_prompt(text: str, context: PublicLanguageContextV1) -> str:
             "都同时表示对X的主要目标承诺和投票意图。"
             "rejected_targets：所有被明确表示本轮不作为主要放逐目标的玩家；"
             "仅提及、比较或讨论其他玩家，不等于拒绝其为本轮目标，不得列入rejected_targets。"
+            "否定词作用域优先：“不投X”“不以X为主要放逐目标”“反对将票投向X”"
+            "“绝不能投X”“X不是当前主要处理目标”只表示拒绝X，"
+            "绝不表示承诺投X或投票意向X。"
             "不要把这解释为好人身份断言。"
             "vote_intent_targets：所有被明确提出要投票的玩家；没有则为空。"
             "information_requests：每个明确公开提问的主题玩家、被问玩家和请求类型；"
@@ -348,6 +403,8 @@ def build_perception_prompt(text: str, context: PublicLanguageContextV1) -> str:
             "且没有投票承诺。"
             "例如“本轮坚决将放逐票投给player4”应同时提取commitment_targets=[player4]"
             "和vote_intent_targets=[player4]。"
+            "“投Y”“推动放逐Y”“票转向Y”“主要处理Y”表示承诺Y和投票意向Y。"
+            "“暂时不投”“弃票”“不投任何人”表示发言者弃票；即使另有正向承诺也要保留冲突。"
             "abstain_intent 仅在发言者明确表示自己弃票时为 true；"
             "谈论别人弃票、否认弃票或明确投票都不是弃票表态。"
             "private_fact_claim 仅在将尚未公开的身份、夜间信息或未来结果声称为已知事实时为 true。"
@@ -383,18 +440,25 @@ class Phase2LanguageActorV1:
     """Existing chat backend transport with a separate Phase-2 actor prompt."""
 
     def __init__(self, backend, model_name: str, *, temperature: float = 0.0,
-                 max_tokens: int = 512):
+                 max_tokens: int = 512, call_audit=None):
         if not callable(getattr(backend, "chat_with_metadata", None)) or not model_name:
             raise Phase2LanguageError("actor requires chat backend and model")
         self.backend, self.model_name = backend, model_name
         self.temperature, self.max_tokens = temperature, max_tokens
+        self.call_audit = call_audit
 
     def realize(self, plan: Phase2SemanticPlanV1, context: PublicLanguageContextV1,
                 *, failure_reason: str | None = None) -> str:
         prompt = build_realization_prompt(plan, context, failure_reason)
-        content, metadata = self.backend.chat_with_metadata(
-            messages=[{"role": "user", "content": prompt}], model=self.model_name,
-            temperature=self.temperature, max_tokens=self.max_tokens)
+        if self.call_audit is None:
+            content, metadata = self.backend.chat_with_metadata(
+                messages=[{"role": "user", "content": prompt}], model=self.model_name,
+                temperature=self.temperature, max_tokens=self.max_tokens)
+        else:
+            content, metadata = self.call_audit.actor_call(
+                backend=self.backend, model=self.model_name, prompt=prompt,
+                failure_reason=failure_reason, temperature=self.temperature,
+                max_tokens=self.max_tokens)
         if not isinstance(content, str) or not content.strip() or (
                 isinstance(metadata, dict) and metadata.get("finish_reason") == "length"):
             raise Phase2LanguageError("REALIZATION_INVALID_OR_TRUNCATED")
@@ -404,19 +468,28 @@ class Phase2LanguageActorV1:
 class Phase2SemanticPerceiverV1:
     """No method accepts a requested plan; model sees only public context/text."""
 
-    def __init__(self, backend, model_name: str, *, max_tokens: int = 384):
+    def __init__(self, backend, model_name: str, *, max_tokens: int = 384,
+                 call_audit=None):
         if (not callable(getattr(backend, "chat_with_metadata", None))
                 or getattr(backend, "supports_json_schema", False) is not True
                 or not model_name):
             raise Phase2LanguageError("perceiver requires JSON-schema chat backend and model")
         self.backend, self.model_name, self.max_tokens = backend, model_name, max_tokens
+        self.call_audit = call_audit
 
     def perceive(self, text: str, context: PublicLanguageContextV1) -> Phase2SpeechSemanticV1:
         prompt = build_perception_prompt(text, context)
-        content, metadata = self.backend.chat_with_metadata(
-            messages=[{"role": "user", "content": prompt}], model=self.model_name,
-            temperature=0.0, max_tokens=self.max_tokens,
-            response_format=perception_response_format())
+        if self.call_audit is None:
+            content, metadata = self.backend.chat_with_metadata(
+                messages=[{"role": "user", "content": prompt}], model=self.model_name,
+                temperature=0.0, max_tokens=self.max_tokens,
+                response_format=perception_response_format())
+        else:
+            content, metadata = self.call_audit.perception_call(
+                backend=self.backend, model=self.model_name, prompt=prompt,
+                text=text, public_context=context, temperature=0.0,
+                max_tokens=self.max_tokens,
+                response_format=perception_response_format())
         if isinstance(metadata, dict) and metadata.get("finish_reason") == "length":
             raise Phase2LanguageError("PERCEPTION_TRUNCATED")
         return _ground_explicit_semantics(text, parse_perceived_semantics(content, context))

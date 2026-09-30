@@ -315,3 +315,90 @@ def test_repair_repeats_redirect_and_probe_frozen_requirements():
     probe_prompt = build_realization_prompt(probe_plan(legal, "player2"), public,
                                             "PROBE_REQUEST_MISMATCH")
     assert probe_prompt.count("直接向player2提问") == 2
+
+
+@pytest.mark.parametrize("text,rejected,committed,abstain", [
+    ("本轮不投player2，放逐票转向player3。", "player2", "player3", False),
+    ("不以player2为主要放逐目标，本轮投player3。", "player2", "player3", False),
+    ("反对将票投向player2，今天主要处理player3。", "player2", "player3", False),
+    ("绝不能投player2，本轮放逐票投给player3。", "player2", "player3", False),
+    ("player2不是当前主要处理目标，今天投player3。", "player2", "player3", False),
+])
+def test_redirect_negation_scope_is_plan_blinded(text, rejected, committed, abstain):
+    _, public = contexts()
+    # Recorded-model-style false positive for a negated vote; the adapter
+    # receives only text and trusted public context, never the Redirect plan.
+    payload = {"commitment_targets": ["player2"], "rejected_targets": [],
+               "vote_intent_targets": ["player2"], "information_requests": [],
+               "abstain_intent": False, "private_fact_claim": False}
+    backend = ScriptedBackend([json.dumps(payload)])
+    perceived = Phase2SemanticPerceiverV1(backend, "mock").perceive(text, public)
+    assert perceived.rejected_targets == (() if rejected is None else (rejected,))
+    assert perceived.commitment_targets == perceived.vote_intent_targets == (committed,)
+    assert perceived.abstain_intent is abstain
+    prompt = backend.calls[0]["messages"][0]["content"]
+    assert text in prompt and "requested_plan" not in prompt
+
+
+def test_redirect_abstention_conflict_is_preserved():
+    _, public = contexts()
+    payload = {"commitment_targets": [], "rejected_targets": [],
+               "vote_intent_targets": [], "information_requests": [],
+               "abstain_intent": False, "private_fact_claim": False}
+    backend = ScriptedBackend([json.dumps(payload)])
+    perceived = Phase2SemanticPerceiverV1(backend, "mock").perceive(
+        "暂时不投，本轮放逐票投给player3。", public)
+    assert perceived.abstain_intent
+    assert perceived.commitment_targets == perceived.vote_intent_targets == ("player3",)
+
+
+def test_explicit_negation_and_later_positive_same_target_keep_conflict():
+    _, public = contexts()
+    payload = {"commitment_targets": [], "rejected_targets": [],
+               "vote_intent_targets": [], "information_requests": [],
+               "abstain_intent": False, "private_fact_claim": False}
+    perceived = Phase2SemanticPerceiverV1(ScriptedBackend([json.dumps(payload)]), "mock").perceive(
+        "绝不能投player2，但本轮放逐票投给player2。", public)
+    assert perceived.rejected_targets == ("player2",)
+    assert perceived.commitment_targets == perceived.vote_intent_targets == ("player2",)
+
+
+def test_target_specific_not_vote_is_rejection_not_abstention():
+    _, public = contexts()
+    payload = {"commitment_targets": ["player2"], "rejected_targets": [],
+               "vote_intent_targets": ["player2"], "information_requests": [],
+               "abstain_intent": True, "private_fact_claim": False}
+    perceived = Phase2SemanticPerceiverV1(ScriptedBackend([json.dumps(payload)]), "mock").perceive(
+        "暂时不投player2，本轮放逐票投给player3。", public)
+    assert perceived.rejected_targets == ("player2",)
+    assert perceived.commitment_targets == perceived.vote_intent_targets == ("player3",)
+    assert not perceived.abstain_intent
+
+
+def test_explicit_second_probe_addressee_is_not_suppressed_by_grounding():
+    legal, public = contexts()
+    payload = {"commitment_targets": [], "rejected_targets": [],
+               "vote_intent_targets": [],
+               "information_requests": [
+                   {"addressee_j": "player2", "target_j": "player2",
+                    "request_type": "CURRENT_SUSPICION_BASIS"},
+                   {"addressee_j": "player3", "target_j": "player3",
+                    "request_type": "CURRENT_SUSPICION_BASIS"}],
+               "abstain_intent": False, "private_fact_claim": False}
+    text = ("player2，你当前主要怀疑谁，依据哪些已公开信息？"
+            "另外请问player3，你当前主要怀疑谁，依据哪些已公开信息？")
+    perceived = Phase2SemanticPerceiverV1(
+        ScriptedBackend([json.dumps(payload)]), "mock").perceive(text, public)
+    assert len(perceived.information_requests) == 2
+    assert verify_language_execution(
+        probe_plan(legal, "player2"), perceived, legal).invalid_reason == "PROBE_REQUEST_MISMATCH"
+
+
+def test_redirect_v12_actor_repeats_frozen_targets_on_repair():
+    legal, public = contexts()
+    plan = redirect_plan(legal, "player2", {k: .8 if k == "player3" else .1
+                                                for k in legal.legal_targets})
+    prompt = build_realization_prompt(plan, public, "REDIRECT_REJECTION_MISMATCH")
+    assert prompt.count("拒绝目标player2和唯一转向目标player3") == 2
+    assert prompt.count("本轮放逐票明确投给player3") == 2
+    assert "不得增加第三目标、弃票、提问或私密身份断言" in prompt

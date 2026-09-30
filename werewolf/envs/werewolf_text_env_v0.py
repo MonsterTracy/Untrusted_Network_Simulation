@@ -243,13 +243,17 @@ class WerewolfTextEnvV0(gym.Env):
         return observation, reward, done, info
 
     def _stage_verified_speech(self, envelope):
-        from werewolf.speech.verified_commit import VerifiedSpeechCommit, perception_identity
-        if not isinstance(envelope, VerifiedSpeechCommit):
-            raise TypeError("expected VerifiedSpeechCommit")
+        from werewolf.speech.verified_commit import (
+            AuditedPublicSpeechCommit, VerifiedSpeechCommit, perception_identity,
+        )
+        if not isinstance(envelope, (VerifiedSpeechCommit, AuditedPublicSpeechCommit)):
+            raise TypeError("expected canonical speech commit envelope")
         audit = envelope.validated_perception()
+        speaker = (envelope.expected.subject if isinstance(envelope, VerifiedSpeechCommit)
+                   else envelope.speaker)
         if (self.phase not in ('speech', 'speech_pk')
                 or envelope.phase != self.phase or envelope.day != self.day
-                or envelope.expected.subject != normalize_player(self.current_act_idx + 1)
+                or speaker != normalize_player(self.current_act_idx + 1)
                 or envelope.public_history_digest != freeze_public_event_history(self.public_events).digest
                 or (envelope.backend_id, envelope.model_id) != perception_identity(self.speech_perceiver)):
             raise ValueError("verified speech opportunity mismatch")

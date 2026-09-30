@@ -1,0 +1,589 @@
+{
+  "source": {
+    "artifact": "paper-phase2-language-smoke-v2",
+    "manifest_digest": "a7d4d31a7af49858956262c67e7f8b1d4b86777abbf960c0ef0af9cb6c52cfdd",
+    "case_selection_digest": "9ab58cb73fdee18fee63795ee71df37e5ff00c2c320939c2f48221c3167e192e",
+    "source_case_count": 58
+  },
+  "purpose": "Exact final-invalid regression fixtures extracted verbatim from the real smoke-v2 artifact.",
+  "fixtures": [
+    {
+      "source_row_index": 7,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-000804-seed-1397909503686500258",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-000804-seed-1397909503686500258-pre-000045",
+      "prefix_digest": "c0fb597ecfa3d9ae647386c74e22fbe7481dde74a77b0f8b6b6028dde6412872",
+      "phase": "speech_pk",
+      "acting_wolf": "player4",
+      "requested_action": "PROBE",
+      "candidate_j": "player6",
+      "requested_plan": {
+        "acting_wolf": "player4",
+        "action": "PROBE",
+        "candidate_j": "player6",
+        "commitment_target": null,
+        "continuation_actor": "player7",
+        "expected_observation_window": {
+          "after_boundary_id": "paper-development-qwen35-9b-1500-v1-game-000804-seed-1397909503686500258-pre-000045",
+          "before_actor": "player7",
+          "event_type": "public_speech",
+          "expected_speakers": [
+            "player6"
+          ],
+          "phase": "speech_pk"
+        },
+        "information_request": {
+          "addressee_j": "player6",
+          "request_type": "CURRENT_SUSPICION_BASIS",
+          "target_j": "player6"
+        },
+        "legal_targets": [
+          "player6"
+        ],
+        "phase": "speech_pk",
+        "redirect_target": null,
+        "rejected_target": null,
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "NO_STANCE"
+      },
+      "final_invalid_reason": "PROBE_REQUEST_MISMATCH",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "player6，你刚才反复质疑 player5 指认自己是女巫的逻辑漏洞，这是否意味着你当前主要怀疑 player5 的身份？结合你之前查验 player2 是狼人的公开信息，你为何在局势如此混乱的情况下突然将矛头转向 player5，而不是继续追查 player2 或 player1？",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [],
+            "information_requests": [
+              {
+                "addressee_j": "player5",
+                "request_type": "CURRENT_SUSPICION_BASIS",
+                "target_j": "player5"
+              },
+              {
+                "addressee_j": "player6",
+                "request_type": "CURRENT_SUSPICION_BASIS",
+                "target_j": "player6"
+              }
+            ],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player4",
+            "vote_intent_targets": []
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "PROBE_REQUEST_MISMATCH"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "player6，你刚才指认 player5 是狼人的逻辑依据是什么？既然你强烈推动放逐 player4，能否结合已公开的发言信息，具体说明 player4 哪里站不住脚？",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [],
+            "information_requests": [
+              {
+                "addressee_j": "player6",
+                "request_type": "OTHER",
+                "target_j": "player6"
+              },
+              {
+                "addressee_j": "player6",
+                "request_type": "OTHER",
+                "target_j": "player4"
+              }
+            ],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player4",
+            "vote_intent_targets": []
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "PROBE_REQUEST_MISMATCH"
+        }
+      ]
+    },
+    {
+      "source_row_index": 18,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-000020-seed-955921117205098709",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-000020-seed-955921117205098709-pre-000049",
+      "prefix_digest": "50e5db29cf397430c613ca7a16a6152e4ad01950be8116462c974305fe28ba6a",
+      "phase": "speech_pk",
+      "acting_wolf": "player3",
+      "requested_action": "REDIRECT",
+      "candidate_j": "player4",
+      "requested_plan": {
+        "acting_wolf": "player3",
+        "action": "REDIRECT",
+        "candidate_j": "player4",
+        "commitment_target": "player5",
+        "continuation_actor": null,
+        "expected_observation_window": null,
+        "information_request": null,
+        "legal_targets": [
+          "player4",
+          "player5"
+        ],
+        "phase": "speech_pk",
+        "redirect_target": "player5",
+        "rejected_target": "player4",
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "player5"
+      },
+      "final_invalid_reason": "REDIRECT_REJECTION_MISMATCH",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "昨晚 player4 声称查验了 player5 是狼人，但这番话来得太突然，且缺乏前置逻辑铺垫，我目前并不认可 player4 的发言可信度。鉴于局势依旧不明，本轮我明确反对将放逐票投向 player4，转而推动大家将票投给 player5。当然，这不代表我断言 player5 就是好人，只是基于当前信息，player4 的指控显得站不住脚，我们需要更谨慎地处理这一轮投票。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player5",
+              "player4"
+            ],
+            "information_requests": [],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [
+              "player4"
+            ],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player3",
+            "vote_intent_targets": [
+              "player5",
+              "player4"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_COMMITMENT_MISMATCH"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "我本轮明确反对将放逐票投向 player4，因为局势依旧不明且缺乏针对他的确凿逻辑。虽然拒绝 player4 不等于断言他是好人，但我公开推动本轮将放逐票转向 player5。鉴于当前信息不足，希望大家多聊，我暂时不投。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player5",
+              "player4"
+            ],
+            "information_requests": [],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player3",
+            "vote_intent_targets": [
+              "player5",
+              "player4"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        }
+      ]
+    },
+    {
+      "source_row_index": 23,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-000782-seed-3139603312453304181",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-000782-seed-3139603312453304181-pre-000051",
+      "prefix_digest": "cde14a6d922a3571ae81ad25b150c2203cf3653eb5913b7541c31cc11ce964b3",
+      "phase": "speech_pk",
+      "acting_wolf": "player7",
+      "requested_action": "REDIRECT",
+      "candidate_j": "player4",
+      "requested_plan": {
+        "acting_wolf": "player7",
+        "action": "REDIRECT",
+        "candidate_j": "player4",
+        "commitment_target": "player3",
+        "continuation_actor": null,
+        "expected_observation_window": null,
+        "information_request": null,
+        "legal_targets": [
+          "player3",
+          "player4",
+          "player6"
+        ],
+        "phase": "speech_pk",
+        "redirect_target": "player3",
+        "rejected_target": "player4",
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "player3"
+      },
+      "final_invalid_reason": "REDIRECT_REJECTION_MISMATCH",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "我本轮坚决将放逐票投向 player3，因为 player4 的发言逻辑存在明显漏洞，但这并不等于我认定 player4 是好人。鉴于场上信息混乱，我们需要优先处理 player3 带来的风险，希望好人能借此理清局势。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": "PUSH",
+            "commitment_targets": [
+              "player3"
+            ],
+            "information_requests": [],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player7",
+            "vote_intent_targets": [
+              "player3"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "我本轮坚决将放逐票投向 player3，明确说明 player4 并非我当前的主要放逐目标。拒绝 player4 不等于断言他是好人，只是基于现有逻辑我更倾向于先处理 player3。希望好人能借此理清局势，后续再根据新信息调整策略。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": "PUSH",
+            "commitment_targets": [
+              "player3"
+            ],
+            "information_requests": [],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player7",
+            "vote_intent_targets": [
+              "player3"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        }
+      ]
+    },
+    {
+      "source_row_index": 25,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-000128-seed-7844618486768717650",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-000128-seed-7844618486768717650-pre-000023",
+      "prefix_digest": "de4ad0cefda29e4ae274f485105e5dcff099f822b945008d06bf5bddb100d608",
+      "phase": "speech_pk",
+      "acting_wolf": "player4",
+      "requested_action": "REDIRECT",
+      "candidate_j": "player7",
+      "requested_plan": {
+        "acting_wolf": "player4",
+        "action": "REDIRECT",
+        "candidate_j": "player7",
+        "commitment_target": "player6",
+        "continuation_actor": null,
+        "expected_observation_window": null,
+        "information_request": null,
+        "legal_targets": [
+          "player6",
+          "player7"
+        ],
+        "phase": "speech_pk",
+        "redirect_target": "player6",
+        "rejected_target": "player7",
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "player6"
+      },
+      "final_invalid_reason": "REDIRECT_REJECTION_MISMATCH",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "我本轮明确不以 player7 为主要放逐目标，而是坚决推动将票投给 player6。player6 刚才连续指认他人并试图转移焦点，这种急于坐实嫌疑的行为反而暴露了他内心的慌乱。拒绝 player7 并不代表我断言他是好人，只是基于当前局势认为 player6 的发言逻辑存在更大漏洞。既然场上需要有人承担风险，那这轮放逐票理应落在 player6 身上。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": "PUSH",
+            "commitment_targets": [
+              "player6"
+            ],
+            "information_requests": [],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player4",
+            "vote_intent_targets": [
+              "player6"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "我本轮明确不以 player7 为主要放逐目标，而是坚决推动将票投给 player6。拒绝 player7 并非断言他是好人，只是基于当前局势认为 player6 的嫌疑更为突出。既然 player6 已公开指认他人并试图转移焦点，这恰恰暴露了他的狼面。因此，我选择本轮放逐票直接投向 player6。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": "PUSH",
+            "commitment_targets": [
+              "player6"
+            ],
+            "information_requests": [],
+            "phase": "speech_pk",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player4",
+            "vote_intent_targets": [
+              "player6"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        }
+      ]
+    },
+    {
+      "source_row_index": 28,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-001297-seed-9034062436613288222",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-001297-seed-9034062436613288222-pre-000023",
+      "prefix_digest": "413c10720566e6c75fd5a9834bcd75fca9624bddf0457414b119e2940702b11f",
+      "phase": "speech",
+      "acting_wolf": "player4",
+      "requested_action": "REDIRECT",
+      "candidate_j": "player7",
+      "requested_plan": {
+        "acting_wolf": "player4",
+        "action": "REDIRECT",
+        "candidate_j": "player7",
+        "commitment_target": "player2",
+        "continuation_actor": null,
+        "expected_observation_window": null,
+        "information_request": null,
+        "legal_targets": [
+          "player2",
+          "player6",
+          "player7"
+        ],
+        "phase": "speech",
+        "redirect_target": "player2",
+        "rejected_target": "player7",
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "player2"
+      },
+      "final_invalid_reason": "PRIVATE_FACT_CLAIM",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "我作为预言家昨晚查验 player5 是狼人，鉴于其首夜查验自己的离谱操作，本轮放逐票应坚决投给 player5。虽然 player7 的质疑行为同样值得警惕，但本轮我们不应将其作为主要放逐目标，而是需要推动将票投给 player2 以完成对 player5 的清除。拒绝 targeting player7 绝不意味着认定他是好人，只是当前阶段策略上需优先处理 player5 带来的威胁。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player5",
+              "player2"
+            ],
+            "information_requests": [],
+            "phase": "speech",
+            "private_fact_claim": true,
+            "rejected_targets": [
+              "player7"
+            ],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player4",
+            "vote_intent_targets": [
+              "player5",
+              "player2"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "PRIVATE_FACT_CLAIM"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "我作为预言家昨晚查验 player5 是狼人，鉴于其首夜查验自己的离谱操作，本轮我强烈支持将放逐票投给 player5。虽然 player7 的质疑也值得注意，但本轮我们不应将其作为主要放逐目标，而应转而推动 player2 进行更深入的排查。拒绝 player7 并非断言他是好人，只是基于当前局势认为 player2 更需要被审视。let player5 go。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player5",
+              "player2"
+            ],
+            "information_requests": [],
+            "phase": "speech",
+            "private_fact_claim": true,
+            "rejected_targets": [
+              "player7"
+            ],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player4",
+            "vote_intent_targets": [
+              "player5",
+              "player2"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "PRIVATE_FACT_CLAIM"
+        }
+      ]
+    },
+    {
+      "source_row_index": 34,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-001517-seed-1699742536948917009",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-001517-seed-1699742536948917009-pre-000035",
+      "prefix_digest": "ae64d1197438f13fcc944b9888696239e71cfa8a9a9be69583487db0c3a3e02d",
+      "phase": "speech",
+      "acting_wolf": "player2",
+      "requested_action": "REDIRECT",
+      "candidate_j": "player5",
+      "requested_plan": {
+        "acting_wolf": "player2",
+        "action": "REDIRECT",
+        "candidate_j": "player5",
+        "commitment_target": "player4",
+        "continuation_actor": null,
+        "expected_observation_window": null,
+        "information_request": null,
+        "legal_targets": [
+          "player3",
+          "player4",
+          "player5"
+        ],
+        "phase": "speech",
+        "redirect_target": "player4",
+        "rejected_target": "player5",
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "player4"
+      },
+      "final_invalid_reason": "REDIRECT_REJECTION_MISMATCH",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "我本轮坚决反对将放逐票投向 player5，因为当前局势下 player4 的发言逻辑存在更明显的矛盾，必须优先针对 player4。拒绝保 player5 绝不意味着认定他是好人，只是基于现有信息认为 player4 的威胁性更大。我强烈推动本轮放逐票统一投向 player4，请大家重新审视 player4 的指认逻辑。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player4",
+              "player5"
+            ],
+            "information_requests": [],
+            "phase": "speech",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player2",
+            "vote_intent_targets": [
+              "player4",
+              "player5"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "本轮我明确不以 player5 为主要放逐目标，而是坚决推动放逐票统一投向 player4。拒绝 player5 并非断言其身份，仅表示当前逻辑重心需转移至 player4 身上。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": "PUSH",
+            "commitment_targets": [
+              "player4"
+            ],
+            "information_requests": [],
+            "phase": "speech",
+            "private_fact_claim": false,
+            "rejected_targets": [],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player2",
+            "vote_intent_targets": [
+              "player4"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_REJECTION_MISMATCH"
+        }
+      ]
+    },
+    {
+      "source_row_index": 36,
+      "game_id": "paper-development-qwen35-9b-1500-v1-game-000044-seed-8339711682864673774",
+      "boundary_id": "paper-development-qwen35-9b-1500-v1-game-000044-seed-8339711682864673774-pre-000023",
+      "prefix_digest": "1f735da16a0951c6f3eac09a4dcef7b885e3bb5ba3097f4cae4a9f24726e69c7",
+      "phase": "speech",
+      "acting_wolf": "player5",
+      "requested_action": "REDIRECT",
+      "candidate_j": "player6",
+      "requested_plan": {
+        "acting_wolf": "player5",
+        "action": "REDIRECT",
+        "candidate_j": "player6",
+        "commitment_target": "player7",
+        "continuation_actor": null,
+        "expected_observation_window": null,
+        "information_request": null,
+        "legal_targets": [
+          "player3",
+          "player6",
+          "player7"
+        ],
+        "phase": "speech",
+        "redirect_target": "player7",
+        "rejected_target": "player6",
+        "schema_version": "phase2_action_contract_v1",
+        "vote_intent": "player7"
+      },
+      "final_invalid_reason": "REDIRECT_COMMITMENT_MISMATCH",
+      "attempts": [
+        {
+          "attempt": 1,
+          "generated_text": "我完全同意 player4 和 player5 的质疑，本轮放逐票绝不应投给 player6，因为他的弃票行为本身已暴露出对局势的回避。既然 player6 选择沉默，那么真正的风险点在于 player7，他同样在公开质疑 player1 却未给出任何实质依据，这种跟风行为更值得警惕。我强烈推动本轮放逐票必须投向 player7，以检验其真实立场。至于 player1 是否像女巫，那需要后续查验来验证，但此刻 player7 的发言逻辑才是我们最该关注的漏洞。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player7",
+              "player6"
+            ],
+            "information_requests": [],
+            "phase": "speech",
+            "private_fact_claim": false,
+            "rejected_targets": [
+              "player6"
+            ],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player5",
+            "vote_intent_targets": [
+              "player7",
+              "player6"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_COMMITMENT_MISMATCH"
+        },
+        {
+          "attempt": 2,
+          "generated_text": "我完全同意 player4 对 player5 的质疑，但本轮放逐票绝不能投向 player6，因为 player6 的弃票行为本身并不能证明其身份清白。鉴于 player6 和 player7 此前均选择弃票，我强烈推动本轮放逐票必须转向 player7，以应对当前局势。拒绝将票投给 player6 绝不意味着我断言 player6 是好人，只是基于策略考量需要调整目标。",
+          "perceived_semantics": {
+            "abstain_intent": false,
+            "action_identity": null,
+            "commitment_targets": [
+              "player7",
+              "player6"
+            ],
+            "information_requests": [],
+            "phase": "speech",
+            "private_fact_claim": false,
+            "rejected_targets": [
+              "player6"
+            ],
+            "schema_version": "phase2_speech_semantic_v1_1",
+            "speaker": "player5",
+            "vote_intent_targets": [
+              "player7",
+              "player6"
+            ]
+          },
+          "language_execution_valid": false,
+          "language_invalid_reason": "REDIRECT_COMMITMENT_MISMATCH"
+        }
+      ]
+    }
+  ]
+}
