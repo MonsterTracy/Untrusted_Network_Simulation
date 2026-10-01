@@ -1,8 +1,11 @@
 """Real server assembly with scripted dependencies, never live model calls."""
 
 from copy import deepcopy
+from dataclasses import replace
+import inspect
 from pathlib import Path
 import json
+import re
 import subprocess
 from types import SimpleNamespace
 
@@ -17,7 +20,7 @@ import yaml
 from scripts.run_phase2_online_intervention_pilot import build_parser
 from scripts.collect_games import plan_fields
 import scripts.run_phase2_language_smoke as smoke
-from tests.phase2.test_decision_opportunity import Mapper
+from tests.phase2.test_decision_opportunity import Mapper, q_matrix
 from tests.phase2.test_intervention_risk import values
 from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
@@ -30,6 +33,7 @@ import werewolf.phase2_mapper_runtime as mapper_module
 import werewolf.phase2_online_preflight as preflight
 import werewolf.phase2_online_runner as runner
 import werewolf.phase2_online_server as server
+from run_random import eval as production_eval
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -152,6 +156,21 @@ def test_failed_full_runtime_preflight_prevents_campaign_start(tmp_path, monkeyp
     args, _, counters, _ = _setup(tmp_path, monkeypatch)
     monkeypatch.setattr(preflight, "_frozen_q_runtime_ready", lambda _: False)
     assert server.execute_server_campaign(args) == 1
+    assert not args.work_directory.exists() and not args.destination.exists()
+    assert counters["language"] == counters["q_predict"] == 0
+
+
+def test_missing_production_gameplay_hook_fails_before_campaign_files(tmp_path, monkeypatch, capsys):
+    args, _, counters, _ = _setup(tmp_path, monkeypatch)
+    # Exact production signature at d6c8bce, rather than a **kwargs mock.
+    def old_eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
+                 planning_mode="original", plan_provider=None, speech_treatment=None,
+                 ablation_trace=None, wolf_speech_tom=None):
+        raise AssertionError("preflight must not execute gameplay")
+    monkeypatch.setattr(runner, "run_canonical_game", old_eval)
+    assert server.execute_server_campaign(args) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert "PRODUCTION_GAMEPLAY_HOOK_UNAVAILABLE" in output["preflight"]["blockers"]
     assert not args.work_directory.exists() and not args.destination.exists()
     assert counters["language"] == counters["q_predict"] == 0
 
@@ -319,3 +338,118 @@ def test_resume_rejects_changed_binding_and_leaves_ledger_unchanged(tmp_path, mo
     with pytest.raises(ValueError, match="resume"):
         server.execute_server_campaign(args)
     assert ledger_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ("success", "language_failure", "zero_assignment"))
+def test_server_factory_executes_real_production_loop(tmp_path, monkeypatch, mode):
+    from tests.canonical_collection.test_runtime_game_evidence import (
+        _Agent, _Backend, _OneSpeechEnvironment,
+    )
+    from tests.phase2.test_online_runner_integration import _StopAfterFirstDayEnv
+
+    args, _, _, _ = _setup(tmp_path, monkeypatch)
+    plan, game_plan, config, cap, mapper, reference, _ = server.load_server_inputs(args)
+    predictor = server.Qwen3GameplayPredictorClient()
+    q_predictions = []
+    def predict(prefix):
+        q_predictions.append(prefix.prefix_digest)
+        return q_matrix()
+    predictor.predict = predict
+    backends = server.load_named_backends(config)
+    raw = backends["local_qwen"]
+    raw.chat = _Backend().chat
+    ledger = server.OnlinePilotAssignmentLedgerV1(
+        args.work_directory / "assignment-ledger.jsonl", plan=plan,
+        source_commit=args.source_commit)
+    factory = server.ServerRuntimeFactory(
+        args=args, plan=plan, game_plan=game_plan, config=config, call_limit=cap,
+        mapper=mapper, reference=reference, predictor=predictor, backends=backends,
+        ledger=ledger, work_directory=args.work_directory)
+    bundle = factory(factory.game_ids[0])
+    assert bundle.preflight.ready
+    assert runner.run_canonical_game is production_eval
+    inspect.signature(production_eval).bind(
+        bundle.env, bundle.agents, bundle.roles, canonical_recorder=bundle.recorder,
+        call_audit=bundle.call_audit, online_pilot=bundle.pilot)
+
+    # Only external agents/backend responses and the fixture's stopping bound
+    # are scripted. Factory, eval, PRE, assignment, commit and voting are real.
+    baseline_votes, language_calls = [], []
+    class BaselineAgent(_Agent):
+        def act(self, observation):
+            action = super().act(observation)
+            if "vote" in observation["phase"]:
+                baseline_votes.append((self.seat, action))
+            return action
+    agents = tuple(BaselineAgent(bundle.pilot.backend, seat) for seat in range(1, 8))
+    bundle.recorder.belief_collector.agents = agents
+    bundle = replace(bundle, agents=agents)
+    bundle.env.__class__ = (_OneSpeechEnvironment if mode == "zero_assignment"
+                           else _StopAfterFirstDayEnv)
+    if mode == "zero_assignment":
+        # Select a bounded fixture whose only public PRE belongs to a non-wolf.
+        for seed in range(20):
+            trial = _OneSpeechEnvironment(
+                speech_perceiver=bundle.env.speech_perceiver, random_seed=seed,
+                log_save_path=None)
+            observation = trial.reset(roles=bundle.roles)
+            while trial.phase not in ("speech", "speech_pk"):
+                observation, _, _, _ = trial.step(
+                    agents[observation["current_act_idx"] - 1].act(observation))
+            if trial.roles[trial.current_act_idx] != "Werewolf":
+                bundle.env._rng.seed(seed)
+                break
+        else:
+            pytest.fail("no non-wolf first speaker in the deterministic fixture")
+        baseline_votes.clear()
+
+    def language_response(**kwargs):
+        # Reopen the durable journal at every dispatch, rather than checking
+        # only the runner's in-memory assignment state.
+        persisted = server.OnlinePilotAssignmentLedgerV1(
+            ledger.path, plan=plan, source_commit=args.source_commit)
+        assert persisted.snapshot()["assignment_count"] == 1
+        stages = persisted.snapshot()["games"][bundle.recorder.game_id]
+        assert "ASSIGNMENT" in stages
+        language_calls.append(kwargs)
+        prompt = kwargs["messages"][0]["content"]
+        if "response_format" not in kwargs:
+            if mode == "language_failure":
+                return "本轮弃票。", {"finish_reason": "stop"}
+            direct = re.search(r"唯一目标(player[1-7])", prompt)
+            if direct:
+                return f"本轮放逐票投给{direct.group(1)}。", {"finish_reason": "stop"}
+            j, k = re.search(r"拒绝目标(player[1-7])和唯一转向目标(player[1-7])", prompt).groups()
+            return f"本轮不以{j}为主要放逐目标，本轮放逐票投给{k}。", {"finish_reason": "stop"}
+        text = prompt.split("待解析的本轮公开发言：\n", 1)[1].split("\ncommitment_targets：", 1)[0]
+        votes = re.findall(r"放逐票投给(player[1-7])", text)
+        rejected = re.findall(r"不以(player[1-7])为主要放逐目标", text)
+        return json.dumps({"commitment_targets": votes[-1:], "rejected_targets": rejected,
+            "vote_intent_targets": votes[-1:], "information_requests": [],
+            "abstain_intent": "弃票" in text, "private_fact_claim": False}), {"finish_reason": "stop"}
+    raw.chat_with_metadata = language_response
+    result = runner.run_online_game(
+        bundle.env, bundle.agents, bundle.roles, recorder=bundle.recorder,
+        call_audit=bundle.call_audit, pilot=bundle.pilot, preflight=bundle.preflight)
+    assert result in ("Werewolf win", "Villager win")
+    evidence = bundle.recorder.complete_evidence()
+    snapshot = ledger.snapshot()
+    assert snapshot["assignment_count"] == int(mode != "zero_assignment")
+    assert len(q_predictions) == int(mode != "zero_assignment")
+    assert evidence.game_id == bundle.recorder.game_id
+    if mode == "zero_assignment":
+        assert not language_calls and not bundle.pilot.state.assignments
+    else:
+        stages = snapshot["games"][bundle.recorder.game_id]
+        assert stages["EXECUTION"]["execution"]["success"] is (mode == "success")
+        assert len(bundle.pilot.state.assignments) == 1
+        assert factory.verify_execution(bundle.recorder.game_id, stages)
+        assert bool(stages.get("CONSEQUENCE")) is (mode == "success")
+        actual_votes = [event["votes"] for event in bundle.env.public_events
+                        if event["event_type"] == "vote_result"]
+        assert actual_votes and baseline_votes
+        for votes in actual_votes:
+            for vote in votes:
+                seat = int(vote["voter"].removeprefix("player"))
+                expected = next(action[1] for actor, action in baseline_votes if actor == seat)
+                assert vote["target"] == (None if expected == 0 else f"player{expected}")

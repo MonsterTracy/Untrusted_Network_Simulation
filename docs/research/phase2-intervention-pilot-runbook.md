@@ -135,6 +135,18 @@ python -m scripts.run_phase2_online_intervention_pilot \
 
 恢复必须保持 inputs、source、configs、pins、paths、seed pool 与 ledger 完全一致，不重抽旧 assignment、不重演旧 game。缺 execution/day consequence 的旧 assignment 按现有 ledger 记 `INTERRUPTED`，以新 game ID 继续。如果计数已达标、进程仅在 publication 前中断，runner 只验证/发布，不启动新 game；该 publication-only preflight 不能用于 gameplay。完整目的地一旦存在，含 `--resume` 也拒绝覆盖。
 
+### Production gameplay hook 与 source 变更
+
+正式入口实际调用 `werewolf.phase2_online_runner.run_online_game` → `run_random.eval`，使用显式 `online_pilot` keyword-only hook。这个 hook 必须进入提交的 `run_random.py`；本地测试读取未提交 hook 不能证明服务器 clean HEAD 可执行。full preflight 与 `run_online_game` 启动 game 前均检查实际 callable 的参数绑定；缺少 hook 返回 `PRODUCTION_GAMEPLAY_HOOK_UNAVAILABLE`，不能先写 `GAME_STARTED` 再发现 signature mismatch。
+
+该 hook 在 canonical recorder 收集 PRE/handoff 后、baseline action 之前调用 `handle_pre`；成功 canonical commit 消耗当前 speech step，否则继续 baseline。每次实际 env step 后调用 `after_step` 观察日终，finish 后调用 `after_game`。`plan_provider` 只属于既有 constrained planning 路径；language preparation seam 本身不运行 gameplay，不能替代此注入点。默认无 hook 的执行行为不变。
+
+若运行后需修改 tracked source，旧 `run_inputs.json` / ledger 的 source pin 不能替换，旧 canonical claims 也不能重写。必须保留旧 work directory；修复提交后另行冻结新 canonical game plan（新 `source_revision`、必然变化的 plan digest），并使用新 work directory。即使 assignment 为 0，已有 `GAME_STARTED` / claim 仍是应保留的工程失败证据；原 source 下的 resume 规则不能用于跨 source 重启。
+
+本次旧运行没有 assignment，修复后的独立 work directory 可保留原 Pilot plan 的完整冻结内容，重冻结同一 `collection_id` 的 canonical game plan 并显式记录这次零 assignment 工程重启；CLI 不强制要求更换 campaign identity。若研究者选择用新 identity 区分两次运行，则 Pilot plan 的 `pilot_id` 与 canonical `collection_id` 必须同步，并保留原 assignment seed、0.5/0.5、selection rule、10 assignments、安全上限和完整有序 seed pool。新 identity 会改变随机键的域分隔，不能声称未来逐笔抽样结果与旧 identity 相同。不要在旧 campaign 中重写已 claimed game；新的 canonical plan/source 是独立运行，不能把旧 claim 移入新 ledger。这些 plans 由操作者在修复 commit 后冻结，不覆盖旧 plans/evidence。
+
+更新 `COMMON` 的 `--source-commit`、`QUALIFICATION` 的两个 plan 路径和独立 work directory 后，先重新运行 `--preflight-only`；此步骤不启动 qualification。启动前保留 `CUBLAS_WORKSPACE_CONFIG=:4096:8`，它是 sealed Q runtime 的要求。Smoke 仍由原 gate 与全部 `SOURCE_FILES` 字节摘要验证；`run_random.py` 和 online runner/preflight 不在 Smoke 的七个 source files 中，因此仅这些文件的修复不要求重跑 Smoke，也不能省略其摘要检查。
+
 **Step 4：人工审阅 qualification artifact 和 evidence。** `COMPLETE` 不自动通过工程审查；人工确认 backend audit、canonical commit、实际 vote/exile、失败/中断、support 和恢复证据。qualification 不进入 λ 数据集。
 
 **Step 5：未来另行启动 120-assignment Pilot-T。** 仅在人工通过后，用独立的预注册 plans / seeds / work / destination 执行；qualification 不会自动启动此步骤：

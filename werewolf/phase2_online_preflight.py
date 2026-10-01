@@ -301,6 +301,11 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
     except (OSError, TypeError, ValueError, KeyError):
         ledger_bound = False
     blockers = []
+    try:
+        from werewolf.phase2_online_runner import require_online_gameplay_hook
+        require_online_gameplay_hook()
+    except (ImportError, TypeError, ValueError):
+        blockers.append("PRODUCTION_GAMEPLAY_HOOK_UNAVAILABLE")
     if not clean:
         blockers.append("TRACKED_SOURCE_OR_INDEX_DIRTY")
     if frozen_source is None:

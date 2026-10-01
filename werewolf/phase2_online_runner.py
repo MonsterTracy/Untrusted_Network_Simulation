@@ -7,6 +7,7 @@ Default gameplay does not import or enable this module.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import inspect
 from pathlib import Path
 import os
 
@@ -251,6 +252,16 @@ class OnlineTerminalPilotRunnerV1:
         self._active_game_id = None
 
 
+def require_online_gameplay_hook() -> None:
+    """Validate the actual production callable without starting a game."""
+    signature = inspect.signature(run_canonical_game)
+    hook = signature.parameters.get("online_pilot")
+    if hook is None or hook.kind is not inspect.Parameter.KEYWORD_ONLY:
+        raise TypeError("production gameplay requires an explicit online_pilot PRE hook")
+    signature.bind(None, (), (), canonical_recorder=None, call_audit=None,
+                   online_pilot=None)
+
+
 def run_online_game(env, agents, roles, *, recorder, call_audit,
                     pilot: OnlineTerminalPilotRunnerV1, preflight):
     """The canonical loop is unchanged unless this explicit hook is supplied."""
@@ -269,6 +280,7 @@ def run_online_game(env, agents, roles, *, recorder, call_audit,
                 id(pilot.predictor), id(pilot.mapper), id(pilot.reference_tables),
                 id(pilot.ledger))):
         raise ValueError("online Pilot-T preflight does not bind this plan/runtime")
+    require_online_gameplay_hook()
     pilot.start_game(recorder.game_id)
     return run_canonical_game(env, agents, roles, canonical_recorder=recorder,
                               call_audit=call_audit, online_pilot=pilot)

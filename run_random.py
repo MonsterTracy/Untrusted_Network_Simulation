@@ -53,14 +53,24 @@ def _act_at_boundary(
 
 def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
          planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
-         wolf_speech_tom=None):
-    """Execute one game exclusively through canonical evidence construction."""
+         wolf_speech_tom=None, online_pilot=None):
+    """Execute one game exclusively through canonical evidence construction.
+
+    An explicit online_pilot handles the collected speech PRE before baseline
+    action generation. A verified commit consumes that speech step; otherwise
+    baseline gameplay continues. Step/game callbacks only observe outcomes.
+    """
     if canonical_recorder is None or call_audit is None:
         raise TypeError("canonical recorder and call audit are required")
     if planning_mode not in ('original', 'constrained'):
         raise ValueError("unsupported planning mode")
     if wolf_speech_tom is not None and (not callable(wolf_speech_tom) or planning_mode != 'original'):
         raise TypeError("wolf speech ToM requires an original-mode callable")
+    if online_pilot is not None and (planning_mode != 'original'
+            or wolf_speech_tom is not None
+            or not callable(getattr(online_pilot, 'handle_pre', None))
+            or not callable(getattr(online_pilot, 'after_step', None))):
+        raise TypeError("online pilot requires an explicit original-mode PRE/step hook")
     if planning_mode == 'constrained':
         from scripts.constrained_speech import SpeechTreatment, handle_speech
         if not callable(plan_provider) or type(ablation_trace) is not list:
@@ -83,6 +93,15 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                 speech_kind=env.phase if is_speech else None)
             if is_speech and handoff is None:
                 raise TypeError("public speech requires the collected Speaker PRE Belief Handoff")
+            if online_pilot is not None and is_speech:
+                committed = online_pilot.handle_pre(
+                    env=env, recorder=canonical_recorder, call_audit=call_audit,
+                    observation=observation, handoff=handoff)
+                if committed is not None:
+                    observation, _, done, info = committed
+                    online_pilot.after_step(env=env, done=done, info=info)
+                    step += 1
+                    continue
             if is_speech and planning_mode == 'constrained':
                 committed = handle_speech(env=env, actor=agent_list[actor - 1],
                     recorder=canonical_recorder, provider=plan_provider,
@@ -118,6 +137,8 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
             with context:
                 observation, _, done, info = env.step(action)
             canonical_recorder.after_env_step(env, observation_after=observation, terminal_after=done)
+            if online_pilot is not None:
+                online_pilot.after_step(env=env, done=done, info=info)
         except Exception as error:
             raise canonical_recorder.failure_from_exception(error) from error
         step += 1
@@ -125,6 +146,8 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
         raise RuntimeError("finished game has no recognized winner")
     winner = "Werewolf" if info["Werewolf"] == 1 else "Villager"
     canonical_recorder.finish(env, winner=winner)
+    if online_pilot is not None and callable(getattr(online_pilot, 'after_game', None)):
+        online_pilot.after_game(env=env, winner=winner)
     return f"{winner} win"
 
 
