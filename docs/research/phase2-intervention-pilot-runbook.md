@@ -1,6 +1,6 @@
 # Phase-2 Online Pilot-T：执行前 runbook
 
-**状态：服务器 Smoke-V3 已通过（操作者报告）；正式 CLI 待提交后在 clean source 上预检，再进入 qualification。** 本轮本地没有运行真实 LLM、qualification 或正式 publication。主 protocol 是自然游戏中一次性在线随机 P/N 干预。完整 PRE checkpoint/restore 只用于未来可选的 paired-counterfactual replay；它不再是在线因果识别的前置条件。
+**状态：服务器 qualification 已完成并通过人工审阅；正式 120-assignment Pilot-T 尚未冻结或启动。** 已核验 qualification manifest digest 为 `7f0154666b6df570b403a6718c7bd3927b4893c6ca383fe07065b518f589dec3`，source 为 `4d0d78a76e1ab51d038208f4ce1b4e982cdd32c3`。下文长命令保留为底层 CLI 说明和历史 qualification 操作记录；不得据此重跑已完成 qualification。主 protocol 是自然游戏中一次性在线随机 P/N 干预。完整 PRE checkpoint/restore 只用于未来可选的 paired-counterfactual replay；它不再是在线因果识别的前置条件。
 
 ## 方法和冻结顺序
 
@@ -168,3 +168,38 @@ python -m scripts.run_phase2_online_intervention_pilot \
 未来 consequence / λ / production-loss 数据加载统一经过 `require_online_dataset_access`：默认仅接受已完成的单一 formal 120-assignment campaign；qualification、synthetic、混合 campaign 全部拒绝。`audit_only=True` 可读这些数据，但返回对象的 `estimator_eligible` 恒为 false。此保护只约束数据用途，不代表 formal support 已经通过科学审阅。
 
 Probe Pilot 只保留 T0–T3/T4 sequence 接口：公开 request → 观察窗 → 队友 continuation PRE → 新 Q/p-panel。须待 Pilot-T support 人工审阅后再规划，不拟合 observation kernel、information gain、R_B 或自动 continuation action。完整依赖顺序：Smoke-V3 → Online Pilot-T → support review → terminal consequence estimator → λ(P/N) → Probe Pilot → Probe value model → production ThreeWayRouter → gameplay integration → paired win-rate experiment。
+
+## 正式 campaign 短命令
+
+`scripts.phase2_online_campaign` 只装配配置、环境、冻结 plans 和既有 server CLI；不执行任何新增方法逻辑。提交 wrapper 和人工预注册 profile 后，在服务器同一 clean checkout、已安装的 client 环境使用：
+
+```bash
+python -m scripts.phase2_online_campaign status qualification
+python -m scripts.phase2_online_campaign prepare formal
+python -m scripts.phase2_online_campaign preflight formal
+python -m scripts.phase2_online_campaign run formal
+python -m scripts.phase2_online_campaign status formal
+# 仅在存在同源、同输入的合法 work evidence 时显式恢复：
+python -m scripts.phase2_online_campaign resume formal
+```
+
+本轮没有执行这些正式 prepare/run/resume，也没有生成正式 plans。qualification 只允许 `status`，永远 `estimator_eligible=false`；wrapper 不修改或迁移它。其只读来源是 `/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-terminal-qualification-v1` 和原 `phase2-online-terminal-qualification-v1-work-runtimefix`，不是早期失败的 work directory。
+
+正式 profile 为 `configs/phase2/online-terminal-pilot-formal-v1.json`。字段为 schema、purpose、pilot ID、assignment seed、安全上限、target、estimator population flag 和四个绝对输出路径。purpose 固定 `pilot`，target 与现有 schema 核对为 120；不提供 assignment 数或概率覆盖。正式最后两项参数已由研究者预注册：
+
+- `assignment_seed = 730553457560960336`。冻结推导规则为 `low63(first8_big_endian(SHA256("paper-phase2-online-terminal-pilot-v1:assignment")))`：取 SHA256 原始 digest 的前 8 bytes，按 big-endian 解读为整数，再与 `(1 << 63) - 1` 做 bitwise AND；结果必须严格等于上述值，不允许改变 seed。
+- `max_games_attempted = 240`。预注册规则为 `2 * target_assignment_count = 2 * 120 = 240`；它仅是 safety cap，120 assignments 才是正式目标样本量。达到 120 assignments 即停止继续采集；若先达到 240 games 而 assignments <120，状态必须为 `INCOMPLETE`，不允许自动增加 cap。
+
+seed pool 长度等于这个安全上限。冻结参数的 profile 必须与 wrapper、pins 先提交，属于 preregistered clean HEAD；再冻结 plans。不能在 prepare 后修改 profile 或 source 然后复用原 plans。本次只记录 preregistration 参数，未运行 `prepare formal` 或生成正式 plans。
+
+runtime pins 集中在 `configs/phase2/online-terminal-runtime-pins-v1.json`。它绑定已完成 qualification artifact manifest、原 `run_inputs.json` 内容摘要、development CollectionPlan 摘要和 publication manifest 摘要。wrapper 校验 artifact 全部文件、run_inputs 自身摘要与 manifest 的绑定、plan/source/mapper/reference/Smoke/Q lineage，再从原 run_inputs 读取 publication、evaluation root、mapper、reference、Smoke-V3、Q checkout/fit/python、runtime/deployment 路径和 canonical environment provenance；不复制这些 artifacts。qualification inputs digest 为 `c4d81b3f59fa1c767023a10d94ba1f7571358af8f8cddd43f67fcc2fea93bb6b`。development frozen plan 摘要为 `3bb599ac9504b981c8f8ec7f434f60cdc7ff654ce568da7ed6d05a0af6682a46`，完整池为 2,250 seeds，目标为 1,500 canonical successes。
+
+`prepare` 使用 production `derive_seed_pool` / `plan_fields` / canonical plan validator，以当前 clean HEAD 冻结两份 immutable plans；排除全部 qualification、development 预声明池和 calibration seeds，碰撞则失败，不 skip/reroll。任何输出 plan/work/destination 已存在即拒绝；路径不得覆盖或嵌入 qualification evidence。两个文件均 exclusive durable create，若中途失败，保留已写出的文件，人工审查，不自动删掉或重建。tracked worktree 与 staged index 必须 clean，无关 untracked 研究文档允许，但 wrapper/profile/pins 自身必须已提交。
+
+执行前自动设置未定义的 `CUBLAS_WORKSPACE_CONFIG=:4096:8`；已定义为其他值（含空字符串）立即失败。status 不修改这个环境变量。`preflight` 直接调用既有 full server preflight，输出 source、plan digests、destination 状态、reference digest 和完整 ready/blockers/Q/Smoke/mapper lineage 检查；exit code 适合 shell 检查。Q 仅启动验证握手，不 prediction；仅使用临时 ledger，不创建 durable work、game、assignment 或语言调用。ready=false 或任何输入错误均非零退出。
+
+`run` 不生成 plans、不覆盖已有 destination、不隐式 resume。`resume` 必须有原 work/run_inputs/ledger，原 source/config/pins/plans/path 必须完全一致；继续走底层 loader 和账本恢复，不能重抽旧 assignment。所有运行命令都将 frozen canonical plan 与 qualification runtime provenance 的 production plan 重建结果逐项核对，再委托既有 parser / `execute_server_campaign`；不拼接 shell runner 命令、不建立第二套 gameplay loop。
+
+`status` 只读校验账本哈希链和输入绑定；缺 work/destination 返回 `NOT_STARTED`，已存在但缺失/损坏的 evidence 报错，不创建 START、不标记中断。输出 games、assignment、PUSH/REDIRECT、execution/failure、consequence、backend calls、remaining target、source、paths、terminal digest；最终 artifact 存在时还核对 artifact/input/ledger 绑定后显示 `COMPLETE`。backend calls 是 Phase-2 专用账本调用数；不冒充整个 baseline gameplay 的调用总数。
+
+本 wrapper 需要新的 source commit；正式 canonical plan 在它和 profile 的最终提交之后才冻结。已经完成的 qualification 保持原 source、digest 和 evidence，不因新增 wrapper 重跑。Smoke-V3 七个 `SOURCE_FILES` 没有修改时，可由现有逐文件 digest guard 验证复用；不更改 gate，也不豁免检查。

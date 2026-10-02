@@ -1,0 +1,10 @@
+{
+  "schema_version": "phase2_online_campaign_runtime_pins_v1",
+  "qualification_artifact": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-terminal-qualification-v1",
+  "qualification_manifest_digest": "7f0154666b6df570b403a6718c7bd3927b4893c6ca383fe07065b518f589dec3",
+  "qualification_run_inputs": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-online-terminal-qualification-v1-work-runtimefix/run_inputs.json",
+  "qualification_inputs_digest": "c4d81b3f59fa1c767023a10d94ba1f7571358af8f8cddd43f67fcc2fea93bb6b",
+  "development_game_plan": "/data/yuxiao/Untrusted_Network_Simulation/plans/paper-development-qwen35-9b-1500-v1.json",
+  "development_game_plan_digest": "3bb599ac9504b981c8f8ec7f434f60cdc7ff654ce568da7ed6d05a0af6682a46",
+  "publication_manifest_digest": "396ea0fa3f3f03dd1dfce8b25c0162ca489b992321d0c9e6f772eb2b0c4a2acd"
+}
