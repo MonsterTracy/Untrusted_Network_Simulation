@@ -69,14 +69,24 @@ def test_forbidden_paths_and_semantic_dependency_boundaries():
     assert not any(a.name in {"load_held_out_primary", "load_held_out_all_alive", "open_role_sidecar"} for n in imports for a in n.names)
 
 
-def test_all_production_modules_belong_to_current_cli_import_closure():
-    root = Path(__file__).resolve().parents[2]
-    paths = list((root / "werewolf").rglob("*.py")) + [root / "run_random.py"]
+def _production_import_closure(root):
+    # Phase-1 used only uns; Phase-2 runbooks also use executable scripts.
+    # Helpers are transit nodes, never roots or an exclusion allowlist.
+    paths = (list((root / "werewolf").rglob("*.py")) + [root / "run_random.py"]
+             + list((root / "scripts").rglob("*.py")))
     modules = {".".join(p.relative_to(root).with_suffix("").parts).removesuffix(".__init__"): p for p in paths}
-    edges = {}
+    production = {name for name in modules if name == "run_random" or name == "werewolf"
+                  or name.startswith("werewolf.")}
+    edges, entrypoints = {}, {"werewolf.cli"}
+    main_guard = ast.dump(ast.parse("__name__ == '__main__'", mode="eval").body)
     for name, path in modules.items():
+        tree = ast.parse(path.read_text())
+        if name.startswith("scripts.") and any(
+                isinstance(node, ast.If) and ast.dump(node.test) == main_guard
+                for node in tree.body):
+            entrypoints.add(name)
         dependencies = set()
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 dependencies.update(a.name for a in node.names)
             elif isinstance(node, ast.ImportFrom):
@@ -89,13 +99,57 @@ def test_all_production_modules_belong_to_current_cli_import_closure():
                 dependencies.update(f"{base}.{a.name}" for a in node.names)
         expanded = {".".join(d.split(".")[:i]) for d in dependencies for i in range(1, len(d.split(".")) + 1)}
         edges[name] = expanded & modules.keys()
-    reached, pending = set(), ["werewolf.cli"]
+    reached, pending = set(), list(entrypoints)
     while pending:
         name = pending.pop()
         if name not in reached:
             reached.add(name)
             pending.extend(edges[name] - reached)
-    assert modules.keys() - reached == set()
+    return production, reached, entrypoints
+
+
+def test_all_production_modules_belong_to_current_cli_import_closure():
+    """No production orphans across uns and standalone executable script roots."""
+    root = Path(__file__).resolve().parents[2]
+    production, reached, _ = _production_import_closure(root)
+    assert production - reached == set()
+
+
+@pytest.mark.parametrize("script", (
+    "from werewolf import analysis\n",
+    "def helper():\n    if __name__ == '__main__':\n        from werewolf import analysis\n",
+    "if __name__ != '__main__':\n    from werewolf import analysis\n",
+))
+def test_non_entrypoint_script_does_not_hide_production_orphan(tmp_path, script):
+    (tmp_path / "werewolf").mkdir()
+    (tmp_path / "scripts").mkdir()
+    for name in ("werewolf/__init__.py", "werewolf/cli.py", "werewolf/analysis.py", "run_random.py"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    (tmp_path / "scripts/helper.py").write_text(script, encoding="utf-8")
+    production, reached, entrypoints = _production_import_closure(tmp_path)
+    assert entrypoints == {"werewolf.cli"}
+    assert "werewolf.analysis" in production - reached
+
+
+def test_executable_script_reaches_analysis_without_exempting_orphans(tmp_path):
+    (tmp_path / "werewolf").mkdir()
+    (tmp_path / "scripts").mkdir()
+    for name in ("werewolf/__init__.py", "werewolf/cli.py", "werewolf/analysis.py", "run_random.py"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    (tmp_path / "scripts/analysis.py").write_text(
+        "from werewolf import analysis\ndef main():\n    pass\n"
+        "if __name__ == '__main__':\n    main()\n", encoding="utf-8")
+    production, reached, entrypoints = _production_import_closure(tmp_path)
+    assert "scripts.analysis" in entrypoints and "werewolf.analysis" in reached
+    assert production - reached == {"run_random"}
+
+
+def test_terminal_estimator_is_reachable_from_its_real_command_entrypoint():
+    root = Path(__file__).resolve().parents[2]
+    production, reached, entrypoints = _production_import_closure(root)
+    assert "scripts.phase2_terminal_estimator" in entrypoints
+    estimator_modules = {"werewolf.phase2_terminal_estimator", "werewolf.phase2_terminal_estimator_io"}
+    assert estimator_modules <= production & reached
 
 
 @pytest.mark.parametrize("field,value", [("backend", {}), ("pilot", True), ("scope", "all_alive"), ("shadow", {})])
