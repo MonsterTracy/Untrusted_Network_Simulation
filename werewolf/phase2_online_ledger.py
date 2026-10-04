@@ -2,8 +2,9 @@
 
 The ledger is a running journal, not a canonical study artifact. A game cannot
 be replayed after process restart without a full simulator checkpoint, so an
-unfinished stage is marked interrupted and the campaign continues with new
-game IDs. Randomized assignments are never regenerated.
+unfinished assigned stage is marked interrupted. Probe campaigns then remain
+INCOMPLETE; the original terminal campaign has its separate stopping contract.
+Randomized assignments are never regenerated.
 """
 
 from __future__ import annotations

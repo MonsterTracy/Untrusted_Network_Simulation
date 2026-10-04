@@ -171,7 +171,7 @@ Probe 的当前研究定义以 [Probe Policy Protocol V1](phase2-probe-policy-pr
 
 ### Probe Policy V1 本地执行边界
 
-复用同一 server CLI、canonical PRE hook、账本及提交路径。`Phase2OnlineProbePilotPlanV1` 必须显式提供 N、assignment seed 和 games cap；没有正式默认数值，本次不生成 plans。`scripts.phase2_online_campaign` 的 terminal profile 仍只用于 Pilot-T。
+复用同一 server CLI、canonical PRE hook、账本及提交路径。`Phase2OnlineProbePilotPlanV1` 必须显式提供 N、assignment seed 和 games cap；没有正式默认数值。编排 CLI 的默认 terminal profile 仍只用于 Pilot-T；Probe 必须显式指定 `--policy probe`。
 
 每局首个共同合法 PRE 从 `E_t` 均匀选 j，再以独立随机域分配 `IMMEDIATE_REDIRECT` 或 `PROBE_THEN_REDIRECT`。账本先写完整策略及指定队友/观察窗口，T1 后端调用前记录 `T1_ATTEMPTED`。Probe 规范提交成功才记录 `T3_SCHEDULED`；最终 language invalid 记录 `T3_CANCELLED`，当前及后续恢复 baseline，assignment 留在 ITT。T3 到达后保留 j，使用该队友当前完整面板重新算 k1；`strategy_continuation` 的概率为 1，随机键绑定父 assignment 与 T3 opportunity，不再次随机化。
 
@@ -213,6 +213,73 @@ runtime pins 集中在 `configs/phase2/online-terminal-runtime-pins-v1.json`。�
 执行前自动设置未定义的 `CUBLAS_WORKSPACE_CONFIG=:4096:8`；已定义为其他值（含空字符串）立即失败。status 不修改这个环境变量。`preflight` 直接调用既有 full server preflight，输出 source、plan digests、destination 状态、reference digest 和完整 ready/blockers/Q/Smoke/mapper lineage 检查；exit code 适合 shell 检查。Q 仅启动验证握手，不 prediction；仅使用临时 ledger，不创建 durable work、game、assignment 或语言调用。ready=false 或任何输入错误均非零退出。
 
 `run` 不生成 plans、不覆盖已有 destination、不隐式 resume。`resume` 必须有原 work/run_inputs/ledger，原 source/config/pins/plans/path 必须完全一致；继续走底层 loader 和账本恢复，不能重抽旧 assignment。所有运行命令都将 frozen canonical plan 与 qualification runtime provenance 的 production plan 重建结果逐项核对，再委托既有 parser / `execute_server_campaign`；不拼接 shell runner 命令、不建立第二套 gameplay loop。
+
+## Probe qualification / formal 准备
+
+本地审阅基准为 `785443687976969ebfef885a9bde2736fb2f4556`。新增编排代码、profile 和 protocol 必须已提交且 tracked worktree/index clean；无关 untracked 文档不阻断。prepare 要求操作者显式给出实际执行 commit，canonical game plan 与后续 preflight 必须精确匹配该 clean HEAD。qualification 必须绑定本轮参数冻结之后的新 clean commit，不能使用 `7854436` 作为执行 source。qualification 后冻结 formal cap 时，formal 应绑定后续新的 clean commit；两次 campaign 的 source commit 可以不同，formal admission 仍须满足 qualification runtime 源文件字节一致的既有 guard。
+
+两份 profile 为 `configs/phase2/online-probe-qualification-v1.json` 与 `online-probe-formal-v1.json`，预注册参数如下：
+
+| Campaign | Randomized assignment target | Max games attempted | Assignment seed | Planning status |
+|---|---:|---:|---:|---|
+| qualification | 20 | 80 | 4325493448326950820 | FROZEN |
+| formal | 200 | 未冻结（JSON `null`） | 6449283966833280907 | UNFROZEN |
+
+allocation 保持现有每次 assignment 独立的 1:1 随机化（两策略概率各 .5），不强制最终恰为 10/10 或 100/100。qualification 仅验证 execution/mechanism，`estimator_eligible=false`，不进入 Probe effect estimator。达到 assignment target 即停止；cap 用完而 target 未满为 `INCOMPLETE`。不得自动扩 cap、更换 seed、补样本、rerandomize 或 replay 已受控 game。qualification 参数已具备 prepare 条件，但实际 prepare 仍须满足 clean source 与全部 provenance guards；formal cap 留空，现有 schema 能读取该部分冻结 profile，prepare 明确拒绝，不填写默认 cap。
+
+种子与 provenance：
+
+- assignment seed 沿用已有 identity 推导 convention：`low63(first8_big_endian(SHA256(UTF8(pilot_id + ":assignment"))))`，即 `int.from_bytes(hashlib.sha256((pilot_id + ":assignment").encode("utf-8")).digest()[:8], "big") & ((1 << 63) - 1)`。qualification 的输入为 `paper-phase2-online-probe-qualification-v1:assignment`，结果 `4325493448326950820`；formal 的输入为 `paper-phase2-online-probe-pilot-v1:assignment`，结果 `6449283966833280907`。不得更换 identity 或 seed。
+- gameplay seed pool 沿用 `collect_games.derive_seed_pool(pilot_id, cap)` 的有序、域分隔规则，区别于 assignment seed；qualification/formal 使用不同 identity。候选选择与策略随机化继续使用已有分离随机域。
+- 复用 `online-terminal-runtime-pins-v1.json` 指向的已验证 runtime、Q、mapper、reference、Smoke-V3、development publication。Smoke 复用仍由原字节 digest guard 决定；本轮未改 Smoke SOURCE_FILES 的内容。
+- `excluded_game_plans` 绑定旧 Terminal formal canonical plan digest `add3fe53054d9b89b6c6570b585bce13070f010dcf2e28a40a4671fcd713c64b`。该值读取自既有只读本地缓存中冻结 Terminal formal manifest 的 `server_run_provenance.game_plan_digest`；manifest 内容哈希核验为 `ec1cc8730aefe8fce57ed83a3c84ca9231ae645ea6c9047cd588f8022d2223c2`，本轮未读取服务器实际 plan。prepare/preflight 仍必须读取真实 canonical plan 并核验此 digest。校验全部 seed pool 与 Terminal qualification、Terminal formal、1500-game development、calibration 不相交；formal 还必须与 Probe qualification 不相交。发现碰撞直接停止，不 skip/reroll。
+- 新 campaign 的 plan digest 只由最终 canonical plan 内容生成，不手工伪造或预填；canonical plan 额外绑定 Probe protocol 内容 SHA256 和当前 profile 的 canonical JSON digest。preflight 再绑定核验；protocol/profile 漂移在 Q worker、backend、gameplay 前拒绝。
+- formal 的 `probe_qualification` 须填入不可覆盖 qualification artifact 与原 run_inputs 的确切 digest；不读取 latest。formal 四个输出路径不得覆盖任一 qualification/formal 既有 evidence 路径。
+
+Qualification hard gates：全部 assignment 的 execution、原始日结局、最终 game-result 完整且账本可封存；至少一次 Immediate Redirect 规范提交成功；至少一条 Probe T1→预定 T3 Redirect 规范提交完整成功。candidate、same-j、k1 重算、语言失败取消/基线分支、公开观察、vote/consequence linkage 与规范调用证明由现有严格 ledger/lifecycle、server verifier 及确定性测试核验。
+不以 L_ref、答案质量或 execution-success rate 设通过阈值。T1-invalid、T3-invalid、speech_pk 可能在真实 qualification 中零次出现，它们由确定性 regression 验证，不强求真实失败。不可覆盖 artifact 的 `COMPLETE` 只表示采集证据完整；mechanism gate 失败仍不能进入 formal，wrapper 返回失败并保留 artifact。
+
+Probe resume 不恢复游戏状态：
+
+| 中断位置 | 恢复语义 |
+|---|---|
+| assignment 后、T1 前 | 保留 assignment；`INTERRUPTED` / `INCOMPLETE`，不继续新游戏凑样本 |
+| T1 committed / T3 scheduled / T3 prepared | 同上，不重放 T1/T3，不改队友/j，不重新随机化 |
+| T3 committed 或 execution 后、日结局前 | 同上，不插补结局 |
+| consequence 后、game-result 前 | 同上；consequence 一项不足以封存 |
+| 全部 game-result 已落盘、publication 前 | 可只恢复验核与不可覆盖封存，不调用受控语言、不运行游戏 |
+| 完整零 assignment 游戏后 | 仅可继续未用的新 game ID，不重放旧游戏 |
+
+`status` 只读，不写 START/INTERRUPTED；报告 unfinished assignment、lifecycle counts 与 qualification gate。既有 `PREPARATION_FAILURE`、structural failure、interruption 都保持不可封存，不能隐藏成 language invalid 或静默丢弃。
+
+在参数、evidence digest 与执行 source pin 全部冻结后，未来服务器命令如下；本轮未执行：
+
+```bash
+python -m scripts.phase2_online_campaign status qualification --policy probe
+python -m scripts.phase2_online_campaign prepare qualification --policy probe --source-commit <frozen-execution-commit>
+python -m scripts.phase2_online_campaign preflight qualification --policy probe
+python -m scripts.phase2_online_campaign run qualification --policy probe
+python -m scripts.phase2_online_campaign status qualification --policy probe
+python -m scripts.phase2_online_campaign resume qualification --policy probe
+```
+
+formal 用同一入口将 `qualification` 换为 `formal`，必须先通过上述 qualification gate；没有自动串联两次 campaign。preflight 只使用临时 ledger 和 pinned Q handshake，既有 loader 继续核验模型路径、部署、依赖、hook、source、artifact、输入和目标路径；不调用 predict，不运行 game/语言，不创建 durable campaign work。
+
+### Formal precision planning 与尚未冻结的 cap
+
+Primary estimand 保持全部 randomized assignments 的完整 assignment-policy ITT：`E[L_ref | Probe-policy] - E[L_ref | Immediate-Redirect-policy]`，lower is better，不按 execution success 删除 assignments。
+
+正式规划目标冻结为 95% CI half-width `0.05`。planning variance 取冻结 Terminal Pilot 两臂中较大的 sample variance，冻结数值为 `0.030782462625115643`；使用 `z_0.975 = 1.959963984540054` 与 approximate balanced allocation：
+
+`N ≈ 4 * z_0.975² * variance / half_width² = 189.19930011830033`。
+
+因此预注册 formal target 为 **200 randomized assignments**；该平衡方差代理在 N=200 时 half-width 约为 `0.04863117571557113`。这是实验前的 precision planning，依赖历史方差运输与近似平衡假设，不保证 Probe 实际 CI 达到该半宽。不得使用 qualification 的 treatment effect、arm means、p-value、L_ref difference 或 treatment direction 重新调整 formal N。
+
+历史 variance 来源为完整 120-row ITT；`itt_rows.jsonl` SHA256 为 `7ebb3b4848712ea40142ef6a1bebe1ef9ebbf1eb6e1ff1c0513d673cdfb86779`，manifest digest 为 `58a8611a0c9f5605f6cbdf5a7a9ea9f0c74fc69e637760e507f073e298cfaf8c`。不得用缺少既有冻结 recovery 的 119-row fixture 代替该 planning population。
+
+qualification 的 20/80 是预注册机制覆盖目标与预算，不是 effect-estimation 样本量。旧 first-P/N PRE 中有 88/120 存在 E_t、194 个合法候选，这不是新策略首个 E_t 的逐局入组率；不能运输旧 Terminal 的成功率来冻结 formal cap。
+
+formal max-games cap 保持 `null`。qualification 完成后，只能依据 games seen、assignments reached、eligibility/opportunity yield、T3 reach/completion mechanics 等运行可行性信息制定 cap；不得依据 Probe vs Redirect L_ref difference、arm outcome means、significance、游戏胜负或 treatment direction。formal N=200 与 assignment seed 不随 qualification effect 改变。cap 另行冻结并提交后才可 prepare formal，没有自动补样本或扩大 cap 的路径。
 
 `status` 只读校验账本哈希链和输入绑定；缺 work/destination 返回 `NOT_STARTED`，已存在但缺失/损坏的 evidence 报错，不创建 START、不标记中断。输出 games、assignment、PUSH/REDIRECT、execution/failure、consequence、backend calls、remaining target、source、paths、terminal digest；最终 artifact 存在时还核对 artifact/input/ledger 绑定后显示 `COMPLETE`。backend calls 是 Phase-2 专用账本调用数；不冒充整个 baseline gameplay 的调用总数。
 

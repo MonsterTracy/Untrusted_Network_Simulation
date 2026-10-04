@@ -23,6 +23,7 @@ from werewolf.phase2_treatment import VERSION as TREATMENT_VERSION
 PREFLIGHT_VERSION = "phase2_intervention_pilot_preflight_v1"
 SOURCE_FILES = (
     "run_random.py", "scripts/run_phase2_online_intervention_pilot.py",
+    "scripts/phase2_online_campaign.py",
     "scripts/phase2_intervention_preflight.py", "scripts/phase2_integration_seam.py",
     "scripts/phase2_language_realization.py", "werewolf/phase2_online_plan.py",
     "werewolf/phase2_online_records.py", "werewolf/phase2_backend_audit.py",
@@ -154,6 +155,25 @@ def freeze_online_source_provenance(repo: Path) -> dict | None:
     return {"commit": head.stdout.strip(), "branch": branch.stdout.strip(),
             "tracked_worktree_clean": True, "staged_tracked_changes": False,
             "source_sha256": digests}
+
+
+def verify_probe_plan_provenance(repo: Path, plan, game_plan, profile) -> None:
+    """Bind the immutable Probe plan to its protocol and preregistered profile."""
+    from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+    if not isinstance(plan, Phase2OnlineProbePilotPlanV1):
+        return
+    provenance = dict(game_plan.environment_provenance)
+    protocol = repo / "docs/research/phase2-probe-policy-protocol-v1.md"
+    if (not isinstance(profile, dict)
+            or profile.get("schema_version") != "phase2_online_probe_campaign_profile_v1"
+            or profile.get("estimator_eligible") is not False
+            or provenance.get("probe_policy_protocol_sha256") != sha256_bytes(protocol.read_bytes())
+            or profile.get("probe_protocol_digest") != provenance["probe_policy_protocol_sha256"]
+            or provenance.get("probe_campaign_profile_digest") != sha256_bytes(canonical_json_bytes(profile))
+            or profile.get("planning_status") != "FROZEN"
+            or any(profile.get(key) != getattr(plan, key) for key in (
+                "pilot_id", "campaign_purpose", "assignment_seed", "target_assignment_count", "max_games_attempted"))):
+        raise ValueError("Probe protocol/profile does not match frozen canonical plan")
 
 
 def _verify_frozen_artifacts(requirements: tuple[FrozenArtifactRequirement, ...]) -> bool:

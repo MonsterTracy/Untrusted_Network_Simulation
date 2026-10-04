@@ -38,7 +38,7 @@ from werewolf.phase2_online_plan import (
 )
 from werewolf.phase2_online_preflight import (
     FrozenArtifactRequirement, _smoke_v3_gate, assess_pilot_preflight,
-    freeze_online_source_provenance,
+    freeze_online_source_provenance, verify_probe_plan_provenance,
 )
 from werewolf.phase2_online_runner import (
     ARTIFACT_NAME, QUALIFICATION_NAME, PROBE_ARTIFACT_NAME, PROBE_QUALIFICATION_NAME,
@@ -138,6 +138,26 @@ def load_server_inputs(args):
     if source is None or source["commit"] != args.source_commit:
         raise ValueError("tracked source/index must be clean at the preregistered source commit")
     game_plan = collection_plan_from_record(_read_json(args.game_plan))
+    if isinstance(plan, Phase2OnlineProbePilotPlanV1):
+        purpose = "qualification" if plan.campaign_purpose == "qualification" else "formal"
+        profile = _read_json(args.repo / f"configs/phase2/online-probe-{purpose}-v1.json")
+        verify_probe_plan_provenance(args.repo, plan, game_plan, profile)
+        # Raw server CLI and operator CLI share the same admission/overlap checks.
+        from scripts.phase2_online_campaign import probe_inputs, canonical_plan, checked_seed_overlaps
+        pins, qualified, _, excluded = probe_inputs(profile)
+        if game_plan != canonical_plan(plan, args.source_commit, qualified, profile=profile):
+            raise ValueError("Probe canonical plan differs from frozen runtime/profile")
+        if any(Path(profile[key]).resolve() != Path(getattr(args, key)).resolve()
+               for key in ("plan", "game_plan", "work_directory", "destination")):
+            raise ValueError("Probe server paths differ from frozen profile")
+        for key in ("runtime_config", "deployment_config", "publication", "evaluation_root",
+                    "mapper", "smoke_v3", "q_checkout", "q_fit"):
+            if Path(getattr(args, key)).resolve() != Path(qualified["paths"][key]).resolve():
+                raise ValueError(f"Probe runtime path differs from qualification: {key}")
+        for key in ("mapper_manifest_digest", "reference_tables_digest", "smoke_v3_manifest_digest", "q_python"):
+            if getattr(args, key) != qualified[key]:
+                raise ValueError(f"Probe runtime pin differs from qualification: {key}")
+        checked_seed_overlaps(game_plan, pins, qualified, excluded)
     if (game_plan.source_revision != args.source_commit
             or game_plan.collection_id != plan.pilot_id
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", game_plan.collection_id)
