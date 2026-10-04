@@ -1,13 +1,14 @@
 """Pure Probe protocol/profile binding and actual server input-order tests."""
 
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import sys
+import tempfile
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,7 @@ from werewolf.phase2_online_plan import (
     PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
 )
 from werewolf.phase2_online_preflight import verify_probe_plan_provenance
+from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
 
 
 SOURCE_COMMIT = "a" * 40
@@ -119,11 +121,17 @@ def server_input_scope():
         PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
         Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
         Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1,
-        PROBE_QUALIFICATION_NAME="paper-phase2-online-probe-qualification-v1",
-        PROBE_ARTIFACT_NAME="paper-phase2-online-probe-pilot-v1",
         collection_plan_from_record=collection_plan_from_record,
         verify_probe_plan_provenance=verify_probe_plan_provenance,
     )
+    # Use the actual production constants, never a second test-only identity.
+    runner = ast.parse(Path("werewolf/phase2_online_runner.py").read_text())
+    for node in runner.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in (
+                        "PROBE_QUALIFICATION_NAME", "PROBE_ARTIFACT_NAME"):
+                    scope[target.id] = ast.literal_eval(node.value)
     exec(compile(ast.Module(body=definitions, type_ignores=[]),
                  "werewolf/phase2_online_server.py", "exec"), scope)
     return scope
@@ -133,7 +141,7 @@ def server_args(tmp_path, repo, plan, game_plan, profile):
     plan_path, game_plan_path = tmp_path / "pilot-plan.json", tmp_path / "game-plan.json"
     purpose = "qualification" if plan.campaign_purpose == "qualification" else "formal"
     args = SimpleNamespace(
-        repo=repo, destination=tmp_path / ("paper-phase2-online-probe-qualification-v1"
+        repo=repo, destination=tmp_path / ("paper-phase2-online-probe-qualification-v2"
             if purpose == "qualification" else "paper-phase2-online-probe-pilot-v1"),
         work_directory=tmp_path / "work", q_python=sys.executable,
         plan=plan_path, campaign_purpose=plan.campaign_purpose, source_commit=SOURCE_COMMIT,
@@ -154,7 +162,8 @@ def server_args(tmp_path, repo, plan, game_plan, profile):
         ordered_seed_pool=(11, 12, 13, 14), target_canonical_success_count=2,
         environment_provenance=provenance,
     )
-    profile_path = repo / f"configs/phase2/online-probe-{purpose}-v1.json"
+    from scripts.phase2_online_campaign import PROBE_PROFILES
+    profile_path = repo / "configs/phase2" / PROBE_PROFILES[purpose].name
     profile_path.parent.mkdir(parents=True)
     profile_path.write_bytes(canonical_json_bytes(profile))
     plan_path.write_bytes(canonical_json_bytes(plan.to_record()))
@@ -223,7 +232,7 @@ def test_actual_server_entry_rejects_changed_pins_before_worker_or_backend(
         (repo / PROTOCOL_PATH).write_text("Changed after plans were frozen.\n")
     elif mutation == "profile":
         profile["assignment_seed"] += 1
-        (repo / "configs/phase2/online-probe-qualification-v1.json").write_bytes(
+        (repo / "configs/phase2/online-probe-qualification-v2.json").write_bytes(
             canonical_json_bytes(profile))
     message = "source/index" if mutation == "source" else "protocol/profile"
     with pytest.raises(ValueError, match=message):
@@ -309,7 +318,8 @@ def test_raw_server_cli_paths_must_equal_frozen_profile(
     )
     args.game_plan.write_bytes(canonical_json_bytes(game_plan.to_record()))
     purpose_name = "qualification" if purpose == "qualification" else "formal"
-    (repo / f"configs/phase2/online-probe-{purpose_name}-v1.json").write_bytes(canonical_json_bytes(profile))
+    from scripts.phase2_online_campaign import PROBE_PROFILES
+    (repo / "configs/phase2" / PROBE_PROFILES[purpose_name].name).write_bytes(canonical_json_bytes(profile))
     calls = []
     shared_admission_fixture(monkeypatch, args, profile, calls=calls)
     scope = server_input_scope
@@ -319,3 +329,48 @@ def test_raw_server_cli_paths_must_equal_frozen_profile(
         scope["execute_server_campaign"](args)
     assert calls == ["qualification admission", "canonical plan binding"]
     assert not args.work_directory.exists() and not args.destination.exists()
+
+
+def test_old_v1_resume_is_rejected_before_worker_or_durable_write(server_input_scope, tmp_path):
+    repo, plan, game_plan, profile = probe_inputs(tmp_path)
+    args = server_args(tmp_path, repo, plan, game_plan, profile)
+    args.resume = True
+    args.destination = tmp_path / "paper-phase2-online-probe-qualification-v1"
+    args.work_directory.mkdir()
+    sentinel = args.work_directory / "assignment-ledger.jsonl"
+    sentinel.write_bytes(b"immutable failed V1 evidence\n")
+    server_input_scope["__file__"] = str(repo / "werewolf/phase2_online_server.py")
+    server_input_scope["Qwen3GameplayPredictorClient"] = lambda **kw: pytest.fail("must reject before worker")
+    with pytest.raises(ValueError, match="distinct fixed artifact names"):
+        server_input_scope["execute_server_campaign"](args)
+    assert sentinel.read_bytes() == b"immutable failed V1 evidence\n"
+    assert not args.destination.exists()
+
+
+def test_actual_server_preflight_only_certifies_runtime_without_game_or_durable_work(
+        server_input_scope, tmp_path):
+    scope = server_input_scope
+    repo, plan, game_plan, profile = probe_inputs(tmp_path)
+    args = server_args(tmp_path, repo, plan, game_plan, profile)
+    args.resume, args.preflight_only = False, True
+    seen = []
+    scope["load_server_inputs"] = lambda args: (plan, game_plan, {}, 10000, None, None, {})
+    scope["tempfile"] = tempfile
+    scope["OnlinePilotAssignmentLedgerV1"] = OnlinePilotAssignmentLedgerV1
+    scope["Qwen3GameplayPredictorClient"] = lambda **kw: nullcontext("fixture-worker-handshake")
+    scope["load_named_backends"] = lambda *a, **kw: {}
+    class Factory:
+        def __init__(self, **kwargs):
+            assert kwargs["ledger"].plan == plan
+            assert not kwargs["work_directory"].is_relative_to(args.work_directory)
+            self.game_ids = ("fixture-unclaimed-game",)
+        def __call__(self, game_id, **kwargs):
+            seen.append((game_id, kwargs))
+            return SimpleNamespace(preflight=SimpleNamespace(ready=True, to_record=lambda: {"ready": True}))
+    scope["ServerRuntimeFactory"] = Factory
+    scope["run_online_campaign"] = lambda *a, **kw: pytest.fail("preflight must not run game")
+    scope["publish_online_pilot"] = lambda *a, **kw: pytest.fail("preflight must not publish")
+    assert scope["execute_server_campaign"](args) == 0
+    assert seen == [("fixture-unclaimed-game", {"persist_claim": False, "publication_only": False})]
+    assert not args.work_directory.exists()
+    assert not args.destination.exists()

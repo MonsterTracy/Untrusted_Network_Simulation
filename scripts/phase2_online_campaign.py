@@ -14,9 +14,9 @@ PROFILE = REPO / "configs/phase2/online-terminal-pilot-formal-v1.json"
 PINS = REPO / "configs/phase2/online-terminal-runtime-pins-v1.json"
 PROFILE_VERSION = "phase2_online_campaign_profile_v1"
 PROBE_PROFILE_VERSION = "phase2_online_probe_campaign_profile_v1"
-PROBE_PROFILES = {purpose: REPO / f"configs/phase2/online-probe-{purpose}-v1.json"
-                  for purpose in ("qualification", "formal")}
-PROBE_NAMES = {"qualification": "paper-phase2-online-probe-qualification-v1",
+PROBE_PROFILES = {"qualification": REPO / "configs/phase2/online-probe-qualification-v2.json",
+                  "formal": REPO / "configs/phase2/online-probe-formal-v1.json"}
+PROBE_NAMES = {"qualification": "paper-phase2-online-probe-qualification-v2",
                "pilot": "paper-phase2-online-probe-pilot-v1"}
 CUBLAS = ":4096:8"
 
@@ -333,6 +333,8 @@ def probe_inputs(profile):
     protect_qualification(profile, {"paths": terminal_profile})
     other = read_profile(policy="probe", qualification=profile["campaign_purpose"] != "qualification")
     protect_qualification(profile, {"paths": other})
+    failed_probe = read_json(REPO / "configs/phase2/online-probe-qualification-v1.json")
+    protect_qualification(profile, {"paths": failed_probe})
     excluded = []
     for item in profile["excluded_game_plans"]:
         if item["plan_digest"] is None:
@@ -343,6 +345,8 @@ def probe_inputs(profile):
         excluded.append(game)
     if not any(g.collection_id == terminal_profile["pilot_id"] for g in excluded):
         raise ValueError("Probe must exclude the formal Terminal seed pool")
+    if not any(g.collection_id == "paper-phase2-online-probe-qualification-v1" for g in excluded):
+        raise ValueError("Probe must exclude the failed Qualification V1 seed pool")
     if profile["campaign_purpose"] == "pilot":
         probe_bound, _ = probe_qualification_inputs(profile)
         protect_qualification(profile, probe_bound)

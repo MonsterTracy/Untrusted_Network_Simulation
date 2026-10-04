@@ -35,6 +35,7 @@ from werewolf.phase2_online_records import (
     record_online_execution, Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1,
     validate_probe_lifecycle_record,
 )
+from werewolf.phase2_offline import phase_context
 from werewolf.phase2_outcome import (
     extract_phase2_day_outcome, reference_tables_digest,
 )
@@ -51,7 +52,7 @@ ARTIFACT_NAME = "paper-phase2-online-terminal-pilot-v1"
 QUALIFICATION_NAME = "paper-phase2-online-terminal-qualification-v1"
 ARTIFACT_VERSION = "phase2_online_terminal_pilot_v1"
 PROBE_ARTIFACT_NAME = "paper-phase2-online-probe-pilot-v1"
-PROBE_QUALIFICATION_NAME = "paper-phase2-online-probe-qualification-v1"
+PROBE_QUALIFICATION_NAME = "paper-phase2-online-probe-qualification-v2"
 
 
 def _legal_wolf_team(observation, actor: str) -> frozenset[str]:
@@ -299,7 +300,7 @@ class OnlineTerminalPilotRunnerV1:
                 raise ValueError("Probe PRE handoff mismatch")
             if record is not None:
                 initial = record.assignment.opportunity
-                if (prefix.phase != initial.legal_context.phase or
+                if (phase_context(prefix)[0] != initial.legal_context.phase or
                         prefix.boundary_id == initial.legal_context.boundary_id):
                     raise ValueError("Probe continuation phase/boundary mismatch")
                 expected = initial.observation_window.expected_speakers
@@ -572,6 +573,15 @@ def publish_online_pilot(destination: Path, *, pilot, dataset, preflight,
                       else ARTIFACT_NAME))
     if destination.name != expected_name:
         raise ValueError("qualification and formal pilot require distinct artifact names")
+    if is_probe:
+        pins = server_run_provenance
+        protocol = Path(__file__).resolve().parents[1] / "docs/research/phase2-probe-policy-protocol-v1.md"
+        if (not isinstance(pins, dict)
+                or pins.get("probe_policy_protocol_sha256") != sha256_bytes(protocol.read_bytes())
+                or any(not isinstance(pins.get(key), str) or len(pins[key]) != 64
+                       or any(c not in "0123456789abcdef" for c in pins[key]) for key in (
+                           "probe_policy_protocol_sha256", "probe_campaign_profile_digest"))):
+            raise ValueError("Probe publication requires bound protocol/profile provenance")
     if not isinstance(preflight, PilotPreflightV1) or not preflight.ready:
         raise ValueError("formal online pilot requires a passed frozen preflight")
     source_provenance = preflight.source_provenance

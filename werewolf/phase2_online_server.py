@@ -139,11 +139,13 @@ def load_server_inputs(args):
         raise ValueError("tracked source/index must be clean at the preregistered source commit")
     game_plan = collection_plan_from_record(_read_json(args.game_plan))
     if isinstance(plan, Phase2OnlineProbePilotPlanV1):
+        from scripts.phase2_online_campaign import (
+            PROBE_PROFILES, probe_inputs, canonical_plan, checked_seed_overlaps,
+        )
         purpose = "qualification" if plan.campaign_purpose == "qualification" else "formal"
-        profile = _read_json(args.repo / f"configs/phase2/online-probe-{purpose}-v1.json")
+        profile = _read_json(args.repo / "configs/phase2" / PROBE_PROFILES[purpose].name)
         verify_probe_plan_provenance(args.repo, plan, game_plan, profile)
         # Raw server CLI and operator CLI share the same admission/overlap checks.
-        from scripts.phase2_online_campaign import probe_inputs, canonical_plan, checked_seed_overlaps
         pins, qualified, _, excluded = probe_inputs(profile)
         if game_plan != canonical_plan(plan, args.source_commit, qualified, profile=profile):
             raise ValueError("Probe canonical plan differs from frozen runtime/profile")
@@ -646,6 +648,9 @@ def execute_server_campaign(args) -> int:
                 "deployment_config_sha256": bound["deployment_config_sha256"],
                 "smoke_v3_source": bound["smoke_v3_source"],
                 "work_directory": str(args.work_directory),
+                **({key: dict(game_plan.environment_provenance)[key] for key in (
+                    "probe_policy_protocol_sha256", "probe_campaign_profile_digest")}
+                   if isinstance(plan, Phase2OnlineProbePilotPlanV1) else {}),
                 "canonical_stage_evidence": dict(sorted(factory.evidence_digests.items()))})
         print(json.dumps({"artifact": str(args.destination), "manifest_digest": digest,
                           "campaign_purpose": plan.campaign_purpose, "support": support},

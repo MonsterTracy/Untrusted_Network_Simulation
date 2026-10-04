@@ -14,7 +14,13 @@ import pytest
 
 from tests.phase2.test_probe_policy_plan import public_opportunity
 from tests.phase2.test_intervention_risk import values
-from werewolf.phase2_actions import Action, ActionContextV1
+from tests.canonical_collection.test_pre_prefix import _attempt
+from werewolf.canonical_collection.pre import (
+    AuthoritativePREPrefix, construct_authoritative_pre_prefix, validate_authoritative_pre_prefix,
+)
+from werewolf.canonical_collection.public_history import freeze_public_event_history
+from werewolf.canonical_collection.speech import V1AnnotationStatus, construct_v1_speech_annotation
+from werewolf.phase2_actions import Action, context_from_pre
 from werewolf.phase2_decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
 from werewolf.phase2_online_plan import (
     Phase2OnlineProbePilotPlanV1, ProbeStrategy, assign_probe_strategy, select_probe_candidate,
@@ -36,6 +42,7 @@ def runtime(monkeypatch):
     import sys
     from types import ModuleType
     module = ModuleType(scope["__name__"])
+    module.__file__ = str(root / "werewolf/phase2_online_runner.py")
     monkeypatch.setitem(sys.modules, module.__name__, module)
     production = ast.parse((root / "run_random.py").read_text())
     definitions = [node for node in production.body if isinstance(node, ast.FunctionDef)
@@ -48,8 +55,44 @@ def runtime(monkeypatch):
     return module
 
 
+def canonical_pre(*, phase="speech", actor="player1", game_id="game-1", boundary="pre-1"):
+    """Construct a real, validated PRE with canonical public phase and turn order."""
+    events, annotations = [], []
+    def event(kind, **fields):
+        events.append(dict(event_id=f"event-{len(events)}", event_index=len(events),
+                           event_type=kind, **fields))
+    alive = ("player1", "player2", "player5", "player6", "player7")
+    event("phase_change", day=0, phase="night")
+    event("death_announcement", dead_players=["player3", "player4"])
+    event("phase_change", day=1, phase="discussion")
+    members = alive
+    if phase == "speech_pk":
+        event("phase_change", day=1, phase="vote")
+        event("vote_result", votes=[dict(voter=voter, target=target) for voter, target in
+              zip(alive, ("player2", "player5", "player6", "player1", None))])
+        event("exile_result", exiled_players=[])
+        event("phase_change", day=1, phase="pk_discussion")
+        members = alive[:-1]
+    for speaker in members[:members.index(actor) + 1]:
+        event("turn_start", speaker=speaker)
+        if speaker != actor:
+            event("public_speech", speaker=speaker, raw_text="我没有新的信息。")
+            annotations.append(construct_v1_speech_annotation(
+                freeze_public_event_history(events), status=V1AnnotationStatus.NO_ACTION,
+                actions=(), attempts=(replace(_attempt(), status=V1AnnotationStatus.NO_ACTION,
+                                              raw_response="None"),)))
+    return construct_authoritative_pre_prefix(
+        game_id=game_id, boundary_id=boundary, step_index=len(events) - 1,
+        report_trigger_id=f"trigger-{boundary}", current_speaker=actor,
+        alive_observer_ids=alive, public_event_history=freeze_public_event_history(events),
+        v1_annotations=annotations,
+        belief_observation_ids_by_observer={p: f"{boundary}-{p}" for p in alive})
+
+
 def fixture(runtime, monkeypatch, tmp_path, strategy, phase="speech", invalid_stage=None):
-    initial = public_opportunity(phase=phase)
+    prefix = canonical_pre(phase=phase)
+    initial = replace(public_opportunity(phase=phase), legal_context=context_from_pre(
+        prefix, frozenset(("player1", "player5"))))
     for seed in range(100):
         plan = Phase2OnlineProbePilotPlanV1("probe-local-fixture", seed, 1, 3)
         selection = select_probe_candidate(plan, initial.legal_context)
@@ -57,9 +100,9 @@ def fixture(runtime, monkeypatch, tmp_path, strategy, phase="speech", invalid_st
             break
     ledger = OnlinePilotAssignmentLedgerV1(tmp_path / "ledger.jsonl", plan=plan,
                                            source_commit="a" * 40)
-    prefix = SimpleNamespace(**vars(initial.legal_context), current_speaker="player1")
     recorder = SimpleNamespace(game_id="game-1", _pending=SimpleNamespace(prefix=prefix))
-    handoff = SimpleNamespace(boundary_id="pre-1", prefix_digest="a" * 64, observer_id="player1")
+    handoff = SimpleNamespace(boundary_id=prefix.boundary_id, prefix_digest=prefix.prefix_digest,
+                              observer_id=prefix.current_speaker)
     observation = {"identity": "Werewolf", "current_act_idx": 1,
                    "game_log": [SimpleNamespace(event="werewolf_team_info",
                         content={"wolf_team": [1, 5]})]}
@@ -67,9 +110,6 @@ def fixture(runtime, monkeypatch, tmp_path, strategy, phase="speech", invalid_st
     calls = []
     predictor = SimpleNamespace(seal_digest="c" * 64, predict=lambda pre: calls.append(pre.boundary_id))
     mapper = SimpleNamespace(artifact_digest="e" * 64, infer=lambda *a, **kw: None)
-    monkeypatch.setattr(runtime, "context_from_pre", lambda pre, wolves: ActionContextV1(
-        pre.game_id, pre.boundary_id, pre.prefix_digest, pre.public_history_digest,
-        pre.phase, pre.current_speaker, pre.alive, wolves, pre.competition, pre.public_speaker_queue))
     def opportunity(context, candidate, q, mapper, *, q_source_digest):
         assert candidate == "player2"
         if context.acting_wolf == "player1":
@@ -129,11 +169,11 @@ def pre(f):
 
 
 def next_pre(f, actor="player5", *, phase=None, boundary="pre-3"):
-    p = f.recorder._pending.prefix
-    p.current_speaker = actor
-    p.phase = phase or f.initial.legal_context.phase
-    p.boundary_id, p.prefix_digest = boundary, "9" * 64
-    f.handoff.boundary_id, f.handoff.prefix_digest, f.handoff.observer_id = boundary, "9" * 64, actor
+    prefix = canonical_pre(phase=phase or f.initial.legal_context.phase, actor=actor,
+                           game_id=f.recorder.game_id, boundary=boundary)
+    f.recorder._pending.prefix = prefix
+    f.handoff.boundary_id, f.handoff.prefix_digest, f.handoff.observer_id = (
+        prefix.boundary_id, prefix.prefix_digest, prefix.current_speaker)
     f.observation["current_act_idx"] = int(actor.removeprefix("player"))
 
 
@@ -158,8 +198,14 @@ def test_control_immediate_redirect_writeahead_and_no_second_assignment(runtime,
 
 @pytest.mark.parametrize("phase", ["speech", "speech_pk"])
 @pytest.mark.parametrize("text", ["我没有新的信息。", "我怀疑player6，因为公开投票。"])
-def test_probe_success_exact_continuation_independent_of_answer_usefulness(runtime, monkeypatch, tmp_path, phase, text):
+def test_probe_success_real_canonical_pre_exact_continuation(runtime, monkeypatch, tmp_path, phase, text):
     f = fixture(runtime, monkeypatch, tmp_path, ProbeStrategy.PROBE_THEN_REDIRECT, phase)
+    prefix = f.recorder._pending.prefix
+    assert type(prefix) is AuthoritativePREPrefix
+    assert validate_authoritative_pre_prefix(prefix) is prefix
+    assert not hasattr(prefix, "phase")
+    assert prefix.public_temporal_state.phase.value == (
+        "discussion" if phase == "speech" else "pk_discussion")
     assert pre(f) is not None
     assert f.pilot.records["game-1"].lifecycle[-1] == "T3_SCHEDULED"
     f.pilot.after_step(env=f.env, done=False, info={})
@@ -169,6 +215,8 @@ def test_probe_success_exact_continuation_independent_of_answer_usefulness(runti
                                "speaker": "player2", "raw_text": text})
     f.pilot.after_step(env=f.env, done=False, info={})
     next_pre(f)
+    assert type(f.recorder._pending.prefix) is AuthoritativePREPrefix
+    validate_authoritative_pre_prefix(f.recorder._pending.prefix)
     assert pre(f) is not None
     record = f.pilot.records["game-1"]
     assert record.lifecycle == ("ASSIGNED", "T1_ATTEMPTED", "T1_COMMITTED", "T3_SCHEDULED",
@@ -182,6 +230,25 @@ def test_probe_success_exact_continuation_independent_of_answer_usefulness(runti
     assert f.ledger.snapshot()["assignment_count"] == 1
     assert f.q_calls == ["pre-1", "pre-3"]
     validate_probe_lifecycle_record(record.to_record())
+
+
+@pytest.mark.parametrize(("initial_phase", "continuation_phase"), [
+    ("speech", "speech_pk"), ("speech_pk", "speech"),
+])
+def test_real_canonical_pre_phase_mismatch_preserves_assignment_and_stops_before_q(
+        runtime, monkeypatch, tmp_path, initial_phase, continuation_phase):
+    f = fixture(runtime, monkeypatch, tmp_path, ProbeStrategy.PROBE_THEN_REDIRECT, initial_phase)
+    pre(f)
+    observe(f)
+    next_pre(f, phase=continuation_phase)
+    assert type(f.recorder._pending.prefix) is AuthoritativePREPrefix
+    with pytest.raises(ValueError, match="Probe continuation phase/boundary mismatch"):
+        pre(f)
+    assert f.q_calls == ["pre-1"]
+    assert len(f.executions) == 1
+    assert f.pilot.records["game-1"].lifecycle[-1] == "STRUCTURAL_FAILURE"
+    assert f.ledger.snapshot()["assignment_count"] == 1
+    assert not f.ledger.sealable()
 
 
 @pytest.mark.parametrize("strategy", list(ProbeStrategy))
