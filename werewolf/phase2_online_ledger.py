@@ -16,12 +16,14 @@ from pathlib import Path
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.phase2_online_plan import (
     PLAN_VERSION, SELECTION_RULE, Phase2OnlineTerminalPilotPlanV1,
+    Phase2OnlineProbePilotPlanV1, probe_assignment_from_record,
     _uniform_index,
 )
 from werewolf.phase2_treatment import VERSION as TREATMENT_VERSION
 
 
 LEDGER_VERSION = "phase2_online_terminal_ledger_v1"
+PROBE_LEDGER_VERSION = "phase2_online_probe_ledger_v1"
 
 
 class OnlinePilotLedgerError(ValueError):
@@ -29,9 +31,10 @@ class OnlinePilotLedgerError(ValueError):
 
 
 class OnlinePilotAssignmentLedgerV1:
-    def __init__(self, path: Path, *, plan: Phase2OnlineTerminalPilotPlanV1,
+    def __init__(self, path: Path, *, plan: Phase2OnlineTerminalPilotPlanV1 | Phase2OnlineProbePilotPlanV1,
                  source_commit: str):
-        if (not isinstance(path, Path) or not isinstance(plan, Phase2OnlineTerminalPilotPlanV1)
+        if (not isinstance(path, Path) or not isinstance(
+                plan, (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1))
                 or not isinstance(source_commit, str) or len(source_commit) != 40
                 or any(c not in "0123456789abcdef" for c in source_commit)):
             raise OnlinePilotLedgerError("ledger needs a frozen plan and source commit")
@@ -43,12 +46,17 @@ class OnlinePilotAssignmentLedgerV1:
         if path.exists():
             self.snapshot()  # validate the complete chain before any future call
         else:
-            self._append("START", {"schema_version": LEDGER_VERSION,
+            self._append("START", {"schema_version": self._ledger_version,
                                    "pilot_id": plan.pilot_id,
                                    "plan_digest": plan.digest(),
                                    "campaign_purpose": plan.campaign_purpose,
                                    "target_assignment_count": plan.target_assignment_count,
                                    "source_commit": source_commit})
+
+    @property
+    def _ledger_version(self) -> str:
+        return (PROBE_LEDGER_VERSION if isinstance(self.plan, Phase2OnlineProbePilotPlanV1)
+                else LEDGER_VERSION)
 
     def _read_locked(self, descriptor: int) -> list[dict]:
         os.lseek(descriptor, 0, os.SEEK_SET)
@@ -77,7 +85,7 @@ class OnlinePilotAssignmentLedgerV1:
             previous = row["digest"]
         if rows:
             header = rows[0]
-            expected = {"schema_version": LEDGER_VERSION,
+            expected = {"schema_version": self._ledger_version,
                         "pilot_id": self.plan.pilot_id,
                         "plan_digest": self.plan.digest(),
                         "campaign_purpose": self.plan.campaign_purpose,
@@ -94,6 +102,14 @@ class OnlinePilotAssignmentLedgerV1:
         """Recompute both draws from the frozen PRE identity on every recovery."""
         try:
             assigned = payload["assignment"]
+            if isinstance(self.plan, Phase2OnlineProbePilotPlanV1):
+                assignment = probe_assignment_from_record(assigned, self.plan)
+                if (payload["pilot_id"] != self.plan.pilot_id
+                        or payload["source_commit"] != self.source_commit
+                        or payload["game_id"] != assignment.opportunity.legal_context.game_id
+                        or payload["assignment_id"] != sha256_bytes(canonical_json_bytes(assigned))):
+                    raise OnlinePilotLedgerError("assignment randomization/provenance differs")
+                return
             selection = assigned["selection"]
             opportunity = assigned["opportunity"]
             identity = opportunity["identity"]
@@ -146,6 +162,17 @@ class OnlinePilotAssignmentLedgerV1:
             raise OnlinePilotLedgerError("assignment record is malformed") from error
 
     @staticmethod
+    def _is_probe_stage(stage: dict) -> bool:
+        return "assigned_strategy" in stage.get("ASSIGNMENT", {}).get("assignment", {})
+
+    @staticmethod
+    def _probe_snapshot(stage: dict) -> dict:
+        snapshot = stage.get("STRATEGY_STAGE")
+        if snapshot is None:
+            raise OnlinePilotLedgerError("probe stage lacks lifecycle writeahead")
+        return snapshot["record"]
+
+    @staticmethod
     def _stages(rows: list[dict]) -> dict[str, dict]:
         stages: dict[str, dict] = {}
         for row in rows[1:]:
@@ -155,14 +182,62 @@ class OnlinePilotAssignmentLedgerV1:
                 raise OnlinePilotLedgerError("ledger stage lacks game identity")
             stage = stages.setdefault(game_id, {})
             if kind not in ("GAME_STARTED", "ASSIGNMENT", "BACKEND_CALL", "EXECUTION",
-                            "CONSEQUENCE", "GAME_RESULT", "INTERRUPTED"):
+                            "CONSEQUENCE", "GAME_RESULT", "INTERRUPTED", "STRATEGY_STAGE",
+                            "PREPARATION_FAILURE"):
                 raise OnlinePilotLedgerError("unknown ledger stage")
-            if kind in stage and kind != "BACKEND_CALL":
+            if kind in stage and kind not in ("BACKEND_CALL", "STRATEGY_STAGE"):
                 raise OnlinePilotLedgerError("duplicate ledger stage")
             if kind != "GAME_STARTED" and "GAME_STARTED" not in stage:
                 raise OnlinePilotLedgerError("stage precedes game start")
-            if kind in ("BACKEND_CALL", "EXECUTION", "CONSEQUENCE", "INTERRUPTED") and "ASSIGNMENT" not in stage:
+            if "PREPARATION_FAILURE" in stage:
+                raise OnlinePilotLedgerError("game follows failed Probe preparation")
+            if kind == "PREPARATION_FAILURE":
+                if (rows[0]["payload"]["schema_version"] != PROBE_LEDGER_VERSION
+                        or "ASSIGNMENT" in stage or not isinstance(payload.get("reason"), str)
+                        or not payload["reason"].strip()):
+                    raise OnlinePilotLedgerError("invalid pre-assignment Probe failure")
+            if kind in ("BACKEND_CALL", "EXECUTION", "CONSEQUENCE", "INTERRUPTED", "STRATEGY_STAGE") and "ASSIGNMENT" not in stage:
                 raise OnlinePilotLedgerError("stage precedes assignment")
+            is_probe = OnlinePilotAssignmentLedgerV1._is_probe_stage(stage)
+            if is_probe and "INTERRUPTED" in stage and kind != "INTERRUPTED":
+                raise OnlinePilotLedgerError("stage follows interrupted game")
+            if kind == "STRATEGY_STAGE":
+                if not is_probe:
+                    raise OnlinePilotLedgerError("terminal assignment cannot have strategy stages")
+                from werewolf.phase2_online_records import validate_probe_lifecycle_record
+
+                record = payload.get("record")
+                try:
+                    validate_probe_lifecycle_record(record)
+                except (AttributeError, KeyError, TypeError, ValueError) as error:
+                    raise OnlinePilotLedgerError("probe lifecycle record is invalid") from error
+                if (payload.get("assignment_id") != stage["ASSIGNMENT"]["assignment_id"]
+                        or record["assignment"] != stage["ASSIGNMENT"]["assignment"]):
+                    raise OnlinePilotLedgerError("probe lifecycle assignment binding differs")
+                snapshots = stage.setdefault("STRATEGY_STAGE_HISTORY", [])
+                lifecycle = record["lifecycle"]
+                if not snapshots:
+                    if lifecycle != ["ASSIGNED"]:
+                        raise OnlinePilotLedgerError("initial probe snapshot must be ASSIGNED")
+                else:
+                    previous_record = snapshots[-1]["record"]
+                    previous = previous_record["lifecycle"]
+                    if len(lifecycle) != len(previous) + 1 or lifecycle[:-1] != previous:
+                        raise OnlinePilotLedgerError("probe lifecycle must append exactly one event")
+                    for name in ("T1", "T3"):
+                        prior_stage = previous_record["stages"][name]
+                        if prior_stage is not None and record["stages"][name] != prior_stage:
+                            raise OnlinePilotLedgerError("probe stage evidence changed")
+                    for name in ("opportunity", "treatment"):
+                        prior_plan = previous_record["continuation"][name]
+                        if prior_plan is not None and record["continuation"][name] != prior_plan:
+                            raise OnlinePilotLedgerError("probe continuation plan changed")
+                    observations = previous_record["observations"]
+                    if record["observations"][:len(observations)] != observations:
+                        raise OnlinePilotLedgerError("probe observations changed")
+                snapshots.append(payload)
+                stage["STRATEGY_STAGE"] = payload
+                continue
             if kind == "BACKEND_CALL":
                 if "EXECUTION" in stage:
                     raise OnlinePilotLedgerError("backend call follows execution")
@@ -171,16 +246,53 @@ class OnlinePilotAssignmentLedgerV1:
                 prior = stage.setdefault("BACKEND_CALL", [])
                 if payload.get("call", {}).get("sequence") != len(prior) + 1:
                     raise OnlinePilotLedgerError("backend call sequence differs")
+                if is_probe:
+                    record = OnlinePilotAssignmentLedgerV1._probe_snapshot(stage)
+                    if record["lifecycle"][-1] in ("STRUCTURAL_FAILURE", "EXECUTION_RECORDED",
+                                                    "DAY_CONSEQUENCE_RECORDED", "GAME_RESULT_RECORDED"):
+                        raise OnlinePilotLedgerError("backend call follows closed probe execution")
+                    call = payload["call"]
+                    state = record["lifecycle"][-1]
+                    if state == "T1_ATTEMPTED":
+                        treatment = stage["ASSIGNMENT"]["assignment"]["treatment"]
+                    elif state == "T3_PREPARED":
+                        treatment = record["continuation"]["treatment"]
+                    else:
+                        raise OnlinePilotLedgerError("probe backend call outside prepared language stage")
+                    if (call.get("pilot_id") != stage["ASSIGNMENT"]["pilot_id"]
+                            or call.get("game_id") != game_id
+                            or call.get("assignment_id") != payload["assignment_id"]
+                            or call.get("treatment_id") != treatment["treatment_id"]
+                            or call.get("opportunity_digest") != treatment["opportunity_digest"]):
+                        raise OnlinePilotLedgerError("probe backend call lacks stage plan binding")
                 prior.append(payload)
                 continue
+            if kind == "EXECUTION" and is_probe:
+                record = OnlinePilotAssignmentLedgerV1._probe_snapshot(stage)
+                if (record["lifecycle"][-1] != "EXECUTION_RECORDED"
+                        or payload.get("assignment_id") != stage["ASSIGNMENT"]["assignment_id"]
+                        or payload.get("execution") != record["execution"]
+                        or payload.get("backend_calls") != [item["call"] for item in stage.get("BACKEND_CALL", [])]):
+                    raise OnlinePilotLedgerError("probe execution differs from lifecycle/call evidence")
             if kind == "CONSEQUENCE" and "EXECUTION" not in stage:
                 raise OnlinePilotLedgerError("consequence precedes execution")
-            if kind == "CONSEQUENCE" and stage["EXECUTION"]["execution"]["success"] is not True:
+            if kind == "CONSEQUENCE" and not is_probe and stage["EXECUTION"]["execution"]["success"] is not True:
                 raise OnlinePilotLedgerError("failed execution cannot have consequence")
-            if kind == "INTERRUPTED" and "CONSEQUENCE" in stage:
+            if kind == "CONSEQUENCE" and is_probe:
+                record = OnlinePilotAssignmentLedgerV1._probe_snapshot(stage)
+                if (payload.get("assignment_id") != stage["ASSIGNMENT"]["assignment_id"]
+                        or record["day_consequence"] is None
+                        or payload.get("day_consequence") != record["day_consequence"]):
+                    raise OnlinePilotLedgerError("probe consequence differs from lifecycle evidence")
+            if kind == "INTERRUPTED" and "CONSEQUENCE" in stage and not is_probe:
                 raise OnlinePilotLedgerError("completed consequence cannot be interrupted")
             if kind == "GAME_RESULT" and payload.get("winner") not in ("Werewolf", "Villager"):
                 raise OnlinePilotLedgerError("invalid final game audit")
+            if kind == "GAME_RESULT" and is_probe:
+                record = OnlinePilotAssignmentLedgerV1._probe_snapshot(stage)
+                if (record["lifecycle"][-1] != "GAME_RESULT_RECORDED"
+                        or record["offline_audit"]["final_game_result"] != payload["winner"]):
+                    raise OnlinePilotLedgerError("probe final game result differs from lifecycle evidence")
             if "INTERRUPTED" in stage and kind != "INTERRUPTED":
                 raise OnlinePilotLedgerError("stage follows interrupted game")
             stage[kind] = payload
@@ -221,6 +333,10 @@ class OnlinePilotAssignmentLedgerV1:
                         existing = next((item for item in stage[kind]
                                          if item["call"]["sequence"] ==
                                          payload["call"]["sequence"]), None)
+                    elif kind == "STRATEGY_STAGE":
+                        existing = next((item for item in stage["STRATEGY_STAGE_HISTORY"]
+                                         if len(item["record"]["lifecycle"]) ==
+                                         len(payload["record"]["lifecycle"])), None)
                     else:
                         existing = stage[kind]
                     if existing is not None:
@@ -234,6 +350,8 @@ class OnlinePilotAssignmentLedgerV1:
                         raise OnlinePilotLedgerError("max_games_attempted reached: INCOMPLETE")
                 if kind == "ASSIGNMENT" and sum("ASSIGNMENT" in s for s in stages.values()) >= self.plan.target_assignment_count:
                     raise OnlinePilotLedgerError("assignment target already reached")
+                if kind == "ASSIGNMENT" and isinstance(self.plan, Phase2OnlineProbePilotPlanV1):
+                    self._validate_assignment(payload)
                 candidate = rows + [{"kind": kind, "payload": payload}]
                 # Validate ordering before writing; full hash fields are added below.
                 self._stages(candidate)
@@ -274,12 +392,24 @@ class OnlinePilotAssignmentLedgerV1:
                                            "assignment_id": assignment.digest(),
                                            "assignment": row})
 
+    def persist_preparation_failure(self, game_id: str, reason: str, selection=None) -> bool:
+        """A legal PRE preparation abort cannot silently select another game."""
+        return self._append("PREPARATION_FAILURE", {
+            "game_id": game_id, "reason": reason,
+            "candidate_selection": selection.to_record() if selection is not None else None})
+
     def persist_execution(self, record) -> bool:
         return self._append("EXECUTION", {"game_id": record.game_id,
                                           "assignment_id": record.assignment.digest(),
                                           "execution": record.to_record()["execution"],
                                           "backend_calls": [call.to_record()
                                                             for call in record.backend_calls]})
+
+    def persist_strategy_stage(self, record) -> bool:
+        return self._append("STRATEGY_STAGE", {
+            "game_id": record.game_id,
+            "assignment_id": record.assignment.digest(),
+            "record": record.to_record()})
 
     def persist_backend_call(self, call) -> bool:
         if call.pilot_id != self.plan.pilot_id or not call.assignment_id:
@@ -306,18 +436,27 @@ class OnlinePilotAssignmentLedgerV1:
         for game_id, stage in self.snapshot()["games"].items():
             if "ASSIGNMENT" not in stage or "INTERRUPTED" in stage:
                 continue
+            is_probe = self._is_probe_stage(stage)
             needs_outcome = ("EXECUTION" in stage and
-                             stage["EXECUTION"]["execution"]["success"] is True)
-            if "EXECUTION" not in stage or (needs_outcome and "CONSEQUENCE" not in stage):
+                             (is_probe or stage["EXECUTION"]["execution"]["success"] is True))
+            missing_result = is_probe and "CONSEQUENCE" in stage and "GAME_RESULT" not in stage
+            if ("EXECUTION" not in stage or (needs_outcome and "CONSEQUENCE" not in stage)
+                    or missing_result):
                 self._append("INTERRUPTED", {
                     "game_id": game_id,
                     "reason": ("ASSIGNMENT_WITHOUT_EXECUTION" if "EXECUTION" not in stage
+                               else "CONSEQUENCE_WITHOUT_GAME_RESULT" if missing_result
                                else "EXECUTION_WITHOUT_CONSEQUENCE")})
                 interrupted.append(game_id)
         return tuple(interrupted)
 
     def status(self) -> str:
         snap = self.snapshot()
+        if (isinstance(self.plan, Phase2OnlineProbePilotPlanV1)
+                and any("INTERRUPTED" in stage or "PREPARATION_FAILURE" in stage
+                        or stage.get("STRATEGY_STAGE", {}).get("record", {}).get("structural_failure_reason")
+                        for stage in snap["games"].values())):
+            return "INCOMPLETE"
         if snap["assignment_count"] == self.plan.target_assignment_count:
             return "READY_TO_SEAL"
         if (self.plan.max_games_attempted is not None
@@ -330,7 +469,15 @@ class OnlinePilotAssignmentLedgerV1:
         if snapshot["assignment_count"] != self.plan.target_assignment_count:
             return False
         for stage in snapshot["games"].values():
+            if "PREPARATION_FAILURE" in stage:
+                return False
             if "ASSIGNMENT" not in stage:
+                continue
+            if self._is_probe_stage(stage):
+                if (not {"EXECUTION", "CONSEQUENCE", "GAME_RESULT"}.issubset(stage)
+                        or "INTERRUPTED" in stage
+                        or self._probe_snapshot(stage)["structural_failure_reason"] is not None):
+                    return False
                 continue
             if "EXECUTION" not in stage and "INTERRUPTED" not in stage:
                 return False

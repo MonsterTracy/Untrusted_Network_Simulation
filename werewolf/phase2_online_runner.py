@@ -1,4 +1,4 @@
-"""Explicit opt-in, single-path online Pilot-T runner; no checkpoint replay.
+"""Explicit opt-in, single-path terminal and Probe pilots; no checkpoint replay.
 
 Production orchestration shared by the server CLI and scripted tests.
 Default gameplay does not import or enable this module.
@@ -16,7 +16,7 @@ from werewolf.phase2_execution import prepare_phase2_intervention_speech
 from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes,
 )
-from werewolf.phase2_actions import context_from_pre
+from werewolf.phase2_actions import Action, context_from_pre
 from werewolf.phase2_backend_audit import Phase2BackendCallAuditV1
 from werewolf.phase2_canonical_commit import commit_phase2_verified_speech
 from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
@@ -27,12 +27,13 @@ from werewolf.phase2_language import (
 )
 from werewolf.phase2_online_plan import (
     OnlinePilotGameStateV1, Phase2OnlineTerminalPilotPlanV1,
-    select_candidate,
+    select_candidate, select_probe_candidate, Phase2OnlineProbePilotPlanV1, ProbeStrategy,
 )
 from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
 from werewolf.phase2_online_records import (
     Phase2OnlineInterventionRecordV1, record_online_day_outcome,
-    record_online_execution,
+    record_online_execution, Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1,
+    validate_probe_lifecycle_record,
 )
 from werewolf.phase2_outcome import (
     extract_phase2_day_outcome, reference_tables_digest,
@@ -42,11 +43,15 @@ from werewolf.phase2_pilot_dataset import (
     build_phase2_consequence_dataset, build_phase2_online_dataset_from_ledger,
 )
 from werewolf.speech.validation import normalize_player
+from werewolf.phase2_pilot_records import PublicProbeObservationV1
+from werewolf.phase2_treatment import build_phase2_treatment
 
 
 ARTIFACT_NAME = "paper-phase2-online-terminal-pilot-v1"
 QUALIFICATION_NAME = "paper-phase2-online-terminal-qualification-v1"
 ARTIFACT_VERSION = "phase2_online_terminal_pilot_v1"
+PROBE_ARTIFACT_NAME = "paper-phase2-online-probe-pilot-v1"
+PROBE_QUALIFICATION_NAME = "paper-phase2-online-probe-qualification-v1"
 
 
 def _legal_wolf_team(observation, actor: str) -> frozenset[str]:
@@ -63,14 +68,15 @@ def _legal_wolf_team(observation, actor: str) -> frozenset[str]:
 
 
 class OnlineTerminalPilotRunnerV1:
-    """One randomized speech per game, then original canonical gameplay."""
+    """One randomized strategy per game on the original canonical PRE path."""
 
-    def __init__(self, *, plan: Phase2OnlineTerminalPilotPlanV1, predictor, mapper,
+    def __init__(self, *, plan: Phase2OnlineTerminalPilotPlanV1 | Phase2OnlineProbePilotPlanV1,
+                 predictor, mapper,
                  backend, model_name: str, reference_tables,
                  reference_artifact_digest: str,
                  ledger: OnlinePilotAssignmentLedgerV1 | None = None,
                  record_evidence=None):
-        if (not isinstance(plan, Phase2OnlineTerminalPilotPlanV1)
+        if (not isinstance(plan, (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1))
                 or not callable(getattr(predictor, "predict", None))
                 or not isinstance(getattr(predictor, "seal_digest", None), str)
                 or not callable(getattr(mapper, "infer", None))
@@ -78,6 +84,7 @@ class OnlineTerminalPilotRunnerV1:
                 or not callable(getattr(backend, "chat_with_metadata", None))
                 or not model_name
                 or reference_artifact_digest != reference_tables_digest(reference_tables)
+                or (isinstance(plan, Phase2OnlineProbePilotPlanV1) and ledger is None)
                 or (record_evidence is not None and not callable(record_evidence))
                 or (ledger is not None and
                     (not isinstance(ledger, OnlinePilotAssignmentLedgerV1)
@@ -119,6 +126,9 @@ class OnlineTerminalPilotRunnerV1:
         game_id = self._active_game_id
         if game_id is None or recorder.game_id != game_id:
             raise ValueError("online runner game/recorder identity mismatch")
+        if isinstance(self.plan, Phase2OnlineProbePilotPlanV1):
+            return self._handle_probe_pre(env=env, recorder=recorder, call_audit=call_audit,
+                                          observation=observation, handoff=handoff)
         if game_id in self.state.assignments or observation.get("identity") != "Werewolf":
             return None
         pending = recorder._pending
@@ -206,13 +216,202 @@ class OnlineTerminalPilotRunnerV1:
             # Its execution state is unknown, not a proven language failure.
             raise
 
+    def _probe_stage(self, event, **changes):
+        game_id = self._active_game_id
+        record = replace(self.records[game_id],
+                         lifecycle=self.records[game_id].lifecycle + (event,), **changes)
+        validate_probe_lifecycle_record(record.to_record())
+        if self.ledger is not None:
+            if self.record_evidence is not None:
+                self.record_evidence(f"strategy-{len(record.lifecycle):02d}-{event.lower()}", record)
+            self.ledger.persist_strategy_stage(record)
+        self.records[game_id] = record
+        return record
+
+    def _probe_structural_failure(self, error, selection=None):
+        record = self.records.get(self._active_game_id)
+        if record is None and self.ledger is not None:
+            self.ledger.persist_preparation_failure(
+                self._active_game_id, f"{type(error).__name__}: {error}", selection)
+            return
+        if record is not None and record.lifecycle[-1] != "STRUCTURAL_FAILURE":
+            self._probe_stage("STRUCTURAL_FAILURE",
+                              structural_failure_reason=f"{type(error).__name__}: {error}")
+
+    def _execute_probe_stage(self, *, env, recorder, call_audit, prefix, opportunity,
+                             treatment, stage):
+        record = self.records[self._active_game_id]
+        audit = Phase2BackendCallAuditV1(
+            opportunity, treatment, call_audit, pilot_id=self.plan.pilot_id,
+            assignment_id=record.assignment.digest(),
+            sequence_offset=len(record.backend_calls),
+            record_sink=self.ledger.persist_backend_call if self.ledger else None)
+        public = public_language_context_from_pre(prefix, opportunity.legal_context)
+        prepared = prepare_phase2_intervention_speech(
+            opportunity, treatment, public,
+            actor=Phase2LanguageActorV1(self.backend, self.model_name, call_audit=audit),
+            perceiver=Phase2SemanticPerceiverV1(self.backend, self.model_name, call_audit=audit))
+        verified = prepared.verified
+        if (verified.attempt_count not in (1, 2)
+                or verified.language_audit.structured_execution_valid is not True):
+            raise ValueError("structural preparation failure is not language invalid")
+        link, result = None, None
+        if verified.success:
+            closure = assess_phase2_checkpoint_closure(opportunity, env=env, recorder=recorder)
+            result, link = commit_phase2_verified_speech(
+                env=env, recorder=recorder, opportunity=opportunity,
+                treatment=treatment, verified=verified, closure=closure)
+        execution = Phase2StrategyStageExecutionV1(
+            opportunity, treatment, sha256_bytes(verified.language_audit.canonical_bytes()),
+            verified.attempt_count, tuple(audit.records), link,
+            None if link else verified.failure_reason)
+        self._probe_stage(f"{stage}_COMMITTED" if link else f"{stage}_LANGUAGE_INVALID",
+                          **{f"{stage.lower()}_execution": execution})
+        if stage == "T1" and record.assignment.strategy is ProbeStrategy.PROBE_THEN_REDIRECT:
+            self._probe_stage("T3_SCHEDULED" if link else "T3_CANCELLED")
+            if link:
+                return result
+        record = self._probe_stage("EXECUTION_RECORDED")
+        if self.ledger is not None:
+            if self.record_evidence is not None:
+                self.record_evidence("execution", record)
+            self.ledger.persist_execution(record)
+        return result  # final invalid executes the same PRE's baseline speech
+
+    def _handle_probe_pre(self, *, env, recorder, call_audit, observation, handoff):
+        game_id = self._active_game_id
+        selection = None
+        try:
+            record = self.records.get(game_id)
+            if record is not None:
+                if "STRUCTURAL_FAILURE" in record.lifecycle:
+                    raise ValueError("structurally failed strategy cannot continue")
+                if record.lifecycle[-1] != "T3_SCHEDULED":
+                    return None
+            elif game_id in self.state.assignments:
+                raise ValueError("interrupted assignment cannot resume gameplay")
+            prefix = recorder._pending.prefix
+            actor = prefix.current_speaker
+            if (prefix.game_id != game_id or handoff.boundary_id != prefix.boundary_id or
+                    handoff.prefix_digest != prefix.prefix_digest or
+                    handoff.observer_id != actor or
+                    normalize_player(observation["current_act_idx"]) != actor):
+                raise ValueError("Probe PRE handoff mismatch")
+            if record is not None:
+                initial = record.assignment.opportunity
+                if (prefix.phase != initial.legal_context.phase or
+                        prefix.boundary_id == initial.legal_context.boundary_id):
+                    raise ValueError("Probe continuation phase/boundary mismatch")
+                expected = initial.observation_window.expected_speakers
+                if actor != initial.continuation_actor:
+                    if len(record.observations) >= len(expected) or actor != expected[len(record.observations)]:
+                        raise ValueError("Probe continuation speaker/timing mismatch")
+                    return None
+                if len(record.observations) != len(expected):
+                    raise ValueError("Probe continuation observation window incomplete")
+                self._probe_stage("T3_REACHED")
+            if observation.get("identity") != "Werewolf":
+                if record is not None:
+                    raise ValueError("designated continuation actor is not a living wolf")
+                return None
+            context = context_from_pre(prefix, _legal_wolf_team(observation, actor))
+            if record is None:
+                selection = select_probe_candidate(self.plan, context)
+                if selection is None:
+                    return None
+                candidate = selection.candidate_j
+            else:
+                initial_context = record.assignment.opportunity.legal_context
+                if (context.alive != initial_context.alive or
+                        context.competition != initial_context.competition or
+                        context.known_wolves != initial_context.known_wolves or
+                        context.public_speaker_queue != initial_context.public_speaker_queue):
+                    raise ValueError("Probe continuation legal state changed within speech")
+                candidate = record.assignment.opportunity.candidate_j
+                if candidate not in context.legal_targets:
+                    raise ValueError("initial Probe candidate is no longer legal")
+            opportunity = build_phase2_decision_opportunity(
+                context, candidate, self.predictor.predict(prefix), self.mapper,
+                q_source_digest=self.predictor.seal_digest)
+            if record is None:
+                assignment = self.state.try_assign(
+                    self.plan, selection, opportunity,
+                    persist=self.ledger.persist_assignment if self.ledger else None)
+                if assignment is None:
+                    return None
+                self.records[game_id] = Phase2OnlineProbeRecordV1(assignment)
+                if self.ledger:
+                    self.ledger.persist_strategy_stage(self.records[game_id])
+                self._last_public_event_count = len(env.public_events)
+                self._probe_stage("T1_ATTEMPTED")
+                treatment = assignment.treatment
+                stage = "T1"
+            else:
+                key = sha256_bytes(canonical_json_bytes([
+                    "phase2_probe_continuation_v1", record.assignment.digest(), opportunity.digest()]))
+                treatment = build_phase2_treatment(
+                    opportunity, Action.REDIRECT, assignment_source="strategy_continuation",
+                    assignment_probability=1, randomization_key=key)
+                self._probe_stage("T3_PREPARED", t3_opportunity=opportunity, t3_treatment=treatment)
+                stage = "T3"
+            return self._execute_probe_stage(
+                env=env, recorder=recorder, call_audit=call_audit, prefix=prefix,
+                opportunity=opportunity, treatment=treatment, stage=stage)
+        except Exception as error:
+            self._probe_structural_failure(error, selection)
+            raise
+
+    def _after_probe_step(self, env, new_events, done):
+        record = self.records.get(self._active_game_id)
+        if record is None:
+            return
+        try:
+            if record.lifecycle[-1] == "T3_SCHEDULED":
+                expected = record.assignment.opportunity.observation_window.expected_speakers
+                for event in new_events:
+                    if (event["event_type"] == "public_speech" and
+                            event.get("event_id") == record.t1_execution.canonical_link.canonical_event_id
+                            and not record.observations):
+                        continue  # initial committed Probe, outside its observation window
+                    if event["event_type"] == "public_speech":
+                        index = len(record.observations)
+                        if index >= len(expected) or event["speaker"] != expected[index]:
+                            raise ValueError("unexpected speech in Probe observation window")
+                        record = replace(record, observations=record.observations + (
+                            PublicProbeObservationV1(event["event_id"], event["speaker"], event["raw_text"]),))
+                        self.records[self._active_game_id] = record
+                if env.phase != record.assignment.opportunity.legal_context.phase or done:
+                    raise ValueError("designated Probe continuation PRE became unavailable")
+            if "EXECUTION_RECORDED" not in record.lifecycle or record.day_outcome is not None:
+                return
+            for event in new_events:
+                if event["event_type"] != "exile_result" or env.phase == "speech_pk":
+                    continue
+                expelled = event["exiled_players"]
+                if not isinstance(expelled, list) or len(expelled) > 1:
+                    raise ValueError("invalid canonical day exile")
+                outcome = extract_phase2_day_outcome(record.assignment.opportunity,
+                            expelled[0] if expelled else None, self.reference_tables)
+                record = self._probe_stage("DAY_CONSEQUENCE_RECORDED", day_outcome=outcome,
+                                          reference_artifact_digest=self.reference_artifact_digest)
+                if self.ledger:
+                    if self.record_evidence:
+                        self.record_evidence("consequence", record)
+                    self.ledger.persist_consequence(record)
+                break
+        except Exception as error:
+            self._probe_structural_failure(error)
+            raise
+
     def after_step(self, *, env, done: bool, info):
-        del done, info
+        del info
         game_id = self._active_game_id
         if game_id is None:
             raise ValueError("Pilot-T step has no active game")
         new_events = env.public_events[self._last_public_event_count:]
         self._last_public_event_count = len(env.public_events)
+        if isinstance(self.plan, Phase2OnlineProbePilotPlanV1):
+            return self._after_probe_step(env, new_events, done)
         record = self.records.get(game_id)
         if record is None or record.execution_success is not True or record.day_outcome is not None:
             return
@@ -244,7 +443,14 @@ class OnlineTerminalPilotRunnerV1:
             raise ValueError("Pilot-T game was not started")
         record = self.records.get(game_id)
         if record is not None:
-            self.records[game_id] = replace(record, final_game_result=winner)
+            if isinstance(record, Phase2OnlineProbeRecordV1):
+                if record.day_outcome is None:
+                    error = ValueError("assigned Probe game ended without T0 day consequence")
+                    self._probe_structural_failure(error)
+                    raise error
+                self._probe_stage("GAME_RESULT_RECORDED", final_game_result=winner)
+            else:
+                self.records[game_id] = replace(record, final_game_result=winner)
             if self.ledger is not None:
                 if self.record_evidence is not None:
                     self.record_evidence("game-result", self.records[game_id])
@@ -301,7 +507,7 @@ class OnlinePilotRuntimeBundleV1:
 
 def run_online_campaign(game_ids: tuple[str, ...], runtime_factory, *,
                         ledger: OnlinePilotAssignmentLedgerV1) -> dict:
-    """Resume with new game IDs until 10/120 assignments or the safety cap.
+    """Use new game IDs until the frozen assignment target or safety cap.
 
     The caller pre-registers game IDs and supplies a fresh canonical runtime
     and passed preflight per game. An exception stops the campaign with the
@@ -359,8 +565,11 @@ def publish_online_pilot(destination: Path, *, pilot, dataset, preflight,
     from werewolf.phase2_online_preflight import PilotPreflightV1
     if os.path.lexists(destination):
         raise FileExistsError("online pilot destination must be absent")
-    expected_name = (QUALIFICATION_NAME if pilot.plan.campaign_purpose == "qualification"
-                     else ARTIFACT_NAME)
+    is_probe = isinstance(pilot.plan, Phase2OnlineProbePilotPlanV1)
+    expected_name = ((PROBE_QUALIFICATION_NAME if pilot.plan.campaign_purpose == "qualification"
+                      else PROBE_ARTIFACT_NAME) if is_probe else
+                     (QUALIFICATION_NAME if pilot.plan.campaign_purpose == "qualification"
+                      else ARTIFACT_NAME))
     if destination.name != expected_name:
         raise ValueError("qualification and formal pilot require distinct artifact names")
     if not isinstance(preflight, PilotPreflightV1) or not preflight.ready:
@@ -378,7 +587,7 @@ def publish_online_pilot(destination: Path, *, pilot, dataset, preflight,
                pilot.plan.target_assignment_count
             or dataset.manifest.get("campaign_purpose") != pilot.plan.campaign_purpose
             or dataset.manifest.get("estimator_eligible") !=
-               (pilot.plan.campaign_purpose == "pilot")
+               (not is_probe and pilot.plan.campaign_purpose == "pilot")
             or pilot.plan.selection_status != "FROZEN"
             or preflight.online_plan_digest != pilot.plan.digest()
             or preflight.source_commit_pin != dataset.manifest["source_commit"]
@@ -400,14 +609,13 @@ def publish_online_pilot(destination: Path, *, pilot, dataset, preflight,
             or len(smoke_v3_manifest_digest) != 64):
         raise ValueError("formal online pilot requires frozen plan and real execution proof")
     support = analyze_phase2_online_support_record(dataset.to_record())
-    report = ("# Online Pilot-T support\n\n"
-              "Assignment, execution, and consequence counts are descriptive. "
+    report = (("# Online Probe policy support\n\n" if is_probe else "# Online Pilot-T support\n\n")
+              + "Assignment, execution, and consequence counts are descriptive. "
               "No lambda or policy effect is fitted.\n")
     artifact = publish_artifact(destination, manifest_fields={
-        "artifact_type": "phase2_online_terminal_pilot",
-        "schema_version": ARTIFACT_VERSION,
-        "study_name": (QUALIFICATION_NAME if pilot.plan.campaign_purpose == "qualification"
-                       else ARTIFACT_NAME),
+        "artifact_type": "phase2_online_probe_pilot" if is_probe else "phase2_online_terminal_pilot",
+        "schema_version": "phase2_online_probe_pilot_v1" if is_probe else ARTIFACT_VERSION,
+        "study_name": expected_name,
         "campaign_purpose": pilot.plan.campaign_purpose,
         "target_assignment_count": pilot.plan.target_assignment_count,
         "completion_status": "COMPLETE",
@@ -426,6 +634,7 @@ def publish_online_pilot(destination: Path, *, pilot, dataset, preflight,
         "executions.jsonl": canonical_jsonl_bytes(dataset.executions),
         "consequences.jsonl": canonical_jsonl_bytes(dataset.consequences),
         "backend_calls.jsonl": canonical_jsonl_bytes(dataset.backend_calls),
+        **({"strategy_stages.jsonl": canonical_jsonl_bytes(dataset.strategy_stages)} if is_probe else {}),
         "metrics/support.json": canonical_json_bytes(support),
         "report.md": report.encode("utf-8"),
     })

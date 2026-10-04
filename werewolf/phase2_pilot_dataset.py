@@ -11,12 +11,18 @@ from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.phase2_pilot_records import (
     Phase2ActionConsequenceRecordV1, Phase2ProbeSequenceRecordV1,
 )
-from werewolf.phase2_online_records import Phase2OnlineInterventionRecordV1
+from werewolf.phase2_online_records import (
+    Phase2OnlineInterventionRecordV1, validate_probe_lifecycle_record,
+)
+from werewolf.phase2_online_plan import (
+    Phase2OnlineProbePilotPlanV1, probe_assignment_from_record,
+)
 from werewolf.phase2_offline import ResolvedOutcome
 
 
 VERSION = "phase2_consequence_dataset_v1"
 ONLINE_VERSION = "phase2_online_terminal_consequence_dataset_v1"
+PROBE_ONLINE_VERSION = "phase2_online_probe_consequence_dataset_v1"
 
 
 class PilotDatasetError(ValueError):
@@ -42,13 +48,17 @@ class Phase2OnlineConsequenceDatasetV1:
     consequences: tuple[dict, ...]
     backend_calls: tuple[dict, ...]
     manifest: dict
+    strategy_stages: tuple[dict, ...] = ()
 
     def to_record(self) -> dict:
-        return {"manifest": self.manifest,
+        record = {"manifest": self.manifest,
                 "assignments": list(self.assignments),
                 "executions": list(self.executions),
                 "consequences": list(self.consequences),
                 "backend_calls": list(self.backend_calls)}
+        if self.strategy_stages:
+            record["strategy_stages"] = list(self.strategy_stages)
+        return record
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,8 @@ def require_online_dataset_access(
         analyze_phase2_online_support_record(dataset.to_record())
     if audit_only:
         return OnlineDatasetAccessV1(datasets, estimator_eligible=False)
+    if any(dataset.manifest.get("schema_version") == PROBE_ONLINE_VERSION for dataset in datasets):
+        raise PilotDatasetError("Probe strategy analysis is unsupported; audit-only access is required")
     if len(datasets) != 1:
         raise PilotDatasetError("estimation requires one formal campaign dataset")
     manifest = datasets[0].manifest
@@ -209,9 +221,10 @@ def build_phase2_online_dataset_from_ledger(ledger, *, execution_verifier=None,
     if not isinstance(ledger, OnlinePilotAssignmentLedgerV1):
         raise PilotDatasetError("validated durable assignment ledger required")
     snapshot = ledger.snapshot()
+    is_probe = isinstance(ledger.plan, Phase2OnlineProbePilotPlanV1)
     if not allow_synthetic and not callable(execution_verifier):
         raise PilotDatasetError("canonical execution verifier required")
-    assignments, executions, consequences, backend_calls = [], [], [], []
+    assignments, executions, consequences, backend_calls, strategy_stages = [], [], [], [], []
     for game_id, stage in snapshot["games"].items():
         if "ASSIGNMENT" not in stage:
             continue
@@ -221,6 +234,8 @@ def build_phase2_online_dataset_from_ledger(ledger, *, execution_verifier=None,
         if assigned_digest != sha256_bytes(canonical_json_bytes(assigned)):
             raise PilotDatasetError("ledger assignment digest differs")
         assignments.append(assigned)
+        if is_probe:
+            strategy_stages.extend(stage.get("STRATEGY_STAGE_HISTORY", ()))
         calls = [item["call"] for item in stage.get("BACKEND_CALL", ())]
         backend_calls.extend(calls)
         if "EXECUTION" in stage:
@@ -235,7 +250,9 @@ def build_phase2_online_dataset_from_ledger(ledger, *, execution_verifier=None,
                                **execution["execution"]})
         if "CONSEQUENCE" in stage:
             consequence = stage["CONSEQUENCE"]
-            if consequence["assignment_id"] != assigned_digest:
+            if (consequence["assignment_id"] != assigned_digest
+                    or is_probe and not allow_synthetic
+                    and execution_verifier(game_id, stage) is not True):
                 raise PilotDatasetError("ledger consequence disagrees with assignment")
             consequences.append({"game_id": game_id,
                                  "assignment_digest": assigned_digest,
@@ -249,15 +266,21 @@ def build_phase2_online_dataset_from_ledger(ledger, *, execution_verifier=None,
     executions = tuple(executions)
     consequences = tuple(consequences)
     backend_calls = tuple(backend_calls)
-    manifest = {"schema_version": ONLINE_VERSION,
+    strategy_stages = tuple(strategy_stages)
+    tables = [assignments, executions, consequences, backend_calls]
+    if is_probe:
+        tables.append(strategy_stages)
+    consequence_games = {row["game_id"] for row in consequences}
+    manifest = {"schema_version": PROBE_ONLINE_VERSION if is_probe else ONLINE_VERSION,
                 "source_commit": ledger.source_commit,
                 "pilot_plan_digest": ledger.plan.digest(),
                 "campaign_purpose": ledger.plan.campaign_purpose,
-                "estimator_eligible": ledger.plan.campaign_purpose == "pilot",
+                "estimator_eligible": not is_probe and ledger.plan.campaign_purpose == "pilot",
                 "target_assignment_count": ledger.plan.target_assignment_count,
                 "campaign_status": ledger.status(),
                 "sealable": ledger.sealable(),
-                "assignment_semantics": "online_randomized_single_path_do_a",
+                "assignment_semantics": ("online_randomized_whole_probe_strategy" if is_probe
+                                         else "online_randomized_single_path_do_a"),
                 "observational_vote_intent_used": False,
                 "synthetic_audit_only": allow_synthetic,
                 "games_seen": snapshot["games_attempted"],
@@ -267,13 +290,21 @@ def build_phase2_online_dataset_from_ledger(ledger, *, execution_verifier=None,
                 "missing_execution_count": len(assignments) - len(executions),
                 "consequence_count": len(consequences),
                 "successful_execution_without_day_result": sum(
+                    row["success"] is True and row["game_id"] not in consequence_games
+                    for row in executions) if is_probe else sum(
                     row["success"] is True for row in executions) - len(consequences),
                 "ledger_digest": snapshot["events"][-1]["digest"],
-                "tables_digest": sha256_bytes(canonical_json_bytes([
-                    assignments, executions, consequences, backend_calls]))}
+                "tables_digest": sha256_bytes(canonical_json_bytes(tables))}
+    if is_probe:
+        manifest.update({"probe_plan": ledger.plan.to_record(),
+                         "strategy_stage_count": len(strategy_stages),
+                         "itt_assignment_count": len(assignments),
+                         "itt_consequence_count": len(consequences),
+                         "itt_outcome_complete": bool(assignments)
+                         and len(assignments) == len(consequences)})
     manifest["manifest_digest"] = sha256_bytes(canonical_json_bytes(manifest))
     dataset = Phase2OnlineConsequenceDatasetV1(
-        assignments, executions, consequences, backend_calls, manifest)
+        assignments, executions, consequences, backend_calls, manifest, strategy_stages)
     analyze_phase2_online_support_record(dataset.to_record())
     return dataset
 
@@ -293,23 +324,42 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
         executions = payload["executions"]
         consequences = payload["consequences"]
         backend_calls = payload["backend_calls"]
-        if (manifest["schema_version"] != ONLINE_VERSION
-                or manifest["assignment_semantics"] != "online_randomized_single_path_do_a"
+        is_probe = manifest["schema_version"] == PROBE_ONLINE_VERSION
+        strategy_stages = payload.get("strategy_stages", [])
+        tables = [assignments, executions, consequences, backend_calls]
+        if is_probe:
+            tables.append(strategy_stages)
+        if (manifest["schema_version"] not in (ONLINE_VERSION, PROBE_ONLINE_VERSION)
+                or manifest["assignment_semantics"] != (
+                    "online_randomized_whole_probe_strategy" if is_probe else
+                    "online_randomized_single_path_do_a")
+                or not is_probe and strategy_stages
                 or manifest["observational_vote_intent_used"] is not False
                 or manifest["manifest_digest"] != sha256_bytes(canonical_json_bytes({
                     key: value for key, value in manifest.items() if key != "manifest_digest"}))
-                or manifest["tables_digest"] != sha256_bytes(canonical_json_bytes([
-                    assignments, executions, consequences, backend_calls]))
+                or manifest["tables_digest"] != sha256_bytes(canonical_json_bytes(tables))
                 or (len(assignments), len(executions), len(consequences)) != (
                     manifest["assignment_count"], manifest["execution_count"],
                     manifest["consequence_count"])):
             raise PilotDatasetError("online dataset manifest or table digest mismatch")
+        if is_probe:
+            frozen = manifest["probe_plan"]
+            plan = Phase2OnlineProbePilotPlanV1(
+                frozen["pilot_id"], frozen["assignment_seed"], frozen["target_assignment_count"],
+                frozen["max_games_attempted"], frozen["campaign_purpose"],
+                frozen["candidate_selection_rule"], frozen["selection_status"])
+            if frozen != plan.to_record() or plan.digest() != manifest["pilot_plan_digest"]:
+                raise PilotDatasetError("Probe dataset frozen plan differs")
         by_assignment = {}
         for row in assignments:
             identity = row["opportunity"]["identity"]
             game_id = identity["game_id"]
             key = sha256_bytes(canonical_json_bytes(row))
-            if (game_id in by_assignment or row["schema_version"] !=
+            if is_probe:
+                probe_assignment_from_record(row, plan)
+                if game_id in by_assignment:
+                    raise PilotDatasetError("duplicate Probe assignment")
+            elif (game_id in by_assignment or row["schema_version"] !=
                     "phase2_online_terminal_assignment_v1"
                     or row["assigned_action"] not in ("PUSH", "REDIRECT")
                     or row["assigned_action"] not in row["legal_action_set"]
@@ -327,6 +377,34 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
                     or row["treatment"]["observational_vote_intent_is_treatment"] is not False):
                 raise PilotDatasetError("illegal or duplicate online assignment")
             by_assignment[game_id] = (key, row)
+        latest_strategy = {}
+        if is_probe:
+            for snapshot in strategy_stages:
+                game_id = snapshot["game_id"]
+                raw = snapshot["record"]
+                validate_probe_lifecycle_record(raw)
+                if (game_id not in by_assignment
+                        or snapshot["assignment_id"] != by_assignment[game_id][0]
+                        or raw["assignment"] != by_assignment[game_id][1]):
+                    raise PilotDatasetError("Probe lifecycle snapshot differs from assignment")
+                previous = latest_strategy.get(game_id)
+                if previous is None:
+                    if raw["lifecycle"] != ["ASSIGNED"]:
+                        raise PilotDatasetError("Probe lifecycle history lacks initial assignment")
+                else:
+                    if (raw["lifecycle"][:-1] != previous["lifecycle"]
+                            or len(raw["lifecycle"]) != len(previous["lifecycle"]) + 1
+                            or raw["observations"][:len(previous["observations"])] != previous["observations"]):
+                        raise PilotDatasetError("Probe lifecycle history is not append-only")
+                    for name in ("T1", "T3"):
+                        if (previous["stages"][name] is not None
+                                and raw["stages"][name] != previous["stages"][name]):
+                            raise PilotDatasetError("Probe lifecycle stage evidence changed")
+                    for name in ("opportunity", "treatment"):
+                        if (previous["continuation"][name] is not None
+                                and raw["continuation"][name] != previous["continuation"][name]):
+                            raise PilotDatasetError("Probe lifecycle continuation changed")
+                latest_strategy[game_id] = raw
         by_execution = {}
         for row in executions:
             game_id = row["game_id"]
@@ -336,6 +414,10 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
                     or type(row["theta_audit_label"]) not in (bool, type(None))
                     or row["canonical_commit_success"] is not row["success"]):
                 raise PilotDatasetError("online execution disagrees with assignment")
+            if is_probe and (game_id not in latest_strategy or row != {
+                    "game_id": game_id, "assignment_digest": by_assignment[game_id][0],
+                    "theta_audit_label": None, **latest_strategy[game_id]["execution"]}):
+                raise PilotDatasetError("Probe execution differs from lifecycle evidence")
             by_execution[game_id] = row
         if (not set(by_execution) <= set(by_assignment)
                 or manifest.get("missing_execution_count", 0) !=
@@ -346,17 +428,27 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
             game_id = row["game_id"]
             day = row["day_consequence"]
             if (game_id in by_consequence or game_id not in by_assignment
-                    or by_execution[game_id]["success"] is not True
+                    or game_id not in by_execution
+                    or not is_probe and by_execution[game_id]["success"] is not True
                     or row["assignment_digest"] != by_assignment[game_id][0]
                     or day["Y"] not in {category.value for category in ResolvedOutcome}
                     or type(day["l_ref"]) not in (int, float)
                     or not math.isfinite(day["l_ref"]) or not 0 <= day["l_ref"] <= 1):
                 raise PilotDatasetError("consequence is not a successful terminal intervention")
+            if is_probe and (game_id not in latest_strategy
+                    or day != latest_strategy[game_id]["day_consequence"]
+                    or row["theta_audit_label"] is not None
+                    or row["final_game_result"] != latest_strategy[game_id]["offline_audit"]["final_game_result"]):
+                raise PilotDatasetError("Probe consequence differs from lifecycle evidence")
             by_consequence[game_id] = row
-        if (not set(by_consequence) <= {game_id for game_id, row in by_execution.items()
-                                       if row["success"]}
+        completed_executions = (set(by_execution) if is_probe else
+                                {game_id for game_id, row in by_execution.items() if row["success"]})
+        expected_success_missing = (sum(row["success"] and game_id not in by_consequence
+                                        for game_id, row in by_execution.items()) if is_probe else
+                                    sum(row["success"] for row in by_execution.values()) - len(consequences))
+        if (not set(by_consequence) <= completed_executions
                 or manifest["successful_execution_without_day_result"] !=
-                   sum(row["success"] for row in by_execution.values()) - len(consequences)):
+                   expected_success_missing):
             raise PilotDatasetError("incomplete day consequences disagree with execution")
         if (type(manifest["games_seen"]) is not int
                 or manifest["games_seen"] < len(assignments)
@@ -365,22 +457,33 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
             raise PilotDatasetError("invalid pilot opportunity counters")
         if (manifest.get("campaign_purpose") is not None and
                 (manifest["campaign_purpose"] not in ("qualification", "pilot")
-                 or manifest.get("target_assignment_count") !=
-                    (10 if manifest["campaign_purpose"] == "qualification" else 120)
+                 or manifest.get("target_assignment_count") != (
+                    plan.target_assignment_count if is_probe else
+                    (10 if manifest["campaign_purpose"] == "qualification" else 120))
                  or manifest.get("estimator_eligible") is not
-                    (manifest["campaign_purpose"] == "pilot"))):
+                    (not is_probe and manifest["campaign_purpose"] == "pilot"))):
             raise PilotDatasetError("campaign purpose or estimator exclusion differs")
-    except (KeyError, TypeError, AttributeError, IndexError) as error:
+        if is_probe and (manifest["campaign_purpose"] != plan.campaign_purpose
+                or manifest["strategy_stage_count"] != len(strategy_stages)
+                or manifest["itt_assignment_count"] != len(assignments)
+                or manifest["itt_consequence_count"] != len(consequences)
+                or manifest["itt_outcome_complete"] is not
+                   (bool(assignments) and len(assignments) == len(consequences))):
+            raise PilotDatasetError("Probe ITT audit counts differ")
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError) as error:
+        if isinstance(error, PilotDatasetError):
+            raise
         raise PilotDatasetError("malformed online pilot dataset") from error
-    assigned = Counter(row["assigned_action"] for row in assignments)
-    success = Counter(by_assignment[game_id][1]["assigned_action"]
+    arm = "assigned_strategy" if is_probe else "assigned_action"
+    assigned = Counter(row[arm] for row in assignments)
+    success = Counter(by_assignment[game_id][1][arm]
                       for game_id, execution in by_execution.items() if execution["success"])
-    by_phase = Counter((row["opportunity"]["identity"]["phase"], row["assigned_action"])
+    by_phase = Counter((row["opportunity"]["identity"]["phase"], row[arm])
                        for row in assignments)
-    by_s_pre = Counter((tuple(row["opportunity"]["s_pre"]), row["assigned_action"])
+    by_s_pre = Counter((tuple(row["opportunity"]["s_pre"]), row[arm])
                        for row in assignments)
     by_candidate = Counter((row["opportunity"]["identity"]["candidate_j"],
-                            row["assigned_action"]) for row in assignments)
+                            row[arm]) for row in assignments)
     by_pool_size = Counter(len(row["selection"].get("candidate_pool", ()))
                            for row in assignments)
     candidate_frequency = Counter(row["selection"]["candidate_j"]
@@ -388,17 +491,18 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
     failure_reasons = Counter(row["failure_reason"] for row in executions
                               if row["success"] is False)
     by_theta = Counter((str(row["theta_audit_label"]),
-                        by_assignment[row["game_id"]][1]["assigned_action"])
+                        by_assignment[row["game_id"]][1][arm])
                        for row in executions)
     by_p_bin = Counter((min(9, int(row["opportunity"]["evidence"]["p_tilde_j"] * 10)),
-                        row["assigned_action"]) for row in assignments)
-    y = Counter((by_assignment[row["game_id"]][1]["assigned_action"],
+                        row[arm]) for row in assignments)
+    y = Counter((by_assignment[row["game_id"]][1][arm],
                  row["day_consequence"]["Y"]) for row in consequences)
     loss = defaultdict(list)
     for row in consequences:
-        loss[by_assignment[row["game_id"]][1]["assigned_action"]].append(
+        loss[by_assignment[row["game_id"]][1][arm]].append(
             row["day_consequence"]["l_ref"])
-    return {"schema_version": "phase2_online_terminal_support_v1",
+    support = {"schema_version": ("phase2_online_probe_support_v1" if is_probe else
+                                  "phase2_online_terminal_support_v1"),
             "games_seen": manifest["games_seen"],
             "eligible_opportunities": manifest["eligible_opportunities"],
             "games_assigned": len(assignments),
@@ -430,6 +534,16 @@ def analyze_phase2_online_support_record(payload: dict) -> dict:
                                   "max": max(values), "mean": statistics.fmean(values)}
                                 for action, values in sorted(loss.items())},
             "fitted_lambda": None}
+    if is_probe:
+        for name in ("assigned_by_action", "execution_success_by_action", "execution_rate_by_action",
+                     "Y_by_action", "L_ref_by_action"):
+            support[name.replace("action", "strategy")] = support.pop(name)
+        support.pop("fitted_lambda")
+        support.update({"strategy_stage_count": len(strategy_stages),
+                        "itt_assignment_count": len(assignments),
+                        "itt_consequence_count": len(consequences),
+                        "itt_outcome_complete": manifest["itt_outcome_complete"]})
+    return support
 
 
 def analyze_phase2_consequence_support_record(payload: dict) -> dict:

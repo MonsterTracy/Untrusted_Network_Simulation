@@ -1,4 +1,4 @@
-"""Server assembly for the existing Online Pilot-T protocol, without model policy."""
+"""Shared canonical server assembly for terminal and Probe strategy pilots."""
 
 from __future__ import annotations
 
@@ -32,13 +32,17 @@ from werewolf.canonical_collection.public_history import freeze_public_event_his
 from werewolf.phase2_mapper_runtime import load_runtime_mapper
 from werewolf.phase2_offline import build_development_layer, classify_outcome
 from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.phase2_online_plan import Phase2OnlineTerminalPilotPlanV1
+from werewolf.phase2_online_plan import (
+    PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
+    probe_opportunity_from_record,
+)
 from werewolf.phase2_online_preflight import (
     FrozenArtifactRequirement, _smoke_v3_gate, assess_pilot_preflight,
     freeze_online_source_provenance,
 )
 from werewolf.phase2_online_runner import (
-    ARTIFACT_NAME, QUALIFICATION_NAME, OnlinePilotRuntimeBundleV1,
+    ARTIFACT_NAME, QUALIFICATION_NAME, PROBE_ARTIFACT_NAME, PROBE_QUALIFICATION_NAME,
+    OnlinePilotRuntimeBundleV1,
     OnlineTerminalPilotRunnerV1, build_online_dataset, publish_online_pilot,
     run_online_campaign,
 )
@@ -73,9 +77,14 @@ def _publish_json(path, record):
 
 def load_online_plan(path, purpose):
     raw = _read_json(path)
-    fields = ("pilot_id", "assignment_seed", "campaign_purpose", "push_probability",
-              "candidate_selection_rule", "selection_status", "max_games_attempted")
-    plan = Phase2OnlineTerminalPilotPlanV1(**{name: raw[name] for name in fields})
+    if raw.get("schema_version") == PROBE_PLAN_VERSION:
+        fields = ("pilot_id", "assignment_seed", "campaign_purpose", "target_assignment_count",
+                  "candidate_selection_rule", "selection_status", "max_games_attempted")
+        plan = Phase2OnlineProbePilotPlanV1(**{name: raw[name] for name in fields})
+    else:
+        fields = ("pilot_id", "assignment_seed", "campaign_purpose", "push_probability",
+                  "candidate_selection_rule", "selection_status", "max_games_attempted")
+        plan = Phase2OnlineTerminalPilotPlanV1(**{name: raw[name] for name in fields})
     if raw != plan.to_record() or plan.campaign_purpose != purpose:
         raise ValueError("campaign purpose or frozen Pilot-T plan differs")
     for identity in (plan.pilot_id,):
@@ -117,13 +126,17 @@ def load_server_inputs(args):
     if (args.destination.is_relative_to(args.work_directory)
             or args.work_directory.is_relative_to(args.destination)):
         raise ValueError("work directory and formal destination must be disjoint")
-    expected_name = QUALIFICATION_NAME if args.campaign_purpose == "qualification" else ARTIFACT_NAME
+    plan = load_online_plan(args.plan, args.campaign_purpose)
+    if isinstance(plan, Phase2OnlineProbePilotPlanV1):
+        expected_name = (PROBE_QUALIFICATION_NAME if args.campaign_purpose == "qualification"
+                         else PROBE_ARTIFACT_NAME)
+    else:
+        expected_name = QUALIFICATION_NAME if args.campaign_purpose == "qualification" else ARTIFACT_NAME
     if args.destination.name != expected_name:
         raise ValueError("qualification and pilot require their distinct fixed artifact names")
     source = freeze_online_source_provenance(args.repo)
     if source is None or source["commit"] != args.source_commit:
         raise ValueError("tracked source/index must be clean at the preregistered source commit")
-    plan = load_online_plan(args.plan, args.campaign_purpose)
     game_plan = collection_plan_from_record(_read_json(args.game_plan))
     if (game_plan.source_revision != args.source_commit
             or game_plan.collection_id != plan.pilot_id
@@ -287,6 +300,8 @@ class ServerRuntimeFactory:
 
     def verify_execution(self, game_id, stages):
         """Validate durable canonical calls, committed text and actual day outcome."""
+        if "assigned_strategy" in stages["ASSIGNMENT"]["assignment"]:
+            return self._verify_probe_execution(game_id, stages)
         proof = self._stage_evidence(game_id, "execution")
         assigned = stages["ASSIGNMENT"]["assignment"]
         execution = stages["EXECUTION"]["execution"]
@@ -358,6 +373,192 @@ class ServerRuntimeFactory:
                     and event.temporal_state.day == prefix.public_temporal_state.day
                     and event.event_index < exiles[-1].event_index for event in events):
                 raise ValueError("canonical vote/reference consequence differs")
+        return True
+
+    @staticmethod
+    def _probe_pre(game_id, opportunity, canonical):
+        from werewolf.phase2_actions import context_from_pre
+
+        parsed = probe_opportunity_from_record(opportunity)
+        identity = opportunity["identity"]
+        prefix = next((_prefix_from_record(row) for row in canonical["authoritative_pre_prefixes"]
+                       if row["boundary_id"] == identity["boundary_id"]), None)
+        if prefix is None:
+            raise ValueError("canonical Probe stage PRE is missing")
+        context = context_from_pre(prefix, parsed.legal_context.known_wolves)
+        history = freeze_public_event_history(canonical["public_events"])
+        if (context != parsed.legal_context or context.game_id != game_id
+                or history.to_records()[:len(prefix.public_event_history.events)] !=
+                   prefix.public_event_history.to_records()):
+            raise ValueError("canonical Probe stage PRE differs")
+        return prefix, history
+
+    @staticmethod
+    def _verify_probe_stage(game_id, assignment_id, stage, canonical, *, invalid_at_pre=False):
+        from werewolf.canonical_collection.trajectory_evidence import BackendCallPurpose
+
+        prefix, history = ServerRuntimeFactory._probe_pre(game_id, stage["opportunity"], canonical)
+        identity = stage["opportunity"]["identity"]
+        treatment = stage["treatment"]
+        calls = stage["backend_calls"]
+        expected_actors = [("realization", 1)] + ([("repair", 2)] if stage["attempt_count"] == 2 else [])
+        if ([(call["role"], call["attempt_index"]) for call in calls
+             if call["role"] in ("realization", "repair")] != expected_actors
+                or any(call["role"] not in ("realization", "repair", "perception") for call in calls)
+                or (stage["success"] and not any(call["role"] == "perception"
+                    and call["attempt_index"] == stage["attempt_count"]
+                    and call["response_digest"] is not None and call["error_category"] is None
+                    for call in calls))):
+            raise ValueError("Probe stage lacks required language dispatch evidence")
+        current_attempt = 0
+        for call in calls:
+            if call["role"] in ("realization", "repair"):
+                current_attempt += 1
+            if (call["attempt_index"] != current_attempt
+                    or call["perception_public_only"] is not (call["role"] == "perception")):
+                raise ValueError("Probe language attempt/public perception order differs")
+        canonical_calls = {row["call_id"]: _backend_call_from_record(row)
+                           for row in canonical["backend_calls"]}
+        for call in calls:
+            actual = canonical_calls[call["canonical_call_id"]]
+            private = actual.private_payload.to_value()
+            if (call["game_id"] != game_id or call["assignment_id"] != assignment_id
+                    or call["treatment_id"] != treatment["treatment_id"]
+                    or call["opportunity_digest"] != treatment["opportunity_digest"]
+                    or call["boundary_id"] != identity["boundary_id"]
+                    or call["prefix_digest"] != identity["prefix_digest"]
+                    or actual.boundary_id != identity["boundary_id"]
+                    or actual.observer_id != identity["acting_wolf"]
+                    or actual.purpose != BackendCallPurpose.RUNTIME
+                    or actual.operation_id != f"phase2-{treatment['treatment_id'][:16]}-{call['sequence']:03d}"
+                    or actual.backend_identity != call["backend_identity"]
+                    or actual.model_identity != call["model_identity"]
+                    or call["request_digest"] != sha256_bytes(canonical_json_bytes(private["kwargs"]))
+                    or call["response_digest"] != (None if private["response"] is None else
+                        sha256_bytes(canonical_json_bytes(private["response"])))):
+                raise ValueError("Probe stage sidecar differs from canonical dispatch")
+        if stage["success"]:
+            event = next((row for row in history.to_records()
+                          if row["event_id"] == stage["canonical_event_id"]), None)
+            if event is None:
+                raise ValueError("Probe canonical committed speech is missing")
+            committed = {key: event[key] for key in (
+                "event_id", "event_index", "event_type", "speaker", "raw_text")}
+            if (event["event_type"] != "public_speech"
+                    or event["speaker"] != identity["acting_wolf"]
+                    or event["event_index"] != len(prefix.public_event_history.events)
+                    or sha256_bytes(canonical_json_bytes(committed)) != stage["canonical_event_digest"]
+                    or sha256_bytes(event["raw_text"].encode("utf-8")) != stage["generated_text_digest"]):
+                raise ValueError("Probe canonical committed speech differs")
+        elif invalid_at_pre and history.to_records() != prefix.public_event_history.to_records():
+            raise ValueError("invalid Probe stage cannot claim a new public event")
+        return prefix, history
+
+    def _verify_probe_execution(self, game_id, stages):
+        from werewolf.phase2_online_records import validate_probe_lifecycle_record
+
+        assigned = stages["ASSIGNMENT"]["assignment"]
+        assignment_id = stages["ASSIGNMENT"]["assignment_id"]
+        snapshots = stages.get("STRATEGY_STAGE_HISTORY", [])
+        if (not snapshots or snapshots[0]["record"]["lifecycle"] != ["ASSIGNED"]
+                or stages.get("STRATEGY_STAGE") != snapshots[-1]):
+            raise ValueError("Probe lifecycle history is missing")
+        final_stages = snapshots[-1]["record"]["stages"]
+        previous = []
+        for snapshot in snapshots:
+            record = snapshot["record"]
+            validate_probe_lifecycle_record(record)
+            lifecycle = record["lifecycle"]
+            if (snapshot["assignment_id"] != assignment_id or snapshot["game_id"] != game_id
+                    or record["assignment"] != assigned
+                    or len(lifecycle) != len(previous) + 1 or lifecycle[:-1] != previous):
+                raise ValueError("Probe lifecycle assignment/order differs")
+            previous = lifecycle
+            event = lifecycle[-1]
+            if event == "ASSIGNED":
+                continue
+            name = f"strategy-{len(lifecycle):02d}-{event.lower()}"
+            proof = self._stage_evidence(game_id, name)
+            if proof["phase2_record"] != record:
+                raise ValueError("canonical Probe lifecycle proof differs from ledger")
+            canonical = proof["canonical_runtime"]
+            self._probe_pre(game_id, assigned["opportunity"], canonical)
+            if event in ("T1_ATTEMPTED", "T3_PREPARED"):
+                stage_name = "T1" if event == "T1_ATTEMPTED" else "T3"
+                stage = final_stages[stage_name]
+                actual_ids = {row["call_id"] for row in canonical["backend_calls"]}
+                if stage is not None and any(call["canonical_call_id"] in actual_ids
+                        for call in stage["backend_calls"]):
+                    raise ValueError("Probe language call precedes lifecycle writeahead")
+            if record["continuation"]["opportunity"] is not None:
+                self._probe_pre(game_id, record["continuation"]["opportunity"], canonical)
+            for stage_name, stage in record["stages"].items():
+                if stage is not None:
+                    self._verify_probe_stage(game_id, assignment_id, stage, canonical,
+                        invalid_at_pre=event == f"{stage_name}_LANGUAGE_INVALID")
+            if record["observations"]:
+                prefix, history = self._probe_pre(game_id, assigned["opportunity"], canonical)
+                speech = [row for row in history.to_records()[len(prefix.public_event_history.events) + 1:]
+                          if row["event_type"] == "public_speech"]
+                if len(speech) < len(record["observations"]) or any(
+                        observed["event_id"] != actual["event_id"]
+                        or observed["speaker"] != actual["speaker"]
+                        or observed["text"] != actual["raw_text"]
+                        for observed, actual in zip(record["observations"], speech)):
+                    raise ValueError("Probe observations differ from canonical public window")
+        proof = self._stage_evidence(game_id, "execution")
+        executed = next((snapshot["record"] for snapshot in snapshots
+                         if snapshot["record"]["lifecycle"][-1] == "EXECUTION_RECORDED"), None)
+        if (executed is None or proof["phase2_record"] != executed
+                or executed["execution"] != stages["EXECUTION"]["execution"]):
+            raise ValueError("canonical Probe execution proof differs from ledger")
+        calls = [call for stage in executed["stages"].values() if stage is not None
+                 for call in stage["backend_calls"]]
+        if (calls != stages["EXECUTION"]["backend_calls"]
+                or calls != [row["call"] for row in stages.get("BACKEND_CALL", [])]
+                or [call["sequence"] for call in calls] != list(range(1, len(calls) + 1))
+                or len({call["canonical_call_id"] for call in calls}) != len(calls)
+                or sha256_bytes(canonical_json_bytes(calls)) != executed["execution"]["backend_call_audit_digest"]):
+            raise ValueError("Probe execution backend evidence differs")
+        for stage in executed["stages"].values():
+            if stage is not None:
+                self._verify_probe_stage(game_id, assignment_id, stage, proof["canonical_runtime"],
+                    invalid_at_pre=stage["success"] is False)
+        if "CONSEQUENCE" in stages:
+            proof = self._stage_evidence(game_id, "consequence")
+            day_record = next((snapshot["record"] for snapshot in snapshots
+                               if snapshot["record"]["lifecycle"][-1] == "DAY_CONSEQUENCE_RECORDED"), None)
+            day = stages["CONSEQUENCE"]["day_consequence"]
+            if (day_record is None or proof["phase2_record"] != day_record
+                    or day_record["day_consequence"] != day):
+                raise ValueError("canonical Probe day proof differs from ledger")
+            prefix, history = self._probe_pre(game_id, assigned["opportunity"], proof["canonical_runtime"])
+            events = history.events
+            exiles = [event for event in events if event.event_type == "exile_result"
+                      and event.temporal_state.day == prefix.public_temporal_state.day]
+            if not exiles or len(exiles[-1].affected_players) > 1:
+                raise ValueError("canonical Probe day resolution is missing")
+            if (exiles[-1].event_index + 1 < len(events)
+                    and events[exiles[-1].event_index + 1].event_type == "phase_change"
+                    and events[exiles[-1].event_index + 1].temporal_state.phase.value == "pk_discussion"):
+                raise ValueError("intermediate PK tie is not a Probe day consequence")
+            exile = exiles[-1].affected_players[0] if exiles[-1].affected_players else None
+            identity, legal = assigned["opportunity"]["identity"], assigned["opportunity"]["public_legal"]
+            outcome = classify_outcome(exile, acting_wolf=identity["acting_wolf"],
+                candidate_j=identity["candidate_j"], wolves=frozenset(legal["known_wolves"]))
+            loss = self.reference.deployment_loss(tuple(assigned["opportunity"]["s_pre"]), outcome)
+            expected = {"exiled_player": exile, "Y": outcome.value, "s_plus": list(loss.s_post),
+                        "v_ref": loss.value.value, "l_ref": loss.loss,
+                        "reference_artifact_digest": self.args.reference_tables_digest}
+            if day != expected or not any(event.event_type == "vote_result"
+                    and event.temporal_state.day == prefix.public_temporal_state.day
+                    and event.event_index < exiles[-1].event_index for event in events):
+                raise ValueError("canonical Probe vote/reference consequence differs")
+        if "GAME_RESULT" in stages:
+            proof = self._stage_evidence(game_id, "game-result")
+            if (proof["phase2_record"] != snapshots[-1]["record"]
+                    or proof["phase2_record"]["offline_audit"]["final_game_result"] != stages["GAME_RESULT"]["winner"]):
+                raise ValueError("canonical Probe final game audit differs")
         return True
 
 

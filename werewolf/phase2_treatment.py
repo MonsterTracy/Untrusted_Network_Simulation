@@ -13,7 +13,7 @@ from werewolf.phase2_decision_opportunity import Phase2DecisionOpportunityV1
 
 
 VERSION = "phase2_treatment_v1"
-ASSIGNMENT_SOURCES = frozenset(("paired_branch", "randomized_pilot"))
+ASSIGNMENT_SOURCES = frozenset(("paired_branch", "randomized_pilot", "strategy_continuation"))
 
 
 class TreatmentError(ValueError):
@@ -38,7 +38,7 @@ class Phase2TreatmentV1:
                 or type(self.assignment_probability) not in (float, int)
                 or not math.isfinite(self.assignment_probability)
                 or not 0 < self.assignment_probability <= 1
-                or (self.assignment_source == "paired_branch"
+                or (self.assignment_source in ("paired_branch", "strategy_continuation")
                     and self.assignment_probability != 1)
                 or not verify_plan_from_identity(self)
                 or self.treatment_id != sha256_bytes(canonical_json_bytes([

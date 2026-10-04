@@ -1,4 +1,4 @@
-"""Execute one frozen Online Pilot-T qualification or formal campaign.
+"""Execute one frozen terminal or Probe qualification/formal campaign.
 
 Help uses only the standard library. Install this checkout with pip install -e
 '.[mapper,tom]' before execution; no sys.path mutation is used by this script.
@@ -14,8 +14,9 @@ import sys
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign-purpose", choices=("qualification", "pilot"), required=True,
-                        help="fixed 10 or 120 assignments; never chains campaigns")
-    parser.add_argument("--plan", type=Path, required=True, help="frozen Pilot-T V1 plan JSON")
+                        help="qualification and formal evidence remain separate; never chains campaigns")
+    parser.add_argument("--plan", type=Path, required=True,
+                        help="frozen terminal or Probe policy V1 plan JSON; Probe requires explicit N/seed/cap")
     parser.add_argument("--game-plan", type=Path, required=True,
                         help="frozen canonical CollectionPlan JSON: ordered seeds and runtime provenance")
     parser.add_argument("--runtime-config", type=Path, required=True)

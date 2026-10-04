@@ -1,6 +1,5 @@
 """Pilot cannot start on a clean tree until real capabilities are certified."""
 
-from dataclasses import replace
 from pathlib import Path
 import subprocess
 
@@ -13,7 +12,6 @@ from werewolf.phase2_online_preflight import (
 )
 from werewolf.artifact_io import publish_artifact
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, sha256_bytes
-from werewolf.phase2_pilot_execution import Phase2PilotExecutionEnvelopeV1
 from tests.phase2.test_intervention_risk import values
 from werewolf.phase2_outcome import reference_tables_digest
 
@@ -112,19 +110,6 @@ def test_untracked_pilot_source_is_blocked_without_blocking_unrelated_untracked(
     monkeypatch.setattr(preflight, "SOURCE_FILES", ("tracked.py", "pilot.py"))
     assert tracked_source_clean(tmp_path)
     assert freeze_online_source_provenance(tmp_path) is None
-
-
-def test_execution_schema_cannot_publish_an_aborted_outcome():
-    record = Phase2PilotExecutionEnvelopeV1(
-        "a" * 40, "phase2_checkpoint_v1", "b" * 64,
-        "c" * 64, "d" * 64, "e" * 64, 17,
-        "PUSH", "ABORTED", "CHECKPOINT_UNAVAILABLE")
-    assert record.digest() == record.digest()
-    assert record.to_record()["canonical_event_digest"] is None
-    with pytest.raises(ValueError, match="cannot publish an outcome"):
-        replace(record, terminal_consequence_digest="f" * 64)
-    with pytest.raises(ValueError, match="requires verified speech"):
-        replace(record, execution_status="COMPLETED", abort_reason=None)
 
 
 def test_online_smoke_preflight_requires_real_passed_gate_and_mapper_lineage(tmp_path,

@@ -165,9 +165,23 @@ python -m scripts.run_phase2_online_intervention_pilot \
   "${COMMON[@]}" "${PILOT[@]}"
 ```
 
-未来 consequence / λ / production-loss 数据加载统一经过 `require_online_dataset_access`：默认仅接受已完成的单一 formal 120-assignment campaign；qualification、synthetic、混合 campaign 全部拒绝。`audit_only=True` 可读这些数据，但返回对象的 `estimator_eligible` 恒为 false。此保护只约束数据用途，不代表 formal support 已经通过科学审阅。
+Terminal Estimator 数据加载经过 `require_online_dataset_access`：默认仅接受已完成的单一 formal 120-assignment terminal campaign；qualification、synthetic、混合 campaign 全部拒绝。`audit_only=True` 可读这些数据，但返回对象的 `estimator_eligible` 恒为 false。此保护只约束数据用途，不代表 formal support 已经通过科学审阅。
 
-Probe Pilot 只保留 T0–T3/T4 sequence 接口：公开 request → 观察窗 → 队友 continuation PRE → 新 Q/p-panel。须待 Pilot-T support 人工审阅后再规划，不拟合 observation kernel、information gain、R_B 或自动 continuation action。完整依赖顺序：Smoke-V3 → Online Pilot-T → support review → terminal consequence estimator → λ(P/N) → Probe Pilot → Probe value model → production ThreeWayRouter → gameplay integration → paired win-rate experiment。
+Probe 的当前研究定义以 [Probe Policy Protocol V1](phase2-probe-policy-protocol-v1.md) 为准。经典 λ 不再是开发门槛；不把旧 M2 运输到 T3，也不拟合 observation kernel、information gain 或 Probe value。
+
+### Probe Policy V1 本地执行边界
+
+复用同一 server CLI、canonical PRE hook、账本及提交路径。`Phase2OnlineProbePilotPlanV1` 必须显式提供 N、assignment seed 和 games cap；没有正式默认数值，本次不生成 plans。`scripts.phase2_online_campaign` 的 terminal profile 仍只用于 Pilot-T。
+
+每局首个共同合法 PRE 从 `E_t` 均匀选 j，再以独立随机域分配 `IMMEDIATE_REDIRECT` 或 `PROBE_THEN_REDIRECT`。账本先写完整策略及指定队友/观察窗口，T1 后端调用前记录 `T1_ATTEMPTED`。Probe 规范提交成功才记录 `T3_SCHEDULED`；最终 language invalid 记录 `T3_CANCELLED`，当前及后续恢复 baseline，assignment 留在 ITT。T3 到达后保留 j，使用该队友当前完整面板重新算 k1；`strategy_continuation` 的概率为 1，随机键绑定父 assignment 与 T3 opportunity，不再次随机化。
+
+每次 lifecycle 变化均写不可覆盖的 canonical partial evidence，随后追加策略快照；T3 plan 在后端调用前落盘。backend sequence 跨 T1/T3 连续。结构、PRE、Q 或 commit 异常记录 `STRUCTURAL_FAILURE` 并停止，不能转成 language invalid。
+
+完整 assignment 需要初始合法 Q/面板及 k0；若在落盘前构建失败，账本保存已选 j 的 selection 和 `PREPARATION_FAILURE`，campaign 永久为 `INCOMPLETE`、不可封存。恢复不能跳过这一错误继续凑齐样本；不能把 Q 质量变成隐含入组条件。真实 PRE/运维诊断仍由既有 canonical failure evidence 保存。
+
+`strategy_stages.jsonl` 保存全部阶段证据；day consequence 使用 T0 的 j/acting wolf/S_pre，包含两个阶段的 language invalid 分支。缺 execution、真实 day outcome 或 final game result 的 assignment 阻止完整发布。恢复只审计中断，不重放旧游戏或 T3。
+
+qualification / formal 的独立目的地分别为 `paper-phase2-online-probe-qualification-v1` / `paper-phase2-online-probe-pilot-v1`。Probe dataset 不进入旧 Terminal Estimator 的 operational access。正式采集前仍须另行冻结两套计划、游戏池及版本摘要，满足 clean-source、canonical runtime、Q/mapper/reference 和 Smoke-V3 guards；本次不执行任何服务器或模型调用。
 
 ## 正式 campaign 短命令
 

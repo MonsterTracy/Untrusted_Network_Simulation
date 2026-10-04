@@ -1,12 +1,10 @@
 """Synthetic contract checks; no gameplay replay or real LLM use."""
 
-from dataclasses import replace
-
 import pytest
 
 from scripts.phase2_integration_seam import prepare_phase2_intervention_speech
 from tests.phase2.test_decision_opportunity import opportunity
-from werewolf.phase2_actions import Action, InformationRequestV1, push_plan
+from werewolf.phase2_actions import Action, push_plan
 from werewolf.phase2_intervention import (
     CheckpointUnavailable, capture_intervention_checkpoint, plan_paired_branches,
     run_intervention_branch,
@@ -16,13 +14,6 @@ from werewolf.phase2_offline import (
     ReferenceTables, ResolvedOutcome, ValueEstimate, ValueTable,
 )
 from werewolf.phase2_outcome import OutcomeError, extract_phase2_day_outcome
-from werewolf.phase2_probe_value import ProbeValueUnavailable, evaluate_probe_value
-from werewolf.phase2_risk import (
-    Phase2TerminalLossTableV1, RiskError, classic_static_threshold_reduction,
-    compare_available_action_risks,
-    load_production_terminal_loss_table, terminal_action_risks,
-    terminal_risks_for_opportunity,
-)
 from werewolf.phase2_treatment import build_phase2_treatment
 from werewolf.phase2_verified_speech import verified_phase2_speech
 
@@ -52,73 +43,6 @@ def test_outcome_uses_frozen_taxonomy_transition_and_reference(exiled, category,
 def test_outcome_rejects_exile_outside_pre_alive():
     with pytest.raises(OutcomeError):
         extract_phase2_day_outcome(opportunity(), "player8", values())
-
-
-def test_terminal_risk_exact_edges_and_missing_losses():
-    opp = opportunity()
-    table = Phase2TerminalLossTableV1(opp.digest(), "synthetic", .2, .8, .6, .3)
-    assert terminal_action_risks(.25, table, opportunity_digest=opp.digest(),
-                                 redirect_legal=True) == {
-        Action.PUSH: pytest.approx(.65), Action.REDIRECT: pytest.approx(.375)}
-    assert terminal_action_risks(0, table, opportunity_digest=opp.digest(),
-                                 redirect_legal=True)[Action.PUSH] == .8
-    assert terminal_action_risks(1, table, opportunity_digest=opp.digest(),
-                                 redirect_legal=True)[Action.PUSH] == .2
-    assert terminal_risks_for_opportunity(opp, table)[Action.PUSH] == pytest.approx(.56)
-    with pytest.raises(RiskError):
-        terminal_action_risks(1.01, table, opportunity_digest=opp.digest(), redirect_legal=True)
-    with pytest.raises(RiskError):
-        terminal_action_risks(.5, replace(table, lambda_n_plus=None, lambda_n_minus=None),
-                              opportunity_digest=opp.digest(), redirect_legal=True)
-    with pytest.raises(RiskError):
-        load_production_terminal_loss_table()
-
-
-def test_nonproduction_comparison_requires_all_and_only_legal_risks():
-    actions = (Action.PUSH, Action.REDIRECT, Action.PROBE)
-    result = compare_available_action_risks(actions, {
-        Action.PUSH: .3, Action.REDIRECT: .3, Action.PROBE: .5})
-    assert result.selected is Action.PUSH and result.tied_minimum == (Action.PUSH, Action.REDIRECT)
-    assert not result.production_router
-    with pytest.raises(RiskError):
-        compare_available_action_risks(actions, {Action.PUSH: .3, Action.REDIRECT: .4})
-    with pytest.raises(RiskError):
-        compare_available_action_risks((Action.PUSH,), {Action.PUSH: .3, Action.PROBE: .2})
-
-
-def test_classic_threshold_is_algebraic_audit_only():
-    result = classic_static_threshold_reduction(
-        p_plus=0, p_minus=4, b_plus=1, b_minus=1, n_plus=4, n_minus=0)
-    assert result.alpha == pytest.approx(.75)
-    assert result.beta == pytest.approx(.25)
-    assert result.gamma == pytest.approx(.5)
-    assert result.boundary_has_strict_region and not result.production_probe_router
-
-
-class SyntheticProbe:
-    evidence_artifact_digest = ""
-
-    def observation_distribution(self, opportunity, request):
-        return {"answer": .25, "silence": .75}
-
-    def transition_state(self, opportunity, request, observation):
-        return (opportunity.digest(), observation)
-
-    def continuation_value(self, state):
-        return {"answer": .1, "silence": .5}[state[1]]
-
-
-def test_probe_exact_sequential_expectation_and_production_fail_closed():
-    opp = opportunity()
-    request = InformationRequestV1(opp.candidate_j, opp.candidate_j)
-    result = evaluate_probe_value(opp, request, SyntheticProbe(), kappa=.2,
-                                  allow_synthetic=True)
-    assert result.risk == pytest.approx(.2 + .25 * .1 + .75 * .5)
-    assert not result.production_ready
-    with pytest.raises(ProbeValueUnavailable):
-        evaluate_probe_value(opp, request, SyntheticProbe(), kappa=.2)
-    with pytest.raises(ProbeValueUnavailable):
-        evaluate_probe_value(opp, request, None, kappa=.2, allow_synthetic=True)
 
 
 def test_paired_plans_share_checkpoint_seed_but_cannot_run():

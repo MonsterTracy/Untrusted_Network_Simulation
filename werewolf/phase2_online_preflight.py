@@ -14,7 +14,9 @@ from werewolf.artifact_io import (
 )
 from werewolf.phase2_intervention import CHECKPOINT_CLOSURE_VERSION
 from werewolf.phase2_language import LANGUAGE_VERSION
-from werewolf.phase2_online_plan import FROZEN, Phase2OnlineTerminalPilotPlanV1
+from werewolf.phase2_online_plan import (
+    FROZEN, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
+)
 from werewolf.phase2_treatment import VERSION as TREATMENT_VERSION
 
 
@@ -229,7 +231,7 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
                            mapper_runtime=None,
                            smoke_v3_artifact: Path | None = None,
                            smoke_v3_manifest_digest: str | None = None,
-                           online_plan: Phase2OnlineTerminalPilotPlanV1 | None = None,
+                           online_plan: Phase2OnlineTerminalPilotPlanV1 | Phase2OnlineProbePilotPlanV1 | None = None,
                            predictor=None, backend=None, call_audit=None,
                            ledger=None,
                            env=None, recorder=None, reference_tables=None,
@@ -258,9 +260,10 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
             mapper_verified = False
     smoke_passed = _smoke_v3_gate(smoke_v3_artifact, smoke_v3_manifest_digest,
                                  mapper_manifest_digest)
-    plan_frozen = (isinstance(online_plan, Phase2OnlineTerminalPilotPlanV1)
+    plan_types = (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1)
+    plan_frozen = (isinstance(online_plan, plan_types)
                    and online_plan.selection_status == FROZEN)
-    randomization_valid = isinstance(online_plan, Phase2OnlineTerminalPilotPlanV1)
+    randomization_valid = isinstance(online_plan, plan_types)
     q_ready = _frozen_q_runtime_ready(predictor)
     try:
         from werewolf.canonical_collection.call_audit import AuditedBackend
@@ -292,7 +295,7 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
     from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
     try:
         ledger_bound = (isinstance(ledger, OnlinePilotAssignmentLedgerV1)
-                        and isinstance(online_plan, Phase2OnlineTerminalPilotPlanV1)
+                        and isinstance(online_plan, plan_types)
                         and ledger.plan.digest() == online_plan.digest()
                         and ledger.source_commit == head
                         and ledger.path != destination

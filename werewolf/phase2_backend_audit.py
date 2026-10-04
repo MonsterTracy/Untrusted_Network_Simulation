@@ -52,7 +52,7 @@ class Phase2BackendCallAuditV1:
 
     def __init__(self, opportunity, treatment, canonical_audit, *,
                  pilot_id: str | None = None, assignment_id: str | None = None,
-                 record_sink=None):
+                 record_sink=None, sequence_offset: int = 0):
         if (treatment.opportunity_digest != opportunity.digest()
                 or treatment.opportunity_identity != opportunity.identity
                 or canonical_audit is None
@@ -69,6 +69,9 @@ class Phase2BackendCallAuditV1:
             raise Phase2BackendAuditError("backend record sink must be callable")
         self.record_sink = record_sink
         self.records: list[Phase2BackendCallV1] = []
+        if type(sequence_offset) is not int or sequence_offset < 0:
+            raise Phase2BackendAuditError("invalid assignment call sequence offset")
+        self.sequence_offset = sequence_offset
         self._attempt = 0
 
     def _dispatch(self, *, role, backend, model, messages, temperature,
@@ -101,7 +104,7 @@ class Phase2BackendCallAuditV1:
             kwargs["response_format"] = response_format
         request_digest = sha256_bytes(canonical_json_bytes(kwargs))
         context = self.opportunity.legal_context
-        sequence = len(self.records) + 1
+        sequence = self.sequence_offset + len(self.records) + 1
         operation = f"phase2-{self.treatment.treatment_id[:16]}-{sequence:03d}"
         before = len(self.canonical_audit.records)
         response = None
