@@ -16,6 +16,10 @@
     {
       "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v1-game-plan.json",
       "plan_digest": "4719b85665febcb47479a594f13c00940a6636061ebe9410c4b68391be4bda6e"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v2-game-plan.json",
+      "plan_digest": "ef8e2d0d239f3e0d98ef84ed44c51d3cbceb80b4ddacee5b52fff6a7ac0bd151"
     }
   ],
   "plan": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-pilot-v1.json",
@@ -23,8 +27,8 @@
   "work_directory": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-online-probe-pilot-v1-work",
   "destination": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-probe-pilot-v1",
   "probe_qualification": {
-    "artifact": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-probe-qualification-v2",
-    "run_inputs": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-online-probe-qualification-v2-work/run_inputs.json",
+    "artifact": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-probe-qualification-v3",
+    "run_inputs": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-online-probe-qualification-v3-work/run_inputs.json",
     "manifest_digest": null,
     "inputs_digest": null
   }

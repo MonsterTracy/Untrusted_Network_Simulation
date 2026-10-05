@@ -68,7 +68,7 @@ def successful_probe_trace(assignment):
     return trace
 
 
-def fixture_payload():
+def fixture_payload(*, tail_interruption=False):
     # This is fictional planning metadata, not a newly frozen formal cap.
     plan = Phase2OnlineProbePilotPlanV1(analysis.FORMAL_NAME, analysis.FORMAL_SEED, 200, 400,
                                        campaign_purpose="pilot")
@@ -96,6 +96,8 @@ def fixture_payload():
             raw["lifecycle"].append("GAME_RESULT_RECORDED")
             raw["offline_audit"]["final_game_result"] = "Werewolf"
             trace.append(raw)
+        if tail_interruption:
+            trace = [raw for raw in trace if "GAME_RESULT_RECORDED" not in raw["lifecycle"]]
         for raw in trace:
             if raw["day_consequence"] is not None:
                 raw["day_consequence"] = deepcopy(day)
@@ -105,7 +107,7 @@ def fixture_payload():
                            "theta_audit_label": None, **last["execution"]})
         consequences.append({"game_id": game_id, "assignment_digest": assigned.digest(),
                              "theta_audit_label": None, "day_consequence": day,
-                             "final_game_result": "Werewolf"})
+                             "final_game_result": last["offline_audit"]["final_game_result"]})
     tables = [assignments, executions, consequences, [], snapshots]
     m = {"schema_version": PROBE_ONLINE_VERSION, "source_commit": "a" * 40,
          "pilot_plan_digest": plan.digest(), "probe_plan": plan.to_record(),
@@ -178,6 +180,17 @@ def test_full_formal_join_keeps_all_invalid_and_cancelled_assignments(formal):
     secondary = analysis.secondary_descriptive(rows)
     assert secondary["PROBE_THEN_REDIRECT"]["T3_cancelled"] == sum(row["T3_cancelled"] for row in probe)
     assert secondary["PROBE_THEN_REDIRECT"]["T3_committed"] == sum(row["T3_committed"] for row in probe)
+
+
+def test_complete_primary_itt_does_not_require_secondary_whole_game_results(tmp_path, formal):
+    fields, files = fixture_payload(tail_interruption=True)
+    artifact = publish_artifact(tmp_path / "endpoint-only-formal", manifest_fields=fields, files=files)
+    _, rows = analysis.load_formal(artifact.path, artifact.manifest_digest)
+    _, original = analysis.load_formal(formal.path, formal.manifest_digest)
+    assert len(rows) == 200
+    consequences = [analysis._strict_json(line) for line in files["consequences.jsonl"].splitlines()]
+    assert all(row["final_game_result"] is None for row in consequences)
+    assert analysis.primary_itt(rows) == analysis.primary_itt(original)
 
 
 def test_post_treatment_filtering_has_no_api_or_cli_knob(formal, tmp_path):

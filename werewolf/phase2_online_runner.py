@@ -52,7 +52,7 @@ ARTIFACT_NAME = "paper-phase2-online-terminal-pilot-v1"
 QUALIFICATION_NAME = "paper-phase2-online-terminal-qualification-v1"
 ARTIFACT_VERSION = "phase2_online_terminal_pilot_v1"
 PROBE_ARTIFACT_NAME = "paper-phase2-online-probe-pilot-v1"
-PROBE_QUALIFICATION_NAME = "paper-phase2-online-probe-qualification-v2"
+PROBE_QUALIFICATION_NAME = "paper-phase2-online-probe-qualification-v3"
 
 
 def _legal_wolf_team(observation, actor: str) -> frozenset[str]:

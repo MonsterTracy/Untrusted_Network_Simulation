@@ -2,8 +2,9 @@
 
 The ledger is a running journal, not a canonical study artifact. A game cannot
 be replayed after process restart without a full simulator checkpoint, so an
-unfinished assigned stage is marked interrupted. Probe campaigns then remain
-INCOMPLETE; the original terminal campaign has its separate stopping contract.
+unfinished assignment endpoint is marked interrupted. Probe campaigns then
+remain INCOMPLETE; interruptions after the durable day endpoint only close
+that game's tail. The terminal campaign has its separate stopping contract.
 Randomized assignments are never regenerated.
 """
 
@@ -184,7 +185,7 @@ class OnlinePilotAssignmentLedgerV1:
             stage = stages.setdefault(game_id, {})
             if kind not in ("GAME_STARTED", "ASSIGNMENT", "BACKEND_CALL", "EXECUTION",
                             "CONSEQUENCE", "GAME_RESULT", "INTERRUPTED", "STRATEGY_STAGE",
-                            "PREPARATION_FAILURE"):
+                            "PREPARATION_FAILURE", "POST_ENDPOINT_TAIL_INTERRUPTED"):
                 raise OnlinePilotLedgerError("unknown ledger stage")
             if kind in stage and kind not in ("BACKEND_CALL", "STRATEGY_STAGE"):
                 raise OnlinePilotLedgerError("duplicate ledger stage")
@@ -197,11 +198,23 @@ class OnlinePilotAssignmentLedgerV1:
                         or "ASSIGNMENT" in stage or not isinstance(payload.get("reason"), str)
                         or not payload["reason"].strip()):
                     raise OnlinePilotLedgerError("invalid pre-assignment Probe failure")
-            if kind in ("BACKEND_CALL", "EXECUTION", "CONSEQUENCE", "INTERRUPTED", "STRATEGY_STAGE") and "ASSIGNMENT" not in stage:
+            if kind in ("BACKEND_CALL", "EXECUTION", "CONSEQUENCE", "INTERRUPTED", "STRATEGY_STAGE", "POST_ENDPOINT_TAIL_INTERRUPTED") and "ASSIGNMENT" not in stage:
                 raise OnlinePilotLedgerError("stage precedes assignment")
             is_probe = OnlinePilotAssignmentLedgerV1._is_probe_stage(stage)
+            if "POST_ENDPOINT_TAIL_INTERRUPTED" in stage:
+                raise OnlinePilotLedgerError("stage follows closed post-endpoint game tail")
             if is_probe and "INTERRUPTED" in stage and kind != "INTERRUPTED":
                 raise OnlinePilotLedgerError("stage follows interrupted game")
+            if kind == "POST_ENDPOINT_TAIL_INTERRUPTED":
+                record = OnlinePilotAssignmentLedgerV1._probe_snapshot(stage) if is_probe else None
+                if (not is_probe or not {"EXECUTION", "CONSEQUENCE"}.issubset(stage)
+                        or "GAME_RESULT" in stage
+                        or "DAY_CONSEQUENCE_RECORDED" not in record["lifecycle"]
+                        or record["structural_failure_reason"] is not None
+                        or payload != {"game_id": game_id,
+                            "assignment_id": stage["ASSIGNMENT"]["assignment_id"],
+                            "reason": "CONSEQUENCE_WITHOUT_GAME_RESULT"}):
+                    raise OnlinePilotLedgerError("tail interruption lacks completed assignment endpoint")
             if kind == "STRATEGY_STAGE":
                 if not is_probe:
                     raise OnlinePilotLedgerError("terminal assignment cannot have strategy stages")
@@ -435,12 +448,20 @@ class OnlinePilotAssignmentLedgerV1:
         """No PRE checkpoint exists: retain old assignments and refuse game replay."""
         interrupted = []
         for game_id, stage in self.snapshot()["games"].items():
-            if "ASSIGNMENT" not in stage or "INTERRUPTED" in stage:
+            if ("ASSIGNMENT" not in stage or "INTERRUPTED" in stage
+                    or "POST_ENDPOINT_TAIL_INTERRUPTED" in stage):
                 continue
             is_probe = self._is_probe_stage(stage)
             needs_outcome = ("EXECUTION" in stage and
                              (is_probe or stage["EXECUTION"]["execution"]["success"] is True))
             missing_result = is_probe and "CONSEQUENCE" in stage and "GAME_RESULT" not in stage
+            if missing_result and self._probe_snapshot(stage)["structural_failure_reason"] is None:
+                self._append("POST_ENDPOINT_TAIL_INTERRUPTED", {
+                    "game_id": game_id,
+                    "assignment_id": stage["ASSIGNMENT"]["assignment_id"],
+                    "reason": "CONSEQUENCE_WITHOUT_GAME_RESULT"})
+                interrupted.append(game_id)
+                continue
             if ("EXECUTION" not in stage or (needs_outcome and "CONSEQUENCE" not in stage)
                     or missing_result):
                 self._append("INTERRUPTED", {
@@ -475,7 +496,7 @@ class OnlinePilotAssignmentLedgerV1:
             if "ASSIGNMENT" not in stage:
                 continue
             if self._is_probe_stage(stage):
-                if (not {"EXECUTION", "CONSEQUENCE", "GAME_RESULT"}.issubset(stage)
+                if (not {"EXECUTION", "CONSEQUENCE"}.issubset(stage)
                         or "INTERRUPTED" in stage
                         or self._probe_snapshot(stage)["structural_failure_reason"] is not None):
                     return False

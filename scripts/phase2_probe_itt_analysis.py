@@ -180,8 +180,9 @@ def load_formal(path, expected_manifest_digest):
     require(recomputed == sealed_support, "sealed support differs from validated lifecycle tables")
     latest = {snapshot["game_id"]: snapshot["record"] for snapshot in snapshots}
     require(set(latest) == {row["opportunity"]["identity"]["game_id"] for row in assignments}
-            and all(raw["lifecycle"][-1] == "GAME_RESULT_RECORDED" for raw in latest.values()),
-            "INCOMPLETE ITT: assigned lifecycle lacks final game resolution")
+            and all(raw["lifecycle"][-1] in ("DAY_CONSEQUENCE_RECORDED", "GAME_RESULT_RECORDED")
+                    for raw in latest.values()),
+            "INCOMPLETE ITT: assigned lifecycle lacks day consequence endpoint")
     expected_calls = [call for assigned in assignments for stage in ("T1", "T3")
                       if latest[assigned["opportunity"]["identity"]["game_id"]]["stages"][stage]
                       for call in latest[assigned["opportunity"]["identity"]["game_id"]]["stages"][stage]["backend_calls"]]

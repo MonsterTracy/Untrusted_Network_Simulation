@@ -28,8 +28,8 @@ from werewolf.phase2_online_preflight import SOURCE_FILES
 from tests.phase2.test_probe_policy_ledger import frozen_assignment, LiteralRecord, literal_snapshots
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPECTED_SEEDS = (9115752742182488526, 1341518878732346716, 5577253962372135588,
-                  2878649787543769396, 4156371464360539753)
+EXPECTED_SEEDS = (196812520389446858, 8584631348015271354, 7279773504223456818,
+                  2711710838872032642, 6642236894969768391)
 
 
 def git(repo, *arguments):
@@ -110,6 +110,7 @@ def operator(tmp_path, monkeypatch, assembly):
                  "configs/phase2/online-terminal-runtime-pins-v1.json",
                  "configs/phase2/online-probe-qualification-v1.json",
                  "configs/phase2/online-probe-qualification-v2.json",
+                 "configs/phase2/online-probe-qualification-v3.json",
                  "configs/phase2/online-probe-formal-v1.json",
                  "docs/research/phase2-probe-policy-protocol-v1.md"):
         destination = repo / name
@@ -120,7 +121,7 @@ def operator(tmp_path, monkeypatch, assembly):
     monkeypatch.setattr(campaign, "PROFILE", repo / "configs/phase2/online-terminal-pilot-formal-v1.json")
     monkeypatch.setattr(campaign, "PINS", repo / "configs/phase2/online-terminal-runtime-pins-v1.json")
     monkeypatch.setattr(campaign, "PROBE_PROFILES", {
-        "qualification": repo / "configs/phase2/online-probe-qualification-v2.json",
+        "qualification": repo / "configs/phase2/online-probe-qualification-v3.json",
         "formal": repo / "configs/phase2/online-probe-formal-v1.json"})
     profile = campaign.read_profile(policy="probe", qualification=True)
     profile.update(planning_status="FROZEN", assignment_seed=frozen_assignment()[0].assignment_seed,
@@ -154,6 +155,16 @@ def operator(tmp_path, monkeypatch, assembly):
     write(old_profile["game_plan"], old_probe.to_record())
     profile["excluded_game_plans"].append({"path": old_profile["game_plan"],
                                          "plan_digest": old_probe.plan_digest})
+    failed_v2 = campaign.read_json(repo / "configs/phase2/online-probe-qualification-v2.json")
+    for name in ("plan", "game_plan", "work_directory", "destination"):
+        failed_v2[name] = str(tmp_path / ("failed-probe-v2-" + name))
+    write(repo / "configs/phase2/online-probe-qualification-v2.json", failed_v2)
+    failed_v2_game = canonical.construct_collection_plan(ordered_seed_pool=tuple(range(301, 381)),
+        **collection.plan_fields({"collection_id": failed_v2["pilot_id"], "target_games": 80,
+                                 "seed_pool_size": 80, "call_limit": 10000}, "a" * 40, provenance))
+    write(failed_v2["game_plan"], failed_v2_game.to_record())
+    profile["excluded_game_plans"].append({"path": failed_v2["game_plan"],
+                                         "plan_digest": failed_v2_game.plan_digest})
     write(campaign.PROBE_PROFILES["qualification"], profile)
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "synthetic operator source")
@@ -204,7 +215,8 @@ def test_prepare_binds_clean_source_protocol_profile_and_fixed_seed_pool_exclusi
     assert environment["probe_campaign_profile_digest"] == campaign.digest(op.profile)
     assert result["seed_overlap_counts"] == {"qualification": 0, "development": 0,
         "calibration": 0, "paper-phase2-online-terminal-pilot-v1": 0,
-        "paper-phase2-online-probe-qualification-v1": 0}
+        "paper-phase2-online-probe-qualification-v1": 0,
+        "paper-phase2-online-probe-qualification-v2": 0}
     before = Path(op.profile["plan"]).read_bytes(), Path(op.profile["game_plan"]).read_bytes()
     with pytest.raises(FileExistsError):
         campaign.prepare(op.profile, source_commit=op.head)
@@ -240,20 +252,23 @@ def test_overlap_is_rejected_without_reroll_or_plan_publication(operator, monkey
     assert not Path(op.profile["plan"]).exists()
 
 
-@pytest.mark.parametrize("fault", ["missing_v1", "unbound_v1", "wrong_v1_digest", "reuse_v1_path"])
-def test_v2_prepare_requires_bound_v1_exclusion_and_preserves_v1_evidence(operator, fault):
+@pytest.mark.parametrize("version", ("v1", "v2"))
+@pytest.mark.parametrize("fault", ["missing", "unbound", "wrong_digest", "reuse_path"])
+def test_v3_prepare_requires_bound_prior_exclusions_and_preserves_evidence(operator, version, fault):
     op = operator
-    old_profile = campaign.read_json(op.repo / "configs/phase2/online-probe-qualification-v1.json")
+    old_profile = campaign.read_json(op.repo / f"configs/phase2/online-probe-qualification-{version}.json")
     old_bytes = Path(old_profile["game_plan"]).read_bytes()
-    if fault == "missing_v1":
-        op.profile["excluded_game_plans"].pop()
-    elif fault == "unbound_v1":
-        op.profile["excluded_game_plans"][-1]["plan_digest"] = None
-    elif fault == "wrong_v1_digest":
-        op.profile["excluded_game_plans"][-1]["plan_digest"] = "0" * 64
+    index = next(i for i, item in enumerate(op.profile["excluded_game_plans"])
+                 if item["path"] == old_profile["game_plan"])
+    if fault == "missing":
+        op.profile["excluded_game_plans"].pop(index)
+    elif fault == "unbound":
+        op.profile["excluded_game_plans"][index]["plan_digest"] = None
+    elif fault == "wrong_digest":
+        op.profile["excluded_game_plans"][index]["plan_digest"] = "0" * 64
     else:
         op.profile["work_directory"] = old_profile["work_directory"]
-    with pytest.raises(ValueError, match="V1 seed pool|digest is not frozen|digest differs|overlap qualification evidence"):
+    with pytest.raises(ValueError, match="V[12] seed pool|digest is not frozen|digest differs|overlap qualification evidence"):
         campaign.prepare(op.profile, source_commit=op.head)
     assert Path(old_profile["game_plan"]).read_bytes() == old_bytes
     assert not Path(op.profile["plan"]).exists()

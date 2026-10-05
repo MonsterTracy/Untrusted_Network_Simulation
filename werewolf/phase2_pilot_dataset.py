@@ -261,7 +261,8 @@ def build_phase2_online_dataset_from_ledger(ledger, *, execution_verifier=None,
                                  "final_game_result": (
                                      stage["GAME_RESULT"]["winner"]
                                      if "GAME_RESULT" in stage else
-                                     consequence["final_game_result"])})
+                                     stage["STRATEGY_STAGE"]["record"]["offline_audit"]["final_game_result"]
+                                     if is_probe else consequence["final_game_result"])})
     assignments = tuple(assignments)
     executions = tuple(executions)
     consequences = tuple(consequences)

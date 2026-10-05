@@ -10,7 +10,7 @@ from scripts import phase2_online_campaign as campaign
 
 
 @pytest.mark.parametrize(("qualification", "seed", "target", "cap", "status"), (
-    (True, 766378239883399222, 20, 80, "FROZEN"),
+    (True, 6288282358363007265, 20, 80, "FROZEN"),
     (False, 6449283966833280907, 200, None, "UNFROZEN"),
 ))
 def test_probe_profiles_freeze_identity_seed_and_preregistered_budgets(
@@ -35,17 +35,17 @@ def test_qualification_plan_preserves_equal_randomization_and_one_assignment_per
     assert plan["max_assignments_per_game"] == 1
 
 
-def test_v2_identity_preserves_v1_and_requires_its_entire_planned_pool():
+def test_v3_identity_preserves_v1_and_v2_and_requires_their_entire_planned_pools():
     profile = campaign.read_profile(policy="probe", qualification=True)
     v1 = campaign.read_json(campaign.REPO / "configs/phase2/online-probe-qualification-v1.json")
     formal = campaign.read_profile(policy="probe", qualification=False)
-    assert profile["pilot_id"] == "paper-phase2-online-probe-qualification-v2"
+    assert profile["pilot_id"] == "paper-phase2-online-probe-qualification-v3"
     assert v1["pilot_id"] == "paper-phase2-online-probe-qualification-v1"
     assert v1["assignment_seed"] == 4325493448326950820
     assert profile["probe_protocol_digest"] == v1["probe_protocol_digest"] == formal["probe_protocol_digest"]
     for field in ("plan", "game_plan", "work_directory", "destination"):
         assert profile[field] != v1[field]
-        assert "qualification-v2" in profile[field]
+        assert "qualification-v3" in profile[field]
     assert v1["game_plan"] in {item["path"] for item in profile["excluded_game_plans"]}
     assert v1["game_plan"] in {item["path"] for item in formal["excluded_game_plans"]}
     for current in (profile, formal):

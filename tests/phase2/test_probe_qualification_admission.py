@@ -61,7 +61,7 @@ def admission():
 
 
 def qualification_journal(runtime, monkeypatch, tmp_path, *, invalid_probe=False,
-                          exiled_player="player2", winner="Werewolf"):
+                          exiled_player="player2", winner="Werewolf", tail_interruption=False):
     f = fixture(runtime, monkeypatch, tmp_path / "runner-fixture",
                 ProbeStrategy.PROBE_THEN_REDIRECT)
     initial = f.initial
@@ -128,15 +128,26 @@ def qualification_journal(runtime, monkeypatch, tmp_path, *, invalid_probe=False
         f.env.phase = "night"
         f.env.public_events.append({"event_type": "exile_result", "exiled_players": [exiled_player]})
         f.pilot.after_step(env=f.env, done=False, info={})
-        f.pilot.after_game(env=f.env, winner=winner)
+        if tail_interruption:
+            ledger.mark_interrupted_on_resume()
+            f.pilot = runtime.OnlineTerminalPilotRunnerV1(
+                plan=plan, predictor=original.predictor, mapper=original.mapper,
+                backend=original.backend, model_name=original.model_name,
+                reference_tables=original.reference_tables,
+                reference_artifact_digest=original.reference_artifact_digest, ledger=ledger,
+            )
+        else:
+            f.pilot.after_game(env=f.env, winner=winner)
     assert ledger.sealable()
     return f, work
 
 
 def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
-                           invalid_probe=False, exiled_player="player2", winner="Werewolf"):
+                           invalid_probe=False, exiled_player="player2", winner="Werewolf",
+                           tail_interruption=False):
     f, work = qualification_journal(runtime, monkeypatch, tmp_path,
-        invalid_probe=invalid_probe, exiled_player=exiled_player, winner=winner)
+        invalid_probe=invalid_probe, exiled_player=exiled_player, winner=winner,
+        tail_interruption=tail_interruption)
     # allow_synthetic explicitly labels this local table fixture. Production
     # publish_online_pilot forbids it; generic publication here tests admission
     # integrity, not the separate canonical-execution certification guard.
@@ -221,6 +232,20 @@ def test_complete_two_strategy_artifact_is_admitted_with_exact_builder_columns(
     assert json.loads((artifact.path / "metrics/support.json").read_bytes())["estimator_eligible"] is False
 
 
+def test_endpoint_complete_qualification_is_admitted_without_secondary_game_results(
+        admission, runtime, monkeypatch, tmp_path):
+    evidence = qualification_evidence(runtime, monkeypatch, tmp_path, tail_interruption=True)
+    bound, artifact = admission(evidence.profile)
+    assert bound == evidence.bound
+    assert artifact.manifest_digest == evidence.artifact.manifest_digest
+    stages = evidence.f.ledger.snapshot()["games"].values()
+    assert all("CONSEQUENCE" in s and "POST_ENDPOINT_TAIL_INTERRUPTED" in s
+               and "GAME_RESULT" not in s for s in stages)
+    assert evidence.f.ledger.status() == "READY_TO_SEAL" and evidence.f.ledger.sealable()
+    rows = [json.loads(line) for line in (artifact.path / "consequences.jsonl").read_bytes().splitlines()]
+    assert len(rows) == 2 and all(row["final_game_result"] is None for row in rows)
+
+
 @pytest.mark.parametrize("mutation", [
     "execution_columns", "consequence_winner", "assignment_row", "strategy_history",
     "ledger_digest", "support_incomplete",
@@ -252,7 +277,10 @@ def test_admission_fails_closed_on_artifact_inputs_source_protocol_and_journal_d
     elif mutation == "incomplete_ledger":
         lines = evidence.f.ledger.path.read_bytes().splitlines(keepends=True)
         assert json.loads(lines[-1])["kind"] == "GAME_RESULT"
-        evidence.f.ledger.path.write_bytes(b"".join(lines[:-1]))
+        # A missing secondary GAME_RESULT alone is not an incomplete endpoint.
+        # Remove the final game's CONSEQUENCE and subsequent journal stages.
+        cutoff = max(i for i, line in enumerate(lines) if json.loads(line)["kind"] == "CONSEQUENCE")
+        evidence.f.ledger.path.write_bytes(b"".join(lines[:cutoff]))
     else:
         with evidence.f.ledger.path.open("ab") as file:
             file.write(b"{")
@@ -281,7 +309,7 @@ def test_formal_admission_rejects_old_v1_qualification_identity(
 
 
 @pytest.mark.parametrize("fault", [None, "protocol", "profile", "missing_pins"])
-def test_actual_v2_publisher_exclusive_and_preserves_analysis_provenance(
+def test_actual_v3_publisher_exclusive_and_preserves_analysis_provenance(
         runtime, monkeypatch, tmp_path, fault):
     # Synthetic calls/commits remain explicit; publication is the real consumer.
     f, work = qualification_journal(runtime, monkeypatch, tmp_path)
@@ -319,7 +347,7 @@ def test_actual_v2_publisher_exclusive_and_preserves_analysis_provenance(
                                          preflight=preflight, server_run_provenance=pins)
     manifest = json.loads((destination / "manifest.json").read_bytes())
     assert manifest["manifest_digest"] == digest
-    assert manifest["study_name"] == "paper-phase2-online-probe-qualification-v2"
+    assert manifest["study_name"] == "paper-phase2-online-probe-qualification-v3"
     assert manifest["server_run_provenance"] == pins
     before = {p.relative_to(destination): p.read_bytes() for p in destination.rglob("*") if p.is_file()}
     with pytest.raises(FileExistsError):

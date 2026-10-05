@@ -141,7 +141,7 @@ def server_args(tmp_path, repo, plan, game_plan, profile):
     plan_path, game_plan_path = tmp_path / "pilot-plan.json", tmp_path / "game-plan.json"
     purpose = "qualification" if plan.campaign_purpose == "qualification" else "formal"
     args = SimpleNamespace(
-        repo=repo, destination=tmp_path / ("paper-phase2-online-probe-qualification-v2"
+        repo=repo, destination=tmp_path / ("paper-phase2-online-probe-qualification-v3"
             if purpose == "qualification" else "paper-phase2-online-probe-pilot-v1"),
         work_directory=tmp_path / "work", q_python=sys.executable,
         plan=plan_path, campaign_purpose=plan.campaign_purpose, source_commit=SOURCE_COMMIT,
@@ -232,7 +232,7 @@ def test_actual_server_entry_rejects_changed_pins_before_worker_or_backend(
         (repo / PROTOCOL_PATH).write_text("Changed after plans were frozen.\n")
     elif mutation == "profile":
         profile["assignment_seed"] += 1
-        (repo / "configs/phase2/online-probe-qualification-v2.json").write_bytes(
+        (repo / "configs/phase2/online-probe-qualification-v3.json").write_bytes(
             canonical_json_bytes(profile))
     message = "source/index" if mutation == "source" else "protocol/profile"
     with pytest.raises(ValueError, match=message):

@@ -292,7 +292,8 @@ class ServerRuntimeFactory:
             mapper_runtime=self.mapper, smoke_v3_artifact=self.args.smoke_v3,
             smoke_v3_manifest_digest=self.args.smoke_v3_manifest_digest,
             online_plan=self.plan, predictor=self.predictor, backend=pilot.backend,
-            call_audit=runtime.call_audit, ledger=self.ledger, env=runtime.env,
+            call_audit=runtime.call_audit, ledger=self.ledger,
+            expected_ledger_path=self.work_directory / "assignment-ledger.jsonl", env=runtime.env,
             recorder=runtime.recorder, reference_tables=self.reference,
             reference_artifact_digest=self.args.reference_tables_digest,
             destination=self.args.destination, publication_only=publication_only)

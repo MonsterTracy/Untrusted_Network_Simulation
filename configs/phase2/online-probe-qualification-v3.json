@@ -1,0 +1,29 @@
+{
+  "schema_version": "phase2_online_probe_campaign_profile_v1",
+  "campaign_purpose": "qualification",
+  "pilot_id": "paper-phase2-online-probe-qualification-v3",
+  "assignment_seed": 6288282358363007265,
+  "max_games_attempted": 80,
+  "target_assignment_count": 20,
+  "estimator_eligible": false,
+  "planning_status": "FROZEN",
+  "probe_protocol_digest": "96eb5d35c82f35803dcdb953e611ea0a9e41001e40178cd517f9cde1430e416b",
+  "excluded_game_plans": [
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-terminal-pilot-v1-game-plan.json",
+      "plan_digest": "add3fe53054d9b89b6c6570b585bce13070f010dcf2e28a40a4671fcd713c64b"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v1-game-plan.json",
+      "plan_digest": "4719b85665febcb47479a594f13c00940a6636061ebe9410c4b68391be4bda6e"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v2-game-plan.json",
+      "plan_digest": "ef8e2d0d239f3e0d98ef84ed44c51d3cbceb80b4ddacee5b52fff6a7ac0bd151"
+    }
+  ],
+  "plan": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v3.json",
+  "game_plan": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v3-game-plan.json",
+  "work_directory": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-online-probe-qualification-v3-work",
+  "destination": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-probe-qualification-v3"
+}

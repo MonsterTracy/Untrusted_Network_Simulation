@@ -14,9 +14,9 @@ PROFILE = REPO / "configs/phase2/online-terminal-pilot-formal-v1.json"
 PINS = REPO / "configs/phase2/online-terminal-runtime-pins-v1.json"
 PROFILE_VERSION = "phase2_online_campaign_profile_v1"
 PROBE_PROFILE_VERSION = "phase2_online_probe_campaign_profile_v1"
-PROBE_PROFILES = {"qualification": REPO / "configs/phase2/online-probe-qualification-v2.json",
+PROBE_PROFILES = {"qualification": REPO / "configs/phase2/online-probe-qualification-v3.json",
                   "formal": REPO / "configs/phase2/online-probe-formal-v1.json"}
-PROBE_NAMES = {"qualification": "paper-phase2-online-probe-qualification-v2",
+PROBE_NAMES = {"qualification": "paper-phase2-online-probe-qualification-v3",
                "pilot": "paper-phase2-online-probe-pilot-v1"}
 CUBLAS = ":4096:8"
 
@@ -245,7 +245,8 @@ def probe_qualification_inputs(profile):
         "consequences.jsonl": [dict(game_id=s["CONSEQUENCE"]["game_id"],
             assignment_digest=s["CONSEQUENCE"]["assignment_id"],
             day_consequence=s["CONSEQUENCE"]["day_consequence"], theta_audit_label=None,
-            final_game_result=s["GAME_RESULT"]["winner"]) for s in stages if "CONSEQUENCE" in s],
+            final_game_result=s["STRATEGY_STAGE"]["record"]["offline_audit"]["final_game_result"])
+            for s in stages if "CONSEQUENCE" in s],
         "backend_calls.jsonl": [call["call"] for s in stages for call in s.get("BACKEND_CALL", ())],
         "strategy_stages.jsonl": [r for s in stages for r in s.get("STRATEGY_STAGE_HISTORY", ())],
     }
@@ -335,6 +336,8 @@ def probe_inputs(profile):
     protect_qualification(profile, {"paths": other})
     failed_probe = read_json(REPO / "configs/phase2/online-probe-qualification-v1.json")
     protect_qualification(profile, {"paths": failed_probe})
+    failed_probe_v2 = read_json(REPO / "configs/phase2/online-probe-qualification-v2.json")
+    protect_qualification(profile, {"paths": failed_probe_v2})
     excluded = []
     for item in profile["excluded_game_plans"]:
         if item["plan_digest"] is None:
@@ -347,6 +350,8 @@ def probe_inputs(profile):
         raise ValueError("Probe must exclude the formal Terminal seed pool")
     if not any(g.collection_id == "paper-phase2-online-probe-qualification-v1" for g in excluded):
         raise ValueError("Probe must exclude the failed Qualification V1 seed pool")
+    if not any(g.collection_id == "paper-phase2-online-probe-qualification-v2" for g in excluded):
+        raise ValueError("Probe must exclude the failed Qualification V2 seed pool")
     if profile["campaign_purpose"] == "pilot":
         probe_bound, _ = probe_qualification_inputs(profile)
         protect_qualification(profile, probe_bound)
@@ -491,9 +496,11 @@ def status(profile, *, qualification=False):
     if probe:
         records = [s["STRATEGY_STAGE"]["record"] for s in stages if "STRATEGY_STAGE" in s]
         unfinished = [game for game, s in snap["games"].items() if "ASSIGNMENT" in s
-                      and not {"EXECUTION", "CONSEQUENCE", "GAME_RESULT"}.issubset(s)]
+                      and not {"EXECUTION", "CONSEQUENCE"}.issubset(s)]
         result.update(unfinished_assigned_games=unfinished,
             interrupted_games=sum("INTERRUPTED" in s for s in stages),
+            post_endpoint_tail_interruptions=sum("POST_ENDPOINT_TAIL_INTERRUPTED" in s for s in stages),
+            whole_game_results=sum("GAME_RESULT" in s for s in stages),
             preparation_failures=sum("PREPARATION_FAILURE" in s for s in stages),
             lifecycle_counts={event: sum(event in r["lifecycle"] for r in records) for event in (
                 "T1_COMMITTED", "T1_LANGUAGE_INVALID", "T3_SCHEDULED", "T3_REACHED",

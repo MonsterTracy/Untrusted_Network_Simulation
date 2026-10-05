@@ -254,6 +254,7 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
                            online_plan: Phase2OnlineTerminalPilotPlanV1 | Phase2OnlineProbePilotPlanV1 | None = None,
                            predictor=None, backend=None, call_audit=None,
                            ledger=None,
+                           expected_ledger_path: Path | None = None,
                            env=None, recorder=None, reference_tables=None,
                            reference_artifact_digest: str | None = None,
                            destination: Path | None = None,
@@ -313,14 +314,19 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
         reference_ready = False
     destination_absent = destination is not None and not os.path.lexists(destination)
     from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
+    campaign_resumable = False
     try:
         ledger_bound = (isinstance(ledger, OnlinePilotAssignmentLedgerV1)
                         and isinstance(online_plan, plan_types)
                         and ledger.plan.digest() == online_plan.digest()
-                        and ledger.source_commit == head
-                        and ledger.path != destination
-                        and (ledger.status() == "RUNNING" if not publication_only else
-                             ledger.status() == "READY_TO_SEAL" and ledger.sealable()))
+                        and ledger.source_commit == expected_source_commit == head
+                        and isinstance(expected_ledger_path, Path)
+                        and ledger.path.resolve() == expected_ledger_path.resolve()
+                        and ledger.path != destination)
+        if ledger_bound:
+            ledger.snapshot()  # durable path, schema, source/plan and full hash chain
+            campaign_resumable = (ledger.status() == "RUNNING" if not publication_only else
+                                  ledger.status() == "READY_TO_SEAL" and ledger.sealable())
     except (OSError, TypeError, ValueError, KeyError):
         ledger_bound = False
     blockers = []
@@ -359,6 +365,8 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
         blockers.append("PHASE2_BACKEND_AUDIT_UNBOUND")
     if not ledger_bound:
         blockers.append("DURABLE_ASSIGNMENT_LEDGER_UNBOUND")
+    elif not campaign_resumable:
+        blockers.append("CAMPAIGN_NOT_RESUMABLE")
     # Replay is an optional paired-counterfactual capability, outside these blockers.
     runtime_token = ((id(env), id(recorder), id(call_audit), id(backend),
                       id(predictor), id(mapper_runtime), id(reference_tables), id(ledger))

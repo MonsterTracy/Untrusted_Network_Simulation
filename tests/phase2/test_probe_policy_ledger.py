@@ -263,7 +263,7 @@ def test_execution_cannot_precede_final_lifecycle_or_drop_recorded_calls(tmp_pat
 
 
 @pytest.mark.parametrize("strategy", list(ProbeStrategy))
-def test_failed_language_requires_actual_day_and_final_game_result(tmp_path, strategy):
+def test_failed_language_requires_actual_day_and_keeps_final_game_result_secondary(tmp_path, strategy):
     ledger, assignment = started_ledger(tmp_path, strategy)
     snapshots = literal_snapshots(assignment)
     persist_through_execution(ledger, assignment, snapshots)
@@ -280,7 +280,7 @@ def test_failed_language_requires_actual_day_and_final_game_result(tmp_path, str
     day = LiteralRecord(assignment, snapshots[-2])
     ledger.persist_strategy_stage(day)
     ledger.persist_consequence(day)
-    assert not ledger.sealable()
+    assert ledger.sealable()
     final = LiteralRecord(assignment, snapshots[-1])
     ledger.persist_strategy_stage(final)
     with pytest.raises(OnlinePilotLedgerError, match="final game result"):
@@ -291,7 +291,7 @@ def test_failed_language_requires_actual_day_and_final_game_result(tmp_path, str
 
 
 @pytest.mark.parametrize("with_day", [False, True])
-def test_resume_interrupts_failed_probe_without_every_outcome(tmp_path, with_day):
+def test_resume_distinguishes_missing_primary_outcome_from_secondary_tail(tmp_path, with_day):
     ledger, assignment = started_ledger(tmp_path)
     snapshots = literal_snapshots(assignment)
     persist_through_execution(ledger, assignment, snapshots)
@@ -301,13 +301,14 @@ def test_resume_interrupts_failed_probe_without_every_outcome(tmp_path, with_day
         ledger.persist_consequence(day)
     assert ledger.mark_interrupted_on_resume() == ("game-1",)
     assert ledger.mark_interrupted_on_resume() == ()
-    reason = ledger.snapshot()["games"]["game-1"]["INTERRUPTED"]["reason"]
+    marker = "POST_ENDPOINT_TAIL_INTERRUPTED" if with_day else "INTERRUPTED"
+    reason = ledger.snapshot()["games"]["game-1"][marker]["reason"]
     assert reason == ("CONSEQUENCE_WITHOUT_GAME_RESULT" if with_day else "EXECUTION_WITHOUT_CONSEQUENCE")
-    assert ledger.status() == "INCOMPLETE"
-    assert not ledger.sealable()
+    assert ledger.status() == ("READY_TO_SEAL" if with_day else "INCOMPLETE")
+    assert ledger.sealable() is with_day
     with pytest.raises(OnlinePilotLedgerError, match="replay"):
         ledger.start_game("game-1")
-    with pytest.raises(OnlinePilotLedgerError, match="interrupted"):
+    with pytest.raises(OnlinePilotLedgerError, match="closed post-endpoint|interrupted"):
         ledger._append("BACKEND_CALL", call_payload(ledger, assignment))
 
 

@@ -232,7 +232,7 @@ def test_full_server_ledger_proof_retains_t0_consequence_for_invalid_strategy(se
     assert factory.verify_execution(prefix.game_id, stages) is True
     assert stages["CONSEQUENCE"]["day_consequence"]["l_ref"] == pytest.approx(.45)
     assert stages["EXECUTION"]["execution"]["success"] is success
-    assert not ledger.sealable()  # final game evidence still required
+    assert ledger.sealable()  # verified day endpoint is complete; whole-game audit is secondary
     proofs["strategy-02-t1_attempted"]["canonical_runtime"]["backend_calls"] = deepcopy(canonical["backend_calls"])
     with pytest.raises(ValueError, match="precedes lifecycle writeahead"):
         factory.verify_execution(prefix.game_id, stages)
