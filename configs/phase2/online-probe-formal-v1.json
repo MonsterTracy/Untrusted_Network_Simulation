@@ -3,10 +3,10 @@
   "campaign_purpose": "pilot",
   "pilot_id": "paper-phase2-online-probe-pilot-v1",
   "assignment_seed": 6449283966833280907,
-  "max_games_attempted": null,
+  "max_games_attempted": 800,
   "target_assignment_count": 200,
   "estimator_eligible": false,
-  "planning_status": "UNFROZEN",
+  "planning_status": "FROZEN",
   "probe_protocol_digest": "96eb5d35c82f35803dcdb953e611ea0a9e41001e40178cd517f9cde1430e416b",
   "excluded_game_plans": [
     {
@@ -29,7 +29,7 @@
   "probe_qualification": {
     "artifact": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-online-probe-qualification-v3",
     "run_inputs": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-online-probe-qualification-v3-work/run_inputs.json",
-    "manifest_digest": null,
-    "inputs_digest": null
+    "manifest_digest": "927dddc2d48d42bca2cb48034b748803e9a0086b0154aa977f26fd021f1ab069",
+    "inputs_digest": "3c7e6f3c7065aa7b345c9478ffbe3b1c1407a4e5b8c20459538bcda413df5aca"
   }
 }

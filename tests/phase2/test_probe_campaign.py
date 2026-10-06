@@ -11,7 +11,7 @@ from scripts import phase2_online_campaign as campaign
 
 @pytest.mark.parametrize(("qualification", "seed", "target", "cap", "status"), (
     (True, 6288282358363007265, 20, 80, "FROZEN"),
-    (False, 6449283966833280907, 200, None, "UNFROZEN"),
+    (False, 6449283966833280907, 200, 800, "FROZEN"),
 ))
 def test_probe_profiles_freeze_identity_seed_and_preregistered_budgets(
         qualification, seed, target, cap, status):
@@ -65,13 +65,13 @@ def test_formal_precision_target_uses_frozen_terminal_max_variance():
 
 def test_formal_missing_cap_blocks_prepare_even_if_marked_frozen(tmp_path):
     profile = campaign.read_profile(policy="probe", qualification=False)
+    profile["max_games_attempted"] = None
     for key in ("plan", "game_plan", "work_directory", "destination"):
         profile[key] = str(tmp_path / key)
-    with pytest.raises(ValueError, match="not frozen"):
-        campaign.prepare(profile, source_commit="a" * 40)
-    profile["planning_status"] = "FROZEN"
-    with pytest.raises(ValueError, match="not frozen"):
-        campaign.prepare(profile, source_commit="a" * 40)
+    for status in ("UNFROZEN", "FROZEN"):
+        profile["planning_status"] = status
+        with pytest.raises(ValueError, match="not frozen"):
+            campaign.prepare(profile, source_commit="a" * 40)
     assert list(tmp_path.iterdir()) == []
 
 

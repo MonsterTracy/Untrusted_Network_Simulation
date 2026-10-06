@@ -71,28 +71,38 @@ def test_v3_is_disjoint_from_all_prior_planned_pools_using_production_derivation
     assert pools["v3"].isdisjoint(terminal_pool)
 
 
-def test_formal_only_points_to_v3_and_stays_unfrozen_before_any_prepare_work(tmp_path, monkeypatch):
+def test_formal_freezes_v3_provenance_and_operational_cap():
     formal = campaign.read_profile(policy="probe")
     v3 = campaign.read_profile(policy="probe", qualification=True)
     assert formal["target_assignment_count"] == 200
     assert formal["assignment_seed"] == 6449283966833280907
-    assert formal["max_games_attempted"] is None
-    assert formal["planning_status"] == "UNFROZEN"
+    assert formal["max_games_attempted"] == formal["target_assignment_count"] * (
+        v3["max_games_attempted"] // v3["target_assignment_count"]) == 800
+    assert formal["planning_status"] == "FROZEN"
     assert formal["probe_qualification"] == {
         "artifact": v3["destination"],
         "run_inputs": str(Path(v3["work_directory"]) / "run_inputs.json"),
-        "manifest_digest": None, "inputs_digest": None,
+        "manifest_digest": "927dddc2d48d42bca2cb48034b748803e9a0086b0154aa977f26fd021f1ab069",
+        "inputs_digest": "3c7e6f3c7065aa7b345c9478ffbe3b1c1407a4e5b8c20459538bcda413df5aca",
     }
     assert {Path(item["path"]).name: item["plan_digest"]
             for item in formal["excluded_game_plans"]} == EXCLUSION_DIGESTS
-    for field in ("plan", "game_plan", "work_directory", "destination"):
-        formal[field] = str(tmp_path / field)
-    monkeypatch.setattr(campaign, "clean_source", lambda **kwargs: pytest.fail("prepare must stop before source/runtime"))
-    for status in ("UNFROZEN", "FROZEN"):
-        formal["planning_status"] = status
-        with pytest.raises(ValueError, match="not frozen"):
-            campaign.prepare(formal, source_commit="a" * 40)
-    assert list(tmp_path.iterdir()) == []
+    plan = campaign.pilot_plan(formal)
+    assert plan.target_assignment_count == 200 and plan.max_games_attempted == 800
+
+
+def test_formal_full_frozen_pool_is_disjoint_from_terminal_and_v1_v2_v3(assembly):
+    collection, _ = assembly
+    formal = campaign.read_profile(policy="probe")
+    pool = set(collection.derive_seed_pool(formal["pilot_id"], formal["max_games_attempted"]))
+    assert len(pool) == 800
+    for relative in ("online-terminal-pilot-formal-v1.json",
+                     "online-probe-qualification-v1.json",
+                     "online-probe-qualification-v2.json",
+                     "online-probe-qualification-v3.json"):
+        old = campaign.read_json(ROOT / "configs/phase2" / relative)
+        old_pool = set(collection.derive_seed_pool(old["pilot_id"], old["max_games_attempted"]))
+        assert pool.isdisjoint(old_pool), relative
 
 
 @pytest.fixture

@@ -155,7 +155,8 @@ def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
     support = analyze_phase2_online_support_record(dataset.to_record())
     destination = tmp_path / NAME
     game_plan = _plan(
-        collection_id=f.pilot.plan.pilot_id, source_revision=SOURCE_COMMIT,
+        collection_id=f.pilot.plan.pilot_id,
+        source_revision="b" * 40 if mutation == "game_source" else SOURCE_COMMIT,
         ordered_seed_pool=(901, 902, 903, 904), target_canonical_success_count=2,
         environment_provenance={"probe_policy_protocol_sha256": PROTOCOL_DIGEST},
     )
@@ -208,6 +209,15 @@ def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
         files["metrics/support.json"] = canonical_json_bytes(support)
     elif mutation == "old_qualification_identity":
         fields["study_name"] = "paper-phase2-online-probe-qualification-v1"
+    elif mutation == "completion_incomplete":
+        fields["completion_status"] = "INCOMPLETE"
+    elif mutation == "source_pin":
+        fields["source_provenance"] = dict(source, commit="b" * 40)
+    elif mutation == "pilot_plan_pin":
+        fields["pilot_plan_digest"] = "0" * 64
+    elif mutation == "population_count":
+        support["games_assigned"] -= 1
+        files["metrics/support.json"] = canonical_json_bytes(support)
     artifact = publish_artifact(destination, manifest_fields=fields, files=files)
     profile = {"probe_protocol_digest": PROTOCOL_DIGEST, "probe_qualification": {
         "artifact": str(destination), "run_inputs": str(run_inputs),
@@ -219,17 +229,31 @@ def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
                            source=source, run_inputs=run_inputs)
 
 
-@pytest.mark.parametrize("exiled_player,winner", [("player2", "Werewolf"), ("player1", "Villager")])
-def test_complete_two_strategy_artifact_is_admitted_with_exact_builder_columns(
-        admission, runtime, monkeypatch, tmp_path, exiled_player, winner):
-    evidence = qualification_evidence(runtime, monkeypatch, tmp_path,
-        exiled_player=exiled_player, winner=winner)
-    bound, artifact = admission(evidence.profile)
-    assert bound == evidence.bound
-    assert artifact.manifest_digest == evidence.artifact.manifest_digest
-    assert evidence.f.ledger.snapshot()["assignment_count"] == 2
-    assert evidence.f.ledger.sealable()
-    assert json.loads((artifact.path / "metrics/support.json").read_bytes())["estimator_eligible"] is False
+def test_complete_two_strategy_artifacts_admitted_independently_of_outcomes(
+        admission, runtime, monkeypatch, tmp_path):
+    formal_profile = campaign.read_profile(policy="probe")
+    formal_plan = campaign.pilot_plan(formal_profile).to_record()
+    gates, assignments, consequences = [], [], []
+    for ordinal, (exiled_player, winner) in enumerate(
+            (("player2", "Werewolf"), ("player1", "Villager"))):
+        evidence = qualification_evidence(runtime, monkeypatch, tmp_path / str(ordinal),
+            exiled_player=exiled_player, winner=winner)
+        bound, artifact = admission(evidence.profile)
+        assert bound == evidence.bound
+        assert artifact.manifest_digest == evidence.artifact.manifest_digest
+        assert evidence.f.ledger.snapshot()["assignment_count"] == 2
+        assert evidence.f.ledger.sealable()
+        assert json.loads((artifact.path / "metrics/support.json").read_bytes())["estimator_eligible"] is False
+        records = [s["STRATEGY_STAGE"]["record"]
+                   for s in evidence.f.ledger.snapshot()["games"].values()]
+        gates.append(campaign.probe_qualification_gate(records, complete=evidence.f.ledger.sealable()))
+        assignments.append([record["assignment"] for record in records])
+        consequences.append([record["day_consequence"] for record in records])
+        assert campaign.pilot_plan(campaign.read_profile(policy="probe")).to_record() == formal_plan
+    assert gates[0] == gates[1] and gates[0]["passed"] is True
+    assert assignments[0] == assignments[1]
+    assert {row["Y"] for row in consequences[0]} != {row["Y"] for row in consequences[1]}
+    assert {row["l_ref"] for row in consequences[0]} != {row["l_ref"] for row in consequences[1]}
 
 
 def test_endpoint_complete_qualification_is_admitted_without_secondary_game_results(
@@ -305,6 +329,21 @@ def test_formal_admission_rejects_old_v1_qualification_identity(
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path,
                                        mutation="old_qualification_identity")
     with pytest.raises(ValueError, match="Probe qualification provenance differs"):
+        admission(evidence.profile)
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("completion_incomplete", "Probe qualification provenance differs"),
+    ("source_pin", "Probe qualification provenance differs"),
+    ("pilot_plan_pin", "Probe qualification plan/protocol differs"),
+    ("game_source", "Probe qualification plan/protocol differs"),
+    ("population_count", "Probe qualification ledger/population differs"),
+])
+def test_verified_artifact_must_remain_complete_and_match_source_plan_population(
+        admission, runtime, monkeypatch, tmp_path, mutation, reason):
+    evidence = qualification_evidence(runtime, monkeypatch, tmp_path, mutation=mutation)
+    assert evidence.f.ledger.sealable()
+    with pytest.raises(ValueError, match=reason):
         admission(evidence.profile)
 
 

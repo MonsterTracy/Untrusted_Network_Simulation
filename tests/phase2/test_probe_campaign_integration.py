@@ -195,6 +195,8 @@ def operator(tmp_path, monkeypatch, assembly):
 
 def test_formal_partial_freeze_is_readable_but_cannot_prepare(assembly, tmp_path):
     profile = campaign.read_profile(policy="probe", qualification=False)
+    # A partial profile still fails closed after the committed profile is frozen.
+    profile.update(planning_status="UNFROZEN", max_games_attempted=None)
     assert profile["planning_status"] == "UNFROZEN"
     assert profile["target_assignment_count"] == 200
     assert profile["assignment_seed"] == 6449283966833280907
@@ -238,6 +240,69 @@ def test_prepare_blocks_source_fault_before_runtime_or_publication(operator, fau
         campaign.prepare(op.profile, source_commit=source)
     assert not Path(op.profile["plan"]).exists()
     assert not Path(op.profile["work_directory"]).exists()
+
+
+@pytest.fixture
+def formal_operator(operator, monkeypatch):
+    op = operator
+    profile = campaign.read_profile(policy="probe")
+    for key in ("plan", "game_plan", "work_directory"):
+        profile[key] = str(op.repo.parent / ("formal-" + key))
+    profile["destination"] = str(op.repo.parent / profile["pilot_id"])
+    profile["excluded_game_plans"] = op.profile["excluded_game_plans"]
+    runtime_pins = {key: str(index) * 64 for index, key in enumerate((
+        "q_fit_digest", "q_seal_digest", "runtime_config_sha256", "deployment_config_sha256"), 1)}
+    op.bound.update(runtime_pins)
+    qualification_profile = campaign.read_profile(policy="probe", qualification=True)
+    qualification_profile.update(target_assignment_count=20, max_games_attempted=80)
+    qualified = campaign.canonical_plan(
+        campaign.pilot_plan(qualification_profile), op.head, op.bound, profile=qualification_profile)
+    assert len(qualified.ordered_seed_pool) == 80
+    probe_bound = {**op.bound, "source_commit": op.head,
+                   "pilot_plan": campaign.pilot_plan(qualification_profile).to_record(),
+                   "canonical_game_plan": qualified.to_record(),
+                   "paths": {key: op.profile[key] for key in (
+                       "plan", "game_plan", "work_directory", "destination")}}
+    profile["probe_qualification"]["artifact"] = probe_bound["paths"]["destination"]
+    profile["probe_qualification"]["run_inputs"] = str(
+        Path(probe_bound["paths"]["work_directory"]) / "run_inputs.json")
+    # Durable artifact admission is tested separately with the real journal.
+    # Here its verified output enters the production prepare/exclusion path.
+    monkeypatch.setattr(campaign, "probe_qualification_inputs", lambda _: (probe_bound, None))
+    write(campaign.PROBE_PROFILES["formal"], profile)
+    git(op.repo, "add", "configs/phase2/online-probe-formal-v1.json")
+    git(op.repo, "commit", "-qm", "synthetic frozen formal profile")
+    return SimpleNamespace(op=op, profile=profile, qualified=qualified,
+                           head=git(op.repo, "rev-parse", "HEAD"))
+
+
+def test_frozen_formal_prepare_uses_existing_v3_admission_and_excludes_full_pool(formal_operator):
+    f = formal_operator
+    result = campaign.prepare(f.profile, source_commit=f.head)
+    game = canonical.collection_plan_from_record(campaign.read_json(f.profile["game_plan"]))
+    assert result["status"] == "FROZEN" and result["seed_pool_size"] == 800
+    assert game.source_revision == f.head
+    assert game.ordered_seed_pool == f.op.collection.derive_seed_pool(f.profile["pilot_id"], 800)
+    assert f.op.server.load_online_plan(f.profile["plan"], "pilot").target_assignment_count == 200
+    _, _, _, excluded = campaign.probe_inputs(f.profile)
+    v3 = [old for old in excluded if old.collection_id == campaign.PROBE_NAMES["qualification"]]
+    assert v3 == [f.qualified] and len(v3[0].ordered_seed_pool) == 80
+    assert len(excluded) == 4  # Terminal formal, V1, V2, and V3 exactly once.
+    assert all(set(game.ordered_seed_pool).isdisjoint(old.ordered_seed_pool) for old in excluded)
+    assert all(count == 0 for count in result["seed_overlap_counts"].values())
+    assert result["seed_overlap_counts"][campaign.PROBE_NAMES["qualification"]] == 0
+
+
+def test_formal_prepare_rejects_even_unexecuted_last_v3_planned_seed(formal_operator, monkeypatch):
+    f = formal_operator
+    last = f.qualified.ordered_seed_pool[-1]
+    original = f.op.collection.derive_seed_pool
+    monkeypatch.setattr(f.op.collection, "derive_seed_pool", lambda identity, size:
+                        (last, *original(identity, size)[1:]))
+    with pytest.raises(ValueError, match="seed overlap; no skip/reroll"):
+        campaign.prepare(f.profile, source_commit=f.head)
+    assert not Path(f.profile["plan"]).exists()
+    assert not Path(f.profile["game_plan"]).exists()
 
 
 @pytest.mark.parametrize("pool", ["qualification", "development", "calibration", "terminal", "probe_v1_planned"])
@@ -388,6 +453,7 @@ def test_formal_prepare_requires_frozen_probe_qualification_admission(operator):
     for name in ("plan", "game_plan", "work_directory"):
         formal[name] = str(op.repo.parent / ("formal-probe-" + name))
     formal["destination"] = str(op.repo.parent / campaign.PROBE_NAMES["pilot"])
+    formal["probe_qualification"].update(manifest_digest=None, inputs_digest=None)
     with pytest.raises(ValueError, match="Probe qualification digests are not frozen"):
         campaign.prepare(formal, source_commit=op.head)
     assert not Path(formal["plan"]).exists()
