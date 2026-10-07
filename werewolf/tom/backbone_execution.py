@@ -1,4 +1,4 @@
-"""Two-stage backbone provenance, fixed-budget training, recovery and all-twenty seal."""
+"""Two-stage backbone provenance, fixed-budget training, recovery and lineage seals."""
 
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -34,6 +34,9 @@ CHECKPOINT_VERSION = "classic7_backbone_recovery_v1"
 TERMINAL_VERSION = "classic7_backbone_terminal_v1"
 SEAL_VERSION = "classic7_backbone_all_twenty_v1"
 RNG_VERSION = "backbone_training_rng_v1"
+PAIRED_EXECUTION_VERSION = "classic7_qwen3_paired_execution_v1"
+PAIRED_SEAL_VERSION = "classic7_qwen3_paired_all_ten_v1"
+PAIRED_RNG_VERSION = "qwen3_paired_training_rng_v2"
 LINEAGES = tuple((a, f, "explicit_day_phase") for a in ARCHITECTURES for f in range(5))
 
 
@@ -43,6 +46,12 @@ def _same(left, right):
 
 def _hash(value):
     return sha256_bytes(canonical_json_bytes(value))
+
+
+def study_lineages(snapshot):
+    design = snapshot.manifest["protocol_inputs"]["design"]
+    return tuple((a, f, t) for a in prepared._architectures(design)
+                 for f in range(5) for t in design["temporal_conditions"])
 
 
 def snapshot_identity(artifact):
@@ -58,9 +67,10 @@ def validate_frozen_snapshot(path, identity):
     identities remain covered by that digest. No call to source-strict open_study,
     no caught source mismatch, and no mutation of the preparation artifact.
     """
-    artifact = verify_artifact(path, expected_artifact_type="backbone_tom_study",
-                               expected_schema_version=prepared.STUDY_VERSION)
+    artifact = prepared.verify_study_artifact(path)
     m = artifact.manifest
+    design = prepared._design(m["schema_version"])
+    paired = m["schema_version"] == prepared.PAIRED_STUDY_VERSION
     if (set(identity) != {"manifest_digest", "study_digest", "source_revision", "implementation_digest"}
             or any(re.fullmatch(r"[0-9a-f]{40}" if k == "source_revision" else r"[0-9a-f]{64}", v) is None
                    for k, v in identity.items()) or not _same(snapshot_identity(artifact), identity)):
@@ -69,7 +79,7 @@ def validate_frozen_snapshot(path, identity):
                   "runtime", "temporal_artifact_digest", "folds", "initializations", "file_table", "manifest_digest"}:
         raise ValueError("frozen preparation schema mismatch")
     publication = open_publication(m["publication_path"])
-    inputs, population = prepared._inputs(prepared._frozen_design(), publication, m["protocol_inputs"]["source"])
+    inputs, population = prepared._inputs(design, publication, m["protocol_inputs"]["source"])
     if (not _same(inputs, m["protocol_inputs"]) or _hash(inputs) != identity["study_digest"]
             or m["runtime"]["implementation_digest"] != identity["implementation_digest"]):
         raise ValueError("frozen preparation design/source mismatch")
@@ -83,8 +93,8 @@ def validate_frozen_snapshot(path, identity):
         raise ValueError("frozen preparation temporal mismatch")
     names = set(files) | {f"temporal/{n}" for n in ("phase_codebook.manifest.json", "phase_codebook.bin",
              "canonical_day_code_table.manifest.json", "canonical_day_code_table.bin")}
-    if [(r["architecture"], r["fold"], r["temporal_condition"]) for r in m["initializations"]] != list(LINEAGES):
-        raise ValueError("frozen preparation requires exactly twenty lineages")
+    if [(r["architecture"], r["fold"], r["temporal_condition"]) for r in m["initializations"]] != prepared.initialization_lineages(design):
+        raise ValueError("frozen preparation initialization lineage mismatch")
     shells = {}
     for row in m["initializations"]:
         a, f = row["architecture"], row["fold"]
@@ -92,8 +102,8 @@ def validate_frozen_snapshot(path, identity):
         names.update(f"{base}/{n}" for n in ("manifest.json", "tensors.bin"))
         model = BackboneToM(a, provider, study_seed=config.initialization_seed, fold=f)
         state = prepared.load_initial_state(artifact.path / base, model, study_digest=identity["study_digest"],
-            study_seed=config.initialization_seed, fold=f, expected_digest=row["state_digest"])
-        expected = {"architecture": a, "fold": f, "temporal_condition": "explicit_day_phase",
+            study_seed=config.initialization_seed, fold=f, expected_digest=row["state_digest"], paired=paired)
+        expected = {"architecture": a, "fold": f, "temporal_condition": "shared" if paired else "explicit_day_phase",
             "graph_digest": model.graph["graph_digest"], "state_digest": state.artifact.manifest_digest,
             **state.artifact.manifest["initialization"]}
         if not _same(row, expected) or (f in shells and shells[f] != row["shell_initialization_digest"]):
@@ -109,6 +119,16 @@ class Execution:
     artifact: object
     snapshot: object
     config: ExperimentConfig
+    temporal_condition: str = "explicit_day_phase"
+
+    @property
+    def paired(self):
+        return self.snapshot.manifest["schema_version"] == prepared.PAIRED_STUDY_VERSION
+
+    def for_condition(self, condition):
+        if condition not in self.snapshot.manifest["protocol_inputs"]["design"]["temporal_conditions"]:
+            raise ValueError("temporal condition outside execution contract")
+        return replace(self, temporal_condition=condition)
 
     @property
     def root(self):
@@ -141,8 +161,7 @@ def _runtime(config):
 def create_execution(study_path, expected_manifest_digest, *, engineering=False):
     if type(engineering) is not bool:
         raise ValueError("engineering marker must be boolean")
-    snapshot = verify_artifact(study_path, expected_artifact_type="backbone_tom_study",
-                               expected_schema_version=prepared.STUDY_VERSION)
+    snapshot = prepared.verify_study_artifact(study_path)
     if snapshot.manifest_digest != expected_manifest_digest:
         raise ValueError("prepared manifest trust anchor mismatch")
     identity = snapshot_identity(snapshot)
@@ -157,10 +176,10 @@ def create_execution(study_path, expected_manifest_digest, *, engineering=False)
     root = snapshot.path.parent / ("engineering-executions" if engineering else "executions") / snapshot.manifest_digest
     artifact = publish_artifact(root / "contract", manifest_fields={
         "artifact_type": "backbone_engineering_execution" if engineering else "backbone_execution",
-        "schema_version": EXECUTION_VERSION, "engineering_only": engineering,
+        "schema_version": PAIRED_EXECUTION_VERSION if snapshot.manifest["schema_version"] == prepared.PAIRED_STUDY_VERSION else EXECUTION_VERSION, "engineering_only": engineering,
         "prepared_path": str(snapshot.path), "preparation": identity,
         "execution_source": source, "runtime": runtime,
-        "lineages": [list(x) for x in LINEAGES], "training_rng_version": RNG_VERSION,
+        "lineages": [list(x) for x in study_lineages(snapshot)], "training_rng_version": PAIRED_RNG_VERSION if snapshot.manifest["schema_version"] == prepared.PAIRED_STUDY_VERSION else RNG_VERSION,
         "recovery_cadence": 1 if engineering else 1000,
         "expected_optimizer_steps": 2 if engineering else 25200,
     }, files={})
@@ -171,18 +190,24 @@ def open_execution(root):
     path = Path(root) / "contract"
     # The explicit namespace selects one type; there is no type fallback.
     engineering = path.parent.parent.name == "engineering-executions"
+    schema = json.loads((path / "manifest.json").read_bytes())["schema_version"]
+    if schema not in (EXECUTION_VERSION, PAIRED_EXECUTION_VERSION):
+        raise ValueError("unknown backbone execution schema")
     artifact = verify_artifact(path, expected_artifact_type=("backbone_engineering_execution" if engineering else "backbone_execution"),
-                               expected_schema_version=EXECUTION_VERSION)
+                               expected_schema_version=schema)
     m = artifact.manifest
+    snapshot = validate_frozen_snapshot(m["prepared_path"], m["preparation"])
+    paired = snapshot.manifest["schema_version"] == prepared.PAIRED_STUDY_VERSION
     if (set(m) != {"artifact_type", "schema_version", "engineering_only", "prepared_path", "preparation",
                   "execution_source", "runtime", "lineages", "training_rng_version", "recovery_cadence",
                   "expected_optimizer_steps", "file_table", "manifest_digest"}
             or m["file_table"] or m["engineering_only"] is not engineering
-            or not _same(m["lineages"], [list(x) for x in LINEAGES]) or m["training_rng_version"] != RNG_VERSION
+            or m["schema_version"] != (PAIRED_EXECUTION_VERSION if paired else EXECUTION_VERSION)
+            or not _same(m["lineages"], [list(x) for x in study_lineages(snapshot)])
+            or m["training_rng_version"] != (PAIRED_RNG_VERSION if paired else RNG_VERSION)
             or type(m["recovery_cadence"]) is not int or m["recovery_cadence"] != (1 if engineering else 1000)
             or type(m["expected_optimizer_steps"]) is not int or m["expected_optimizer_steps"] != (2 if engineering else 25200)):
         raise ValueError("execution schema/lineage/control mismatch")
-    snapshot = validate_frozen_snapshot(m["prepared_path"], m["preparation"])
     expected_root = snapshot.path.parent / ("engineering-executions" if engineering else "executions") / snapshot.manifest_digest
     if artifact.path.parent != expected_root:
         raise ValueError("execution ownership path mismatch")
@@ -197,27 +222,33 @@ def open_execution(root):
     return Execution(artifact, snapshot, config)
 
 
-def _lineage(execution, architecture, fold, temporal="explicit_day_phase"):
-    if type(fold) is not int or (architecture, fold, temporal) not in LINEAGES:
+def _lineage(execution, architecture, fold, temporal=None):
+    temporal = execution.temporal_condition if temporal is None else temporal
+    if type(fold) is not int or (architecture, fold, temporal) not in study_lineages(execution.snapshot):
         raise ValueError("unknown backbone lineage")
-    return execution.root / "runs" / architecture / str(fold)
+    base = execution.root / "runs" / architecture
+    return base / temporal / str(fold) if execution.paired else base / str(fold)
 
 
 def _binding(execution, architecture, fold):
     _lineage(execution, architecture, fold)
     initial = next(r for r in execution.snapshot.manifest["initializations"] if r["architecture"] == architecture and r["fold"] == fold)
+    # Paired randomization uses preregistered controls; provenance stays in the binding.
+    training_rng = {"version": execution.manifest["training_rng_version"],
+                    "protocol_seed": execution.config.rng_seed, "architecture": architecture, "fold": fold}
+    if not execution.paired:
+        training_rng["study"] = execution.snapshot.manifest_digest
     return {"execution_digest": execution.artifact.manifest_digest, "preparation": execution.manifest["preparation"],
-        "architecture": architecture, "fold": fold, "temporal_condition": "explicit_day_phase",
+        "architecture": architecture, "fold": fold, "temporal_condition": execution.temporal_condition,
         "graph": graph_identity(architecture), "initialization": initial,
         "optimizer_protocol": execution.snapshot.manifest["protocol_inputs"]["design"]["reference_protocol"],
         "schedule_digest": _hash(execution.schedule(fold)), "execution_source": execution.manifest["execution_source"],
-        "training_rng": {"version": RNG_VERSION, "protocol_seed": execution.config.rng_seed,
-                         "study": execution.snapshot.manifest_digest, "architecture": architecture, "fold": fold},
+        "training_rng": training_rng,
         "engineering_only": execution.manifest["engineering_only"]}
 
 
 def _reset_rng(binding):
-    seed = int.from_bytes(digest_fields(RNG_VERSION, binding["training_rng"]), "big") % 2**32
+    seed = int.from_bytes(digest_fields(binding["training_rng"]["version"], binding["training_rng"]), "big") % 2**32
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -226,12 +257,13 @@ def _reset_rng(binding):
 
 
 def _model_optimizer(execution, architecture, fold):
-    provider = TemporalCodeProvider.explicit(execution.snapshot.path / "temporal", execution.snapshot.manifest["study_digest"])
+    constructor = TemporalCodeProvider.implicit if execution.temporal_condition == "implicit" else TemporalCodeProvider.explicit
+    provider = constructor(execution.snapshot.path / "temporal", execution.snapshot.manifest["study_digest"])
     model = BackboneToM(architecture, provider, study_seed=execution.config.initialization_seed, fold=fold).to(execution.config.device)
     binding = _binding(execution, architecture, fold)
     prepared.load_initial_state(execution.snapshot.path / "initial" / architecture / str(fold), model,
         study_digest=execution.snapshot.manifest["study_digest"], study_seed=execution.config.initialization_seed,
-        fold=fold, expected_digest=binding["initialization"]["state_digest"])
+        fold=fold, expected_digest=binding["initialization"]["state_digest"], paired=execution.paired)
     # Last construction/restore operation precedes the frozen training RNG reset.
     _reset_rng(binding)
     c = execution.config
@@ -440,9 +472,9 @@ def _train(execution, architecture, fold, *, interrupt_after=None):
             'peak_reserved_bytes': torch.cuda.max_memory_reserved() if execution.config.device == 'cuda' else None}
 
 
-def _process_entry(root, expected_digest, architecture, fold, interrupt_after, connection):
+def _process_entry(root, expected_digest, architecture, fold, interrupt_after, connection, temporal_condition="explicit_day_phase"):
     try:
-        execution = open_execution(root)
+        execution = open_execution(root).for_condition(temporal_condition)
         if execution.artifact.manifest_digest != expected_digest:
             raise ValueError('execution changed before process start')
         result = _train(execution, architecture, fold, interrupt_after=interrupt_after)
@@ -455,15 +487,17 @@ def _process_entry(root, expected_digest, architecture, fold, interrupt_after, c
         connection.close()
 
 
-def run_lineage(root, architecture, fold, *, interrupt_after=None):
-    execution = open_execution(root)
+def run_lineage(root, architecture, fold, *, temporal_condition="explicit_day_phase", interrupt_after=None):
+    execution = open_execution(root).for_condition(temporal_condition)
     _lineage(execution, architecture, fold)
-    with _lock(execution.root / 'execution.lock', shared=True), _lock(execution.root / 'locks' / f'{architecture}-{fold}.lock'):
+    lock_name = f'{architecture}-{execution.temporal_condition}-{fold}' if execution.paired else f'{architecture}-{fold}'
+    with _lock(execution.root / 'execution.lock', shared=True), _lock(execution.root / 'locks' / f'{lock_name}.lock'):
         _training_gate(execution)
         context = multiprocessing.get_context('spawn')
         reader, writer = context.Pipe(duplex=False)
-        process = context.Process(target=_process_entry, args=(str(execution.root), execution.artifact.manifest_digest,
-                                  architecture, fold, interrupt_after, writer))
+        arguments = (str(execution.root), execution.artifact.manifest_digest,
+                     architecture, fold, interrupt_after, writer, execution.temporal_condition)
+        process = context.Process(target=_process_entry, args=arguments)
         process.start()
         writer.close()
         try:
@@ -484,19 +518,23 @@ def seal_execution(root):
     execution = open_execution(root)
     with _lock(execution.root / 'execution.lock'):
         runs = execution.root / 'runs'
-        if not runs.is_dir() or {p.name for p in runs.iterdir()} != set(ARCHITECTURES):
-            raise ValueError('seal requires all twenty lineages')
-        for a in ARCHITECTURES:
-            if {p.name for p in (runs / a).iterdir()} != {str(f) for f in range(5)}:
+        architectures = prepared._architectures(execution.snapshot.manifest['protocol_inputs']['design'])
+        if not runs.is_dir() or {p.name for p in runs.iterdir()} != set(architectures):
+            raise ValueError('seal requires the complete architecture inventory')
+        for a in architectures:
+            directories = tuple(runs / a / t for t in prepared.PAIRED_CONDITIONS) if execution.paired else (runs / a,)
+            if execution.paired and {p.name for p in (runs / a).iterdir()} != set(prepared.PAIRED_CONDITIONS):
+                raise ValueError('missing paired temporal lineage prevents seal')
+            if any({p.name for p in directory.iterdir()} != {str(f) for f in range(5)} for directory in directories):
                 raise ValueError('missing or duplicate lineage prevents seal')
         entries = []
-        for a, f, t in LINEAGES:
-            terminal = validate_terminal(execution, a, f)
+        for a, f, t in study_lineages(execution.snapshot):
+            terminal = validate_terminal(execution.for_condition(t), a, f)
             entries.append({'architecture': a, 'fold': f, 'temporal_condition': t, 'terminal_digest': terminal.manifest_digest})
         _source_gate(execution)
         return publish_artifact(execution.root / 'seal', manifest_fields={
             'artifact_type': 'backbone_engineering_seal' if execution.manifest['engineering_only'] else 'backbone_execution_seal',
-            'schema_version': SEAL_VERSION, 'execution_digest': execution.artifact.manifest_digest,
+            'schema_version': PAIRED_SEAL_VERSION if execution.paired else SEAL_VERSION, 'execution_digest': execution.artifact.manifest_digest,
             'preparation': execution.manifest['preparation'], 'execution_source': execution.manifest['execution_source'],
             'terminals': entries, 'graphs': execution.snapshot.manifest['protocol_inputs']['graphs'],
             'initializations': execution.snapshot.manifest['initializations']}, files={})

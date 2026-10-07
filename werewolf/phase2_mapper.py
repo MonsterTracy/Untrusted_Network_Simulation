@@ -19,6 +19,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from werewolf.artifact_io import verify_artifact
 from werewolf import phase2_offline as offline
+from werewolf.phase2_q_representation import REPRESENTATION_VERSION, condition_id
 
 
 FEATURE_CONTRACT_VERSION = "phase2_compact_r2_mapper_v1"
@@ -72,48 +73,103 @@ class OOFProvenance:
     evaluation_seal_digest: str
     evaluation_contract_digest: str
     prediction_digest_by_fold: dict[int, str]
+    paired_experiment_digest: str | None = None
+    temporal_condition: str = "explicit_day_phase"
+    q_representation: str = "continuous"
+    source_revision: str | None = None
+
+    @property
+    def experiment_a(self):
+        if self.paired_experiment_digest is None:
+            return None
+        return {"condition": condition_id(self.temporal_condition, self.q_representation),
+                "paired_experiment_digest": self.paired_experiment_digest,
+                "architecture": "qwen3", "temporal_condition": self.temporal_condition,
+                "q_representation": self.q_representation,
+                "representation_version": REPRESENTATION_VERSION,
+                "mapper_spec": MODEL_SPECS[3].name, "source_revision": self.source_revision,
+                "publication_digest": offline.PUBLICATION_DIGEST,
+                "fold_manifest_digest": offline.FOLD_MANIFEST_DIGEST}
+
+    @property
+    def identity_digest(self):
+        return _digest(self.record())
 
     def __post_init__(self) -> None:
-        if (self.evaluation_seal_digest != offline.OOF_SEAL_DIGEST
+        if ((self.paired_experiment_digest is None and self.evaluation_seal_digest != offline.OOF_SEAL_DIGEST)
                 or set(self.prediction_digest_by_fold) != set(FOLDS)
                 or any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
-                       for value in (self.evaluation_contract_digest,
+                       for value in (self.evaluation_seal_digest, self.evaluation_contract_digest,
                                      *self.prediction_digest_by_fold.values()))):
             raise MapperProtocolError("invalid sealed Qwen3 OOF provenance")
+        if self.paired_experiment_digest is None:
+            if (self.temporal_condition != "explicit_day_phase" or self.q_representation != "continuous"
+                    or self.source_revision is not None):
+                raise MapperProtocolError("historical OOF identity cannot become Experiment A")
+        else:
+            condition_id(self.temporal_condition, self.q_representation)
+            if (re.fullmatch(r"[0-9a-f]{64}", self.paired_experiment_digest) is None
+                    or not isinstance(self.source_revision, str)
+                    or re.fullmatch(r"[0-9a-f]{40}", self.source_revision) is None):
+                raise MapperProtocolError("invalid paired experiment/source identity")
 
     @classmethod
-    def from_evaluation_root(cls, root: Path | str) -> OOFProvenance:
+    def from_evaluation_root(cls, root: Path | str, *, paired_experiment_digest=None,
+                             temporal_condition="explicit_day_phase", q_representation="continuous",
+                             expected_seal_digest=None) -> OOFProvenance:
         root = Path(root)
+        paired = paired_experiment_digest is not None
+        if paired:
+            from werewolf.tom import backbone_evaluation as evaluation
+            condition_id(temporal_condition, q_representation)
+            if not isinstance(expected_seal_digest, str) or re.fullmatch(r"[0-9a-f]{64}", expected_seal_digest) is None:
+                raise MapperProtocolError("paired OOF requires an explicit seal trust anchor")
+        elif temporal_condition != "explicit_day_phase" or q_representation != "continuous" or expected_seal_digest not in (None, offline.OOF_SEAL_DIGEST):
+            raise MapperProtocolError("historical OOF representation/condition mismatch")
         contract = verify_artifact(root / "contract",
             expected_artifact_type="backbone_oof_evaluation_contract",
-            expected_schema_version="classic7_backbone_oof_evaluation_v1")
+            expected_schema_version=evaluation.PAIRED_VERSION if paired else "classic7_backbone_oof_evaluation_v1")
         seal = verify_artifact(root / "seal",
             expected_artifact_type="backbone_oof_evaluation_report",
-            expected_schema_version="classic7_backbone_oof_report_v1")
-        if (seal.manifest_digest != offline.OOF_SEAL_DIGEST
+            expected_schema_version=evaluation.PAIRED_REPORT_VERSION if paired else "classic7_backbone_oof_report_v1")
+        if (seal.manifest_digest != (expected_seal_digest if paired else offline.OOF_SEAL_DIGEST)
                 or seal.manifest["evaluation_digest"] != contract.manifest_digest):
             raise MapperProtocolError("unexpected OOF evaluation seal")
+        if paired and (seal.manifest["paired_experiment_digest"] != paired_experiment_digest
+                       or contract.manifest["preparation"]["manifest_digest"] != paired_experiment_digest
+                       or seal.manifest["preparation"] != contract.manifest["preparation"]
+                       or seal.manifest["training_source"] != contract.manifest["training_source"]
+                       or seal.manifest["training_source"]["source_revision"] != contract.manifest["training_revision"]
+                       or seal.manifest["training_seal_digest"] != contract.manifest["training_seal_digest"]):
+            raise MapperProtocolError("paired OOF parent/source mismatch")
         descriptors = [row for row in seal.manifest["predictions"]
-                       if row["architecture"] == "qwen3"]
+                       if row["architecture"] == "qwen3" and (not paired or row["temporal_condition"] == temporal_condition)]
         predictions = {row["fold"]: row["prediction_digest"] for row in descriptors}
         if len(descriptors) != 5 or set(predictions) != set(FOLDS):
             raise MapperProtocolError("Qwen3 OOF fold manifest incomplete or duplicated")
         for fold in FOLDS:
-            artifact = verify_artifact(root / "folds" / "qwen3" / str(fold),
+            path = (evaluation.prediction_path(root, "qwen3", fold, temporal_condition, paired=True)
+                    if paired else root / "folds" / "qwen3" / str(fold))
+            artifact = verify_artifact(path,
                 expected_artifact_type="backbone_oof_fold_predictions",
-                expected_schema_version="classic7_backbone_oof_predictions_v1")
+                expected_schema_version=evaluation.PAIRED_PREDICTION_VERSION if paired else "classic7_backbone_oof_predictions_v1")
             if (artifact.manifest_digest != predictions[fold]
                     or artifact.manifest["evaluation_digest"] != contract.manifest_digest
                     or artifact.manifest["architecture"] != "qwen3"
-                    or artifact.manifest["fold"] != fold):
+                    or artifact.manifest["fold"] != fold
+                    or (paired and (artifact.manifest["temporal_condition"] != temporal_condition
+                                    or artifact.manifest["training_seal_digest"] != seal.manifest["training_seal_digest"]))):
                 raise MapperProtocolError("Qwen3 OOF fold prediction lineage mismatch")
-        return cls(seal.manifest_digest, seal.manifest["evaluation_digest"], predictions)
+        return cls(seal.manifest_digest, seal.manifest["evaluation_digest"], predictions,
+                   paired_experiment_digest, temporal_condition, q_representation,
+                   contract.manifest["training_revision"] if paired else None)
 
     def record(self) -> dict:
         return {"evaluation_seal_digest": self.evaluation_seal_digest,
                 "evaluation_contract_digest": self.evaluation_contract_digest,
                 "prediction_digest_by_fold": {str(f): self.prediction_digest_by_fold[f]
-                                              for f in FOLDS}}
+                                              for f in FOLDS},
+                **({"experiment_a": self.experiment_a} if self.experiment_a is not None else {})}
 
 
 @dataclass(frozen=True)
@@ -216,6 +272,8 @@ def validate_rows(rows: tuple[offline.CandidateRow, ...],
         game_folds[row.game_id] = row.fold
         if row.fold not in oof.prediction_digest_by_fold:
             raise MapperProtocolError("candidate has no held-out OOF fold")
+        if row.evidence_identity_digest != (oof.identity_digest if oof.experiment_a is not None else None):
+            raise MapperProtocolError("candidate Q representation/temporal identity mismatch")
         _numeric_matrix((row,), CONTEXT_NUMERIC + EVIDENCE)
     return game_folds
 
@@ -271,6 +329,7 @@ class FittedMapper:
                 or any(row.fold != self.mapper_fold for row in rows)
                 or self.manifest["oof_q"] != oof.record()):
             raise MapperProtocolError("prediction is not on this held-out mapper fold")
+        validate_rows(rows, oof)
         x = self.preprocessor.transform(rows)
         scores = self.estimator.decision_function(x)
         probabilities = self.estimator.predict_proba(x)[:, 1]
@@ -289,6 +348,8 @@ def _fit_mapper(rows: tuple[offline.CandidateRow, ...], spec: ModelSpec,
         raise MapperProtocolError("unknown fixed mapper spec/fold")
     if mapper_fold is not None and mapper_fold in set(game_folds.values()):
         raise MapperProtocolError("held-out mapper fold entered training data")
+    if oof.experiment_a is not None and spec != MODEL_SPECS[3]:
+        raise MapperProtocolError("Experiment A requires fixed M3")
     y = np.asarray([int(row.theta_ac) for row in rows], dtype=np.int64)
     if len(np.unique(y)) != 2:
         raise MapperProtocolError("binary likelihood requires both training classes")
@@ -322,6 +383,7 @@ def _fit_mapper(rows: tuple[offline.CandidateRow, ...], spec: ModelSpec,
         "regularizer": {"type": "L2_nonintercept", "C": spec.l2_inverse_strength},
         "coefficient": estimator.coef_[0].tolist(),
         "intercept": float(estimator.intercept_[0]),
+        **({"experiment_a": oof.experiment_a} if oof.experiment_a is not None else {}),
     }
     manifest["model_digest"] = _digest(manifest)
     return FittedMapper(spec, preprocessor, estimator, manifest, mapper_fold)
@@ -434,7 +496,7 @@ def run_mapper_cv(rows: tuple[offline.CandidateRow, ...],
         raise MapperProtocolError("mapper CV requires all five development folds")
     predictions, manifests = [], []
     metrics = {}
-    for spec in MODEL_SPECS:
+    for spec in ((MODEL_SPECS[3],) if oof.experiment_a is not None else MODEL_SPECS):
         spec_predictions = []
         for fold in FOLDS:
             train, held_out = split_game_fold(rows, fold, oof)

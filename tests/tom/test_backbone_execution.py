@@ -17,13 +17,13 @@ from werewolf.tom.experiment import ExperimentConfig, runtime_provenance
 from werewolf.tom.protocol import training_schedule
 
 
-def _engineering_process(root, expected, a, fold, interrupt, connection):
+def _engineering_process(root, expected, a, fold, interrupt, connection, temporal_condition):
     """Fresh process, real worker; substitute only synthetic fixture external facts."""
     metadata = json.loads((Path(root) / 'contract/manifest.json').read_bytes())
     snapshot = json.loads((Path(metadata['prepared_path']) / 'manifest.json').read_bytes())
     p._frozen_design = lambda: deepcopy(snapshot['protocol_inputs']['design'])
     e.attest_source = lambda: dict(metadata['execution_source'])
-    e._process_entry(root, expected, a, fold, interrupt, connection)
+    e._process_entry(root, expected, a, fold, interrupt, connection, temporal_condition)
 
 
 @pytest.fixture(scope='module')
@@ -108,6 +108,9 @@ def test_unknown_lineage_rejected(fixture):
 
 def test_training_rng_reset_follows_all_construction(fixture, monkeypatch):
     execution = fixture[2]
+    assert e._binding(execution, 'qwen2', 0)['training_rng'] == {
+        'version': 'backbone_training_rng_v1', 'protocol_seed': execution.config.rng_seed,
+        'study': execution.snapshot.manifest_digest, 'architecture': 'qwen2', 'fold': 0}
     model, optimizer = e._model_optimizer(execution, 'qwen2', 0)
     expected = e.training._rng_capture()
     constructor = e.BackboneToM
@@ -203,3 +206,17 @@ def test_all_twenty_validate_before_engineering_seal(completed):
         e.run_lineage(execution.root, 'gpt2', 0)
     with pytest.raises(ValueError):
         verify_artifact(seal.path, expected_artifact_type='backbone_execution_seal', expected_schema_version=e.SEAL_VERSION)
+
+
+def test_public_worker_default_remains_historical_explicit(fixture):
+    root, study, _, _ = fixture
+    clone = root / "default-worker/prepared"
+    shutil.copytree(study.path, clone)
+    execution = e.create_execution(clone, study.manifest_digest, engineering=True)
+    result = e.run_lineage(execution.root, "qwen3", 1)
+    terminal = e.validate_terminal(execution, "qwen3", 1)
+    assert terminal.manifest["binding"]["temporal_condition"] == "explicit_day_phase"
+    assert execution.manifest["schema_version"] == e.EXECUTION_VERSION
+    assert execution.manifest["training_rng_version"] == e.RNG_VERSION
+    assert result["terminal_digest"] == terminal.manifest_digest
+    assert (execution.root / "runs/qwen3/1/terminal").is_dir()

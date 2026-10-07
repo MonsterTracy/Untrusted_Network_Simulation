@@ -42,9 +42,9 @@ def configure_synthetic(monkeypatch, tmp_path):
         "source_sha256": {path: "b" * 64 for path in study.SOURCE_FILES},
     })
     monkeypatch.setattr(study.OOFProvenance, "from_evaluation_root",
-                        classmethod(lambda cls, root: oof))
+                        classmethod(lambda cls, root, **_kwargs: oof))
     monkeypatch.setattr(study.offline, "build_development_layer",
-                        lambda publication, evaluation: layer)
+                        lambda publication, evaluation, **_kwargs: layer)
     monkeypatch.setattr(study.offline, "EXPECTED_GAMES", 5)
     monkeypatch.setattr(study.offline, "EXPECTED_PRE", 5)
     monkeypatch.setattr(study.offline, "EXPECTED_CANDIDATES", 20)

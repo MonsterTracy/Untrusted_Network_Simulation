@@ -23,6 +23,7 @@ def build_parser():
     backbone_run.add_argument("--execution", type=Path, required=True)
     backbone_run.add_argument("--architecture", choices=("gpt2", "qwen2", "qwen3", "gemma3_text"), required=True)
     backbone_run.add_argument("--fold", type=int, choices=range(5), required=True)
+    backbone_run.add_argument("--temporal-condition", choices=("explicit_day_phase", "implicit"), default="explicit_day_phase")
     backbone_seal = commands.add_parser("seal-backbone-tom-study")
     backbone_seal.add_argument("--execution", type=Path, required=True)
     backbone_evaluation = commands.add_parser("prepare-backbone-tom-evaluation")
@@ -34,12 +35,14 @@ def build_parser():
     backbone_predict.add_argument("--evaluation", type=Path, required=True)
     backbone_predict.add_argument("--architecture", choices=("gpt2", "qwen2", "qwen3", "gemma3_text"), required=True)
     backbone_predict.add_argument("--fold", type=int, choices=range(5), required=True)
+    backbone_predict.add_argument("--temporal-condition", choices=("explicit_day_phase", "implicit"), default="explicit_day_phase")
     backbone_report = commands.add_parser("seal-backbone-tom-evaluation")
     backbone_report.add_argument("--evaluation", type=Path, required=True)
     backbone = commands.add_parser("prepare-backbone-tom-study")
     backbone.add_argument("--config", type=Path, required=True)
     backbone.add_argument("--publication", type=Path, required=True)
     backbone.add_argument("--destination", type=Path, required=True)
+    backbone.add_argument("--paired-temporal", action="store_true", help="Experiment A: paired Qwen3 explicit/implicit development folds")
     backbone_open = commands.add_parser("open-backbone-tom-study")
     backbone_open.add_argument("--study", type=Path, required=True)
     qwen3_prepare = commands.add_parser("prepare-qwen3-final-fit")
@@ -271,7 +274,7 @@ def main(argv=None):
             artifact = prepare_evaluation(_artifact_path(root, args.execution), args.execution_digest,
                                           args.seal_digest, args.training_revision)
         elif args.command == "evaluate-backbone-tom-fold":
-            artifact = evaluate_fold(_artifact_path(root, args.evaluation), args.architecture, args.fold)
+            artifact = evaluate_fold(_artifact_path(root, args.evaluation), args.architecture, args.fold, temporal_condition=args.temporal_condition)
         else:
             artifact = seal_evaluation(_artifact_path(root, args.evaluation))
         print(artifact.manifest_digest)
@@ -283,7 +286,7 @@ def main(argv=None):
                                          engineering=args.engineering)
             print(json.dumps({"execution": str(execution.root), "digest": execution.artifact.manifest_digest}))
         elif args.command == "run-backbone-tom-study":
-            print(json.dumps(run_lineage(_artifact_path(root, args.execution), args.architecture, args.fold)))
+            print(json.dumps(run_lineage(_artifact_path(root, args.execution), args.architecture, args.fold, temporal_condition=args.temporal_condition)))
         else:
             print(seal_execution(_artifact_path(root, args.execution)).manifest_digest)
         return 0
@@ -292,7 +295,7 @@ def main(argv=None):
         if args.command == "prepare-backbone-tom-study":
             artifact = prepare_study(args.config,
                 _artifact_path(root, args.publication, "publications"),
-                _artifact_path(root, args.destination))
+                _artifact_path(root, args.destination), paired_temporal=args.paired_temporal)
         else:
             artifact = open_study(_artifact_path(root, args.study))
         print(artifact.manifest_digest)

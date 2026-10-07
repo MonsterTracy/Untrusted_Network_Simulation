@@ -32,12 +32,17 @@ def test_evaluation_source_is_independent_but_inference_bytes_are_frozen(monkeyp
             "werewolf/development_publication.py"} <= set(m.INFERENCE_SOURCES)
     old_runtime = {"source_revision": "reference-scientific-revision", "implementation_digest": "a" * 64,
                    "torch": "frozen"}
-    owner = SimpleNamespace(execution=SimpleNamespace(config=object(), manifest={
+    owner = SimpleNamespace(execution=SimpleNamespace(config=object(), paired=False, manifest={
         "runtime": old_runtime, "execution_source": {"source_revision": revision,
         "implementation_digest": "a" * 64}}))
     current = {**old_runtime, "implementation_digest": "b" * 64}
     monkeypatch.setattr(training, "_runtime", lambda _: ({"source_revision": "c" * 40,
         "implementation_digest": "b" * 64}, current))
+    # This research change must not bypass historical source-byte guards.
+    with pytest.raises(ValueError, match="historical inference source changed"):
+        m._evaluation_source(owner)
+    # The remaining checks exercise the historical gate on an unchanged source.
+    monkeypatch.setattr(m, "INFERENCE_SOURCES", ("werewolf/canonical_collection/public_history.py",))
     source, runtime = m._evaluation_source(owner)
     assert source["source_revision"] != revision
     assert runtime["implementation_digest"] != old_runtime["implementation_digest"]
