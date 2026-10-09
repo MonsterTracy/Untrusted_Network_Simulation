@@ -9,9 +9,7 @@ from tests.phase2.test_decision_opportunity import opportunity
 from werewolf.phase2_actions import Action
 from werewolf.phase2_intervention import (
     CHECKPOINT_BLOCKERS, CheckpointUnavailable,
-    assess_phase2_checkpoint_closure, capture_intervention_checkpoint,
-    clone_phase2_checkpoint, plan_paired_branches,
-    restore_intervention_checkpoint, run_intervention_branch,
+    assess_phase2_checkpoint_closure,
     validate_treatment_checkpoint_binding,
 )
 from werewolf.phase2_treatment import build_phase2_treatment
@@ -60,7 +58,7 @@ def test_closure_assessment_is_deterministic_but_never_executable():
             replace(closure, acting_wolf="player5"))
 
 
-def test_live_pre_drift_is_rejected_and_all_checkpoint_entry_points_fail_closed():
+def test_live_pre_drift_is_rejected():
     opp = opportunity()
     env, recorder = live_slot(opp)
     env.phase = "vote"
@@ -70,21 +68,3 @@ def test_live_pre_drift_is_rejected_and_all_checkpoint_entry_points_fail_closed(
     recorder._pending.handoff.observer_id = "player5"
     with pytest.raises(CheckpointUnavailable, match="PRE differs"):
         assess_phase2_checkpoint_closure(opp, env=env, recorder=recorder)
-    for operation in (capture_intervention_checkpoint,
-                      clone_phase2_checkpoint, restore_intervention_checkpoint,
-                      run_intervention_branch):
-        with pytest.raises(CheckpointUnavailable):
-            operation()
-
-
-def test_paired_branch_identity_is_deterministic_and_arm_specific():
-    opp = opportunity()
-    arms = tuple(build_phase2_treatment(
-        opp, action, assignment_source="paired_branch",
-        assignment_probability=1, randomization_key="paired")
-        for action in (Action.PUSH, Action.REDIRECT, Action.PROBE))
-    first = plan_paired_branches("checkpoint-id", arms, downstream_seed=123)
-    second = plan_paired_branches("checkpoint-id", arms, downstream_seed=123)
-    assert first == second
-    assert len({arm.branch_identity for arm in first}) == len(arms)
-    assert all(not arm.executable for arm in first)

@@ -1,4 +1,7 @@
-"""Fail-closed intervention planning and a versioned live-state closure audit."""
+"""Identity-bound live PRE audit for canonical intervention commits.
+
+The closure is a drift fingerprint, not a restorable gameplay checkpoint.
+"""
 
 from __future__ import annotations
 
@@ -147,55 +150,3 @@ def validate_treatment_checkpoint_binding(opportunity: Phase2DecisionOpportunity
             or closure.identity != opportunity.identity[:5]
             or closure.public_history_digest != opportunity.legal_context.public_history_digest):
         raise CheckpointUnavailable("treatment/opportunity/checkpoint PRE mismatch")
-
-
-@dataclass(frozen=True)
-class PlannedBranchV1:
-    checkpoint_identity: str
-    treatment_id: str
-    opportunity_digest: str
-    downstream_seed: int
-    branch_identity: str
-    executable: bool = False
-
-    def __post_init__(self):
-        if (not self.checkpoint_identity or not self.treatment_id or
-                type(self.downstream_seed) is not int or self.downstream_seed < 0 or
-                self.executable or self.branch_identity != sha256_bytes(canonical_json_bytes([
-                    self.checkpoint_identity, self.treatment_id, self.downstream_seed]))):
-            raise CheckpointUnavailable("branch lacks a verified full-state checkpoint")
-
-
-def capture_intervention_checkpoint(*_args, **_kwargs):
-    raise CheckpointUnavailable(
-        "complete PRE clone/restore of environment, agents, recorder, backend and RNG is unimplemented")
-
-
-def restore_intervention_checkpoint(*_args, **_kwargs):
-    raise CheckpointUnavailable("no verified full-state checkpoint can be restored")
-
-
-def clone_phase2_checkpoint(*_args, **_kwargs):
-    raise CheckpointUnavailable("no verified full-state checkpoint can be cloned")
-
-
-def run_intervention_branch(*_args, **_kwargs):
-    raise CheckpointUnavailable("intervention branches cannot run from a public PRE or plan")
-
-
-def plan_paired_branches(checkpoint_identity: str, treatments: tuple[Phase2TreatmentV1, ...],
-                         *, downstream_seed: int) -> tuple[PlannedBranchV1, ...]:
-    """Record deterministic intent only; no branch outcome may be fabricated."""
-    if (not isinstance(checkpoint_identity, str) or not checkpoint_identity
-            or not treatments or type(downstream_seed) is not int or downstream_seed < 0
-            or any(not isinstance(treatment, Phase2TreatmentV1)
-                   or treatment.assignment_source != "paired_branch" for treatment in treatments)
-            or len({treatment.treatment_id for treatment in treatments}) != len(treatments)
-            or len({treatment.opportunity_digest for treatment in treatments}) != 1
-            or len({treatment.action for treatment in treatments}) != len(treatments)):
-        raise CheckpointUnavailable("paired branches require one opportunity and unique controlled arms")
-    return tuple(PlannedBranchV1(
-        checkpoint_identity, treatment.treatment_id, treatment.opportunity_digest,
-        downstream_seed, sha256_bytes(canonical_json_bytes([
-            checkpoint_identity, treatment.treatment_id, downstream_seed])))
-        for treatment in treatments)

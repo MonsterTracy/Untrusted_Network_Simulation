@@ -1,6 +1,6 @@
 # Phase-2 Online Pilot-T：执行前 runbook
 
-**状态：服务器 qualification 已完成并通过人工审阅；正式 120-assignment Pilot-T 尚未冻结或启动。** 已核验 qualification manifest digest 为 `7f0154666b6df570b403a6718c7bd3927b4893c6ca383fe07065b518f589dec3`，source 为 `4d0d78a76e1ab51d038208f4ce1b4e982cdd32c3`。下文长命令保留为底层 CLI 说明和历史 qualification 操作记录；不得据此重跑已完成 qualification。主 protocol 是自然游戏中一次性在线随机 P/N 干预。完整 PRE checkpoint/restore 只用于未来可选的 paired-counterfactual replay；它不再是在线因果识别的前置条件。
+**阅读入口：** 当前阶段见 [工程状态](phase2-current-status.md)。本文按开发时间追加，早期段落的“尚未启动”、λ 后续计划和恢复描述是历史记录；当前行为以相应冻结协议、profile 及 production source 为准。正式 Terminal 的 120-row ITT 已冻结，Probe Formal profile 已冻结；不要据旧命令重跑已完成实验。下文保留 qualification manifest `7f0154666b6df570b403a6718c7bd3927b4893c6ca383fe07065b518f589dec3`、source `4d0d78a76e1ab51d038208f4ce1b4e982cdd32c3` 及底层 CLI 操作记录。完整 PRE checkpoint/restore 不提供执行入口，也不是在线因果识别的前置条件。
 
 ## 方法和冻结顺序
 
@@ -40,7 +40,7 @@ qualification 与 formal artifact 名分别固定为 `paper-phase2-online-termin
 
 ## Preflight 与后续阶段
 
-`phase2_intervention_preflight.py` 只是 static capability diagnostic；不能用其有限参数认证真实 qualification。正式 runner 装配 runtime 后调用同一个 `assess_pilot_preflight` / `PilotPreflightV1`，分开 `online_randomized_pilot_ready` 和 `paired_branch_replay_ready`。Online Pilot-T 要求 clean tracked source、验证过的 frozen artifacts、运行时 Q/mapper lineage、冻结 V1 plan、Smoke-V3 canonical gate、现有 canonical commit/bound backend audit、持久化账本、reference table 及空目的地。checkpoint/branch replay 可以继续为 false，**不能因此使 online ready 失败**。CLI 的新增源码和已有 tracked 改动未提交时，正式预检应失败；无关 untracked 研究文档不阻断。完整 checkpoint 的剩余状态闭包及 fail-closed API 见 [checkpoint/commit contract](phase2-checkpoint-and-commit-contract.md)。
+`phase2_intervention_preflight.py` 只是 static capability diagnostic；不能用其有限参数认证真实 qualification。正式 runner 装配 runtime 后调用同一个 `assess_pilot_preflight` / `PilotPreflightV1`，分开 `online_randomized_pilot_ready` 和 `paired_branch_replay_ready`。Online Pilot-T 要求 clean tracked source、验证过的 frozen artifacts、运行时 Q/mapper lineage、冻结 V1 plan、Smoke-V3 canonical gate、现有 canonical commit/bound backend audit、持久化账本、reference table 及空目的地。checkpoint/branch replay 可以继续为 false，**不能因此使 online ready 失败**。CLI 的新增源码和已有 tracked 改动未提交时，正式预检应失败；无关 untracked 研究文档不阻断。live PRE 审计与完整 checkpoint 的缺失闭包见 [checkpoint/commit contract](phase2-checkpoint-and-commit-contract.md)。
 
 ## 正式服务器入口与输入
 

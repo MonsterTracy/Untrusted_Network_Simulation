@@ -1,4 +1,4 @@
-"""Explicit opt-in, single-path terminal and Probe pilots; no checkpoint replay.
+"""Explicit opt-in terminal/Probe pilots and Router policies; no checkpoint replay.
 
 Production orchestration shared by the server CLI and scripted tests.
 Default gameplay does not import or enable this module.
@@ -28,6 +28,7 @@ from werewolf.phase2_language import (
 from werewolf.phase2_online_plan import (
     OnlinePilotGameStateV1, Phase2OnlineTerminalPilotPlanV1,
     select_candidate, select_probe_candidate, Phase2OnlineProbePilotPlanV1, ProbeStrategy,
+    Phase2RouterPolicyV1,
 )
 from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
 from werewolf.phase2_online_records import (
@@ -69,15 +70,20 @@ def _legal_wolf_team(observation, actor: str) -> frozenset[str]:
 
 
 class OnlineTerminalPilotRunnerV1:
-    """One randomized strategy per game on the original canonical PRE path."""
+    """One initial assignment per game on the original canonical PRE path.
 
-    def __init__(self, *, plan: Phase2OnlineTerminalPilotPlanV1 | Phase2OnlineProbePilotPlanV1,
+    Router policies reuse the Probe path and require a write-ahead evidence
+    sink. Randomized campaign ledgers and preflight remain pilot-only.
+    """
+
+    def __init__(self, *, plan: Phase2OnlineTerminalPilotPlanV1 | Phase2OnlineProbePilotPlanV1 | Phase2RouterPolicyV1,
                  predictor, mapper,
                  backend, model_name: str, reference_tables,
                  reference_artifact_digest: str,
                  ledger: OnlinePilotAssignmentLedgerV1 | None = None,
                  record_evidence=None):
-        if (not isinstance(plan, (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1))
+        if (not isinstance(plan, (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1,
+                                  Phase2RouterPolicyV1))
                 or not callable(getattr(predictor, "predict", None))
                 or not isinstance(getattr(predictor, "seal_digest", None), str)
                 or not callable(getattr(mapper, "infer", None))
@@ -86,6 +92,8 @@ class OnlineTerminalPilotRunnerV1:
                 or not model_name
                 or reference_artifact_digest != reference_tables_digest(reference_tables)
                 or (isinstance(plan, Phase2OnlineProbePilotPlanV1) and ledger is None)
+                or (isinstance(plan, Phase2RouterPolicyV1)
+                    and (ledger is not None or not callable(record_evidence)))
                 or (record_evidence is not None and not callable(record_evidence))
                 or (ledger is not None and
                     (not isinstance(ledger, OnlinePilotAssignmentLedgerV1)
@@ -115,6 +123,12 @@ class OnlineTerminalPilotRunnerV1:
     def start_game(self, game_id: str) -> None:
         if not game_id or self._active_game_id is not None:
             raise ValueError("Pilot-T game is already active")
+        if isinstance(self.plan, Phase2RouterPolicyV1):
+            if game_id in self.state.games_seen:
+                raise ValueError("Router cannot replay a used game")
+            self.record_evidence("game-start", {
+                "game_id": game_id, "policy": self.plan.to_record(),
+                "policy_digest": self.plan.digest()})
         if self.ledger is not None:
             if self.ledger.status() != "RUNNING":
                 raise ValueError("Pilot-T target or safety cap reached")
@@ -127,7 +141,7 @@ class OnlineTerminalPilotRunnerV1:
         game_id = self._active_game_id
         if game_id is None or recorder.game_id != game_id:
             raise ValueError("online runner game/recorder identity mismatch")
-        if isinstance(self.plan, Phase2OnlineProbePilotPlanV1):
+        if isinstance(self.plan, (Phase2OnlineProbePilotPlanV1, Phase2RouterPolicyV1)):
             return self._handle_probe_pre(env=env, recorder=recorder, call_audit=call_audit,
                                           observation=observation, handoff=handoff)
         if game_id in self.state.assignments or observation.get("identity") != "Werewolf":
@@ -222,9 +236,9 @@ class OnlineTerminalPilotRunnerV1:
         record = replace(self.records[game_id],
                          lifecycle=self.records[game_id].lifecycle + (event,), **changes)
         validate_probe_lifecycle_record(record.to_record())
+        if self.record_evidence is not None:
+            self.record_evidence(f"strategy-{len(record.lifecycle):02d}-{event.lower()}", record)
         if self.ledger is not None:
-            if self.record_evidence is not None:
-                self.record_evidence(f"strategy-{len(record.lifecycle):02d}-{event.lower()}", record)
             self.ledger.persist_strategy_stage(record)
         self.records[game_id] = record
         return record
@@ -235,6 +249,11 @@ class OnlineTerminalPilotRunnerV1:
             self.ledger.persist_preparation_failure(
                 self._active_game_id, f"{type(error).__name__}: {error}", selection)
             return
+        if record is None and isinstance(self.plan, Phase2RouterPolicyV1):
+            self.record_evidence("preparation-failure", {
+                "game_id": self._active_game_id, "policy": self.plan.to_record(),
+                "selection": selection.to_record() if selection is not None else None,
+                "error": f"{type(error).__name__}: {error}"})
         if record is not None and record.lifecycle[-1] != "STRUCTURAL_FAILURE":
             self._probe_stage("STRUCTURAL_FAILURE",
                               structural_failure_reason=f"{type(error).__name__}: {error}")
@@ -243,10 +262,13 @@ class OnlineTerminalPilotRunnerV1:
                              treatment, stage):
         record = self.records[self._active_game_id]
         audit = Phase2BackendCallAuditV1(
-            opportunity, treatment, call_audit, pilot_id=self.plan.pilot_id,
+            opportunity, treatment, call_audit,
+            pilot_id=(self.plan.policy_id if isinstance(self.plan, Phase2RouterPolicyV1)
+                      else self.plan.pilot_id),
             assignment_id=record.assignment.digest(),
             sequence_offset=len(record.backend_calls),
-            record_sink=self.ledger.persist_backend_call if self.ledger else None)
+            record_sink=(self.ledger.persist_backend_call if self.ledger else
+                         lambda call: self.record_evidence("backend-call", call)))
         public = public_language_context_from_pre(prefix, opportunity.legal_context)
         prepared = prepare_phase2_intervention_speech(
             opportunity, treatment, public,
@@ -337,12 +359,15 @@ class OnlineTerminalPilotRunnerV1:
             if record is None:
                 assignment = self.state.try_assign(
                     self.plan, selection, opportunity,
-                    persist=self.ledger.persist_assignment if self.ledger else None)
+                    persist=(self.ledger.persist_assignment if self.ledger else
+                             lambda assignment: self.record_evidence("assignment", assignment)))
                 if assignment is None:
                     return None
                 self.records[game_id] = Phase2OnlineProbeRecordV1(assignment)
                 if self.ledger:
                     self.ledger.persist_strategy_stage(self.records[game_id])
+                else:
+                    self.record_evidence("strategy-01-assigned", self.records[game_id])
                 self._last_public_event_count = len(env.public_events)
                 self._probe_stage("T1_ATTEMPTED")
                 treatment = assignment.treatment
@@ -411,7 +436,7 @@ class OnlineTerminalPilotRunnerV1:
             raise ValueError("Pilot-T step has no active game")
         new_events = env.public_events[self._last_public_event_count:]
         self._last_public_event_count = len(env.public_events)
-        if isinstance(self.plan, Phase2OnlineProbePilotPlanV1):
+        if isinstance(self.plan, (Phase2OnlineProbePilotPlanV1, Phase2RouterPolicyV1)):
             return self._after_probe_step(env, new_events, done)
         record = self.records.get(game_id)
         if record is None or record.execution_success is not True or record.day_outcome is not None:
@@ -474,6 +499,8 @@ def run_online_game(env, agents, roles, *, recorder, call_audit,
     """The canonical loop is unchanged unless this explicit hook is supplied."""
     if not isinstance(pilot, OnlineTerminalPilotRunnerV1):
         raise TypeError("explicit online Pilot-T runner required")
+    if isinstance(pilot.plan, Phase2RouterPolicyV1):
+        raise TypeError("Router policy requires its own experiment admission, not randomized pilot preflight")
     from werewolf.phase2_online_preflight import PilotPreflightV1
     if (not isinstance(preflight, PilotPreflightV1)
             or preflight.online_randomized_pilot_ready is not True

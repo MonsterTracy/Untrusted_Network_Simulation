@@ -12,7 +12,7 @@ from werewolf.phase2_online_preflight import (
 )
 from werewolf.artifact_io import publish_artifact
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, sha256_bytes
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from werewolf.phase2_outcome import reference_tables_digest
 
 

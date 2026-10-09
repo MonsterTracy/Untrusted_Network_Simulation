@@ -1,4 +1,4 @@
-"""Frozen Pilot-T V1 candidate sampling, treatment assignment, and stopping."""
+"""Pilot and Router candidate sampling, assignment, and per-game limits."""
 
 from __future__ import annotations
 
@@ -29,6 +29,55 @@ class OnlinePilotPlanError(ValueError):
 class ProbeStrategy(str, Enum):
     IMMEDIATE_REDIRECT = "IMMEDIATE_REDIRECT"
     PROBE_THEN_REDIRECT = "PROBE_THEN_REDIRECT"
+
+
+@dataclass(frozen=True)
+class Phase2RouterPolicyV1:
+    """Deterministic strategy; only candidate selection uses a shared seed.
+
+    The sampling identity is common to both policies. It does not assert that
+    their game IDs, histories, or PREs are paired.
+    """
+
+    strategy: ProbeStrategy
+    candidate_sampling_id: str
+    candidate_seed: int
+    source_revision: str
+
+    def __post_init__(self):
+        if (not isinstance(self.strategy, ProbeStrategy)
+                or not isinstance(self.candidate_sampling_id, str)
+                or not self.candidate_sampling_id
+                or type(self.candidate_seed) is not int or self.candidate_seed < 0
+                or not isinstance(self.source_revision, str)
+                or len(self.source_revision) != 40
+                or any(c not in "0123456789abcdef" for c in self.source_revision)):
+            raise OnlinePilotPlanError("explicit Router policy and candidate sampling identity required")
+
+    @property
+    def policy_id(self) -> str:
+        return ("phase2-router-v1" if self.strategy is ProbeStrategy.PROBE_THEN_REDIRECT
+                else "phase2-router-v1-matched-control")
+
+    def candidate_sampling_record(self) -> dict:
+        return {"schema_version": "phase2_router_candidate_sampling_v1",
+                "candidate_sampling_id": self.candidate_sampling_id,
+                "candidate_seed": self.candidate_seed,
+                "source_revision": self.source_revision,
+                "candidate_selection_rule": PROBE_SELECTION_RULE}
+
+    def candidate_sampling_digest(self) -> str:
+        return sha256_bytes(canonical_json_bytes(self.candidate_sampling_record()))
+
+    def to_record(self) -> dict:
+        return {"schema_version": "phase2_router_policy_v1", "policy_id": self.policy_id,
+                "strategy": self.strategy.value,
+                "candidate_sampling": self.candidate_sampling_record(),
+                "assignment_source": "deterministic_policy", "assignment_probability": 1,
+                "max_assignments_per_game": 1}
+
+    def digest(self) -> str:
+        return sha256_bytes(canonical_json_bytes(self.to_record()))
 
 
 @dataclass(frozen=True)
@@ -196,23 +245,28 @@ def probe_candidate_pool(context: ActionContextV1) -> tuple[str, ...]:
     return tuple(j for j in context.legal_targets if probe_continuation(context, j) is not None)
 
 
-def select_probe_candidate(plan: Phase2OnlineProbePilotPlanV1,
+def select_probe_candidate(plan: Phase2OnlineProbePilotPlanV1 | Phase2RouterPolicyV1,
                            context: ActionContextV1) -> CandidateSelectionV1 | None:
-    if not isinstance(plan, Phase2OnlineProbePilotPlanV1):
+    if not isinstance(plan, (Phase2OnlineProbePilotPlanV1, Phase2RouterPolicyV1)):
         raise OnlinePilotPlanError("frozen PROBE strategy plan is required")
     pool = probe_candidate_pool(context)
     if not pool:
         return None
-    index, key = _uniform_index([PROBE_PLAN_VERSION, "candidate", plan.digest(),
-                                 plan.assignment_seed, context.game_id,
+    if isinstance(plan, Phase2RouterPolicyV1):
+        digest, seed = plan.candidate_sampling_digest(), plan.candidate_seed
+        version = "phase2_router_candidate_sampling_v1"
+    else:
+        digest, seed, version = plan.digest(), plan.assignment_seed, PROBE_PLAN_VERSION
+    index, key = _uniform_index([version, "candidate", digest,
+                                 seed, context.game_id,
                                  context.boundary_id, context.prefix_digest, list(pool)], len(pool))
     candidate = pool[index]
-    identity = [plan.digest(), context.game_id, context.boundary_id,
+    identity = [digest, context.game_id, context.boundary_id,
                 context.prefix_digest, list(pool), candidate, key, PROBE_SELECTION_RULE]
     return CandidateSelectionV1(PROBE_SELECTION_RULE, candidate, pool, 1 / len(pool),
-                                plan.assignment_seed, key, context.game_id,
+                                seed, key, context.game_id,
                                 context.boundary_id, context.prefix_digest,
-                                plan.digest(), sha256_bytes(canonical_json_bytes(identity)))
+                                digest, sha256_bytes(canonical_json_bytes(identity)))
 
 
 @dataclass(frozen=True)
@@ -291,6 +345,7 @@ class OnlineProbeAssignmentV1:
     assignment_seed: int
     assignment_key: str
     strategy: ProbeStrategy
+    policy: Phase2RouterPolicyV1 | None = None
 
     def __post_init__(self):
         if (not isinstance(self.selection, CandidateSelectionV1)
@@ -301,6 +356,16 @@ class OnlineProbeAssignmentV1:
         context = self.opportunity.legal_context
         action = (Action.REDIRECT if self.strategy is ProbeStrategy.IMMEDIATE_REDIRECT
                   else Action.PROBE)
+        source, probability = "randomized_pilot", 0.5
+        if self.policy is not None:
+            if (not isinstance(self.policy, Phase2RouterPolicyV1)
+                    or self.strategy is not self.policy.strategy
+                    or self.assignment_seed != self.policy.candidate_seed
+                    or select_probe_candidate(self.policy, context) != self.selection
+                    or self.assignment_key != _router_assignment_key(
+                        self.policy, self.selection, self.opportunity)):
+                raise OnlinePilotPlanError("Router assignment lost its policy/selection binding")
+            source, probability = "deterministic_policy", 1
         if (self.selection.rule != PROBE_SELECTION_RULE
                 or self.selection.candidate_j != self.opportunity.candidate_j
                 or self.selection.candidate_pool != probe_candidate_pool(context)
@@ -314,8 +379,8 @@ class OnlineProbeAssignmentV1:
                 or any(c not in "0123456789abcdef" for c in self.assignment_key)
                 or not {Action.REDIRECT, Action.PROBE}.issubset(self.opportunity.legal_actions)
                 or self.treatment != build_phase2_treatment(
-                    self.opportunity, action, assignment_source="randomized_pilot",
-                    assignment_probability=0.5, randomization_key=self.assignment_key)):
+                    self.opportunity, action, assignment_source=source,
+                    assignment_probability=probability, randomization_key=self.assignment_key)):
             raise OnlinePilotPlanError("PROBE strategy assignment differs from selected PRE")
 
     @property
@@ -332,7 +397,7 @@ class OnlineProbeAssignmentV1:
                 "observation_window": self.opportunity.observation_window.to_record()}
 
     def to_record(self) -> dict:
-        return {"schema_version": "phase2_online_probe_assignment_v1",
+        record = {"schema_version": "phase2_online_probe_assignment_v1",
                 "selection": self.selection.to_record(),
                 "opportunity": self.opportunity.to_record(),
                 "legal_action_set": [action.value for action in self.legal_action_set],
@@ -343,6 +408,13 @@ class OnlineProbeAssignmentV1:
                 "assignment_key": self.assignment_key,
                 "treatment": self.treatment.to_record(),
                 "continuation_schedule": self.continuation_schedule}
+        if self.policy is not None:
+            record["schema_version"] = "phase2_router_assignment_v1"
+            record["policy"] = self.policy.to_record()
+            record["policy_digest"] = self.policy.digest()
+            record["assignment_source"] = "deterministic_policy"
+            record["candidate_seed"] = record.pop("assignment_seed")
+        return record
 
     def digest(self) -> str:
         return sha256_bytes(canonical_json_bytes(self.to_record()))
@@ -372,6 +444,49 @@ def assign_probe_strategy(plan: Phase2OnlineProbePilotPlanV1,
         assignment_probability=0.5, randomization_key=key)
     return OnlineProbeAssignmentV1(selection, opportunity, treatment,
                                    plan.assignment_seed, key, strategy)
+
+
+def _router_assignment_key(policy, selection, opportunity) -> str:
+    return sha256_bytes(canonical_json_bytes([
+        "phase2_router_assignment_v1", policy.digest(),
+        selection.selection_digest, opportunity.digest()]))
+
+
+def assign_router_policy(policy: Phase2RouterPolicyV1, selection: CandidateSelectionV1,
+                         opportunity: Phase2DecisionOpportunityV1) -> OnlineProbeAssignmentV1:
+    """Bind a fixed strategy without calling either randomized assignment."""
+    if (not isinstance(policy, Phase2RouterPolicyV1)
+            or not isinstance(selection, CandidateSelectionV1)
+            or not isinstance(opportunity, Phase2DecisionOpportunityV1)):
+        raise OnlinePilotPlanError("typed Router policy, selection and opportunity required")
+    key = _router_assignment_key(policy, selection, opportunity)
+    action = (Action.PROBE if policy.strategy is ProbeStrategy.PROBE_THEN_REDIRECT
+              else Action.REDIRECT)
+    treatment = build_phase2_treatment(
+        opportunity, action, assignment_source="deterministic_policy",
+        assignment_probability=1, randomization_key=key)
+    return OnlineProbeAssignmentV1(selection, opportunity, treatment,
+                                   policy.candidate_seed, key, policy.strategy, policy)
+
+
+def router_assignment_from_record(raw: dict) -> OnlineProbeAssignmentV1:
+    """Reproduce deterministic policy evidence; never use a pilot loader."""
+    try:
+        policy_raw = raw["policy"]
+        sampling = policy_raw["candidate_sampling"]
+        policy = Phase2RouterPolicyV1(ProbeStrategy(policy_raw["strategy"]),
+                                     sampling["candidate_sampling_id"],
+                                     sampling["candidate_seed"], sampling["source_revision"])
+        opportunity = probe_opportunity_from_record(raw["opportunity"])
+        selection = select_probe_candidate(policy, opportunity.legal_context)
+        if selection is None:
+            raise OnlinePilotPlanError("Router record has no joint legal opportunity")
+        expected = assign_router_policy(policy, selection, opportunity)
+        if canonical_json_bytes(expected.to_record()) != canonical_json_bytes(raw):
+            raise OnlinePilotPlanError("stored Router assignment does not reproduce")
+        return expected
+    except (KeyError, TypeError, ValueError) as exc:
+        raise OnlinePilotPlanError("invalid or altered Router assignment record") from exc
 
 
 def probe_opportunity_from_record(raw: dict) -> Phase2DecisionOpportunityV1:
@@ -450,12 +565,16 @@ class OnlinePilotGameStateV1:
         self.mark_seen(game_id)
         if game_id in self.assignments:
             return None
-        if len(self.assignments) >= plan.target_assignment_count:
+        if (not isinstance(plan, Phase2RouterPolicyV1)
+                and len(self.assignments) >= plan.target_assignment_count):
             return None
         self.eligible_opportunities += 1
-        assignment = (assign_probe_strategy(plan, selection, opportunity)
-                      if isinstance(plan, Phase2OnlineProbePilotPlanV1)
-                      else assign_terminal_action(plan, selection, opportunity))
+        if isinstance(plan, Phase2RouterPolicyV1):
+            assignment = assign_router_policy(plan, selection, opportunity)
+        elif isinstance(plan, Phase2OnlineProbePilotPlanV1):
+            assignment = assign_probe_strategy(plan, selection, opportunity)
+        else:
+            assignment = assign_terminal_action(plan, selection, opportunity)
         if persist is not None:
             persist(assignment)  # durable write must succeed before runtime state or LLM
         self.assignments[game_id] = assignment

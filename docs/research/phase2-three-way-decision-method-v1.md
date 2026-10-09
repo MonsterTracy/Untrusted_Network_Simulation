@@ -1,5 +1,10 @@
 # Phase-2 Three-Way Decision：方法契约 V1
 
+> **历史方案，非当前执行契约。** 本文记录早期 Pilot-T 设计，正文保留供研究演进追溯。
+> 第 4–6 节的 `Phase2TerminalLossTableV1`、`Phase2ProbeValueModel` 和三支风险比较核已不在当前源码中；λ、Probe kernel/value 与经典阈值未获得识别，不能作为运行前置条件。
+> 当前入口见 [工程状态](phase2-current-status.md)；Terminal 以 [Estimator Protocol V1](phase2-terminal-estimator-protocol-v1.md) 为准，Probe 以 [Probe Policy Protocol V1](phase2-probe-policy-protocol-v1.md) 为准，本地 Router 以 [Router-v1 contract](phase2-router-v1-contract.md) 为准。
+> 下文的未启动状态、恢复规则、配对分支占位接口和未来依赖顺序均属于当时方案，不覆盖后续冻结协议及当前 production source。
+
 ## 1. 决策对象与信息时点
 
 研究对象是当前存活狼人 (w) 在公开发言 PRE 边界对一个合法候选 (j) 的战略承诺 (x=(s_t,j))，而不是对整局胜负的直接分类。对象身份为 `(game_id, boundary_id, prefix_digest, acting_wolf, phase, candidate_j)`。所有在线输入必须在这次发言前可得；后续真实投票、放逐、被问者回答、隐藏报告有效性只属于执行或离线评价。当前实现的 `Phase2DecisionOpportunityV1` 存储 PRE 合法状态与证据，不存储未来结果或 θ 真值。

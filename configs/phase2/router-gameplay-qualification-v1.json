@@ -1,0 +1,40 @@
+{
+  "schema_version": "phase2_router_gameplay_v1",
+  "purpose": "qualification",
+  "campaign_id": "paper-phase2-router-gameplay-qualification-v1",
+  "randomized_games": 20,
+  "planning_status": "FROZEN",
+  "qualification": null,
+  "qualification_gate": "full-games-and-both-mechanisms-v1",
+  "paths": {
+    "plan": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-router-gameplay-qualification-v1-plan",
+    "work": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/phase2-router-gameplay-qualification-v1-work",
+    "destination": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-phase2-router-gameplay-qualification-v1"
+  },
+  "excluded_game_plans": [
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/paper-phase2-online-terminal-qualification-v1-canonical-game-plan.json",
+      "plan_digest": "a6b575bc72bfab802be3019e740c4f98c9d5bb9254ca47a2d6c1571ea3be9661"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-terminal-pilot-v1-game-plan.json",
+      "plan_digest": "add3fe53054d9b89b6c6570b585bce13070f010dcf2e28a40a4671fcd713c64b"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v1-game-plan.json",
+      "plan_digest": "4719b85665febcb47479a594f13c00940a6636061ebe9410c4b68391be4bda6e"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v2-game-plan.json",
+      "plan_digest": "ef8e2d0d239f3e0d98ef84ed44c51d3cbceb80b4ddacee5b52fff6a7ac0bd151"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-qualification-v3-game-plan.json",
+      "plan_digest": "97ecfabf670d05d799fb39819ca4e78275416d004cdb936eb455ec18f40a1aca"
+    },
+    {
+      "path": "/data/yuxiao/Untrusted_Network_Simulation/plans/phase2-online-probe-pilot-v1-game-plan.json",
+      "plan_digest": "7f69c01059a350fdc0bef9f21febe70e36b67901f3e3e6200a9a05f6c3c3aa57"
+    }
+  ]
+}

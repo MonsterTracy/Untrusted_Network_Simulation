@@ -277,6 +277,11 @@ def validate_probe_lifecycle_record(raw):
                 (after == "STRUCTURAL_FAILURE" and before not in
                  ("STRUCTURAL_FAILURE", "GAME_RESULT_RECORDED"))), "illegal Probe transition")
     assignment = raw["assignment"]
+    if (assignment.get("schema_version") == "phase2_router_assignment_v1"
+            or "policy" in assignment
+            or assignment["treatment"]["assignment_source"] == "deterministic_policy"):
+        from werewolf.phase2_online_plan import router_assignment_from_record
+        router_assignment_from_record(assignment)
     strategy = assignment["assigned_strategy"]
     probe = strategy == "PROBE_THEN_REDIRECT"
     require(strategy in ("IMMEDIATE_REDIRECT", "PROBE_THEN_REDIRECT"), "unknown strategy")

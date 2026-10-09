@@ -16,7 +16,7 @@ pytest.importorskip("torch")
 from tests.canonical_collection.test_final_capacity import _night
 from tests.canonical_collection.test_runtime_game_evidence import _runtime, ROLES
 from tests.phase2.test_decision_opportunity import Mapper, q_matrix
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from werewolf.phase2_actions import Action, context_from_pre
 from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
 from werewolf.phase2_online_plan import (

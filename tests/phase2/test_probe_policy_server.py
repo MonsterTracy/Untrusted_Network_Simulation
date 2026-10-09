@@ -155,7 +155,7 @@ def test_invalid_stage_must_not_have_appended_public_text(server):
 def test_full_server_ledger_proof_retains_t0_consequence_for_invalid_strategy(server, tmp_path, strategy_name, success):
     from dataclasses import replace
     from types import SimpleNamespace
-    from tests.phase2.test_intervention_risk import values
+    from tests.phase2.test_outcome_and_execution import values
     from werewolf.phase2_backend_audit import Phase2BackendCallV1
     from werewolf.phase2_offline import ValueEstimate
     from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1

@@ -21,7 +21,7 @@ from scripts.run_phase2_online_intervention_pilot import build_parser
 from scripts.collect_games import plan_fields
 import scripts.run_phase2_language_smoke as smoke
 from tests.phase2.test_decision_opportunity import Mapper, q_matrix
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
 from werewolf.canonical_collection.attempt_ledger import construct_collection_plan

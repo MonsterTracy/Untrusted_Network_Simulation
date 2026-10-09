@@ -1,6 +1,6 @@
 # Phase-2 CheckpointClosureV1 与 canonical speech commit 审阅
 
-状态：**完整 checkpoint、restore 与 paired branch executor 仍未实现，接口继续 fail closed；它们现定位为可选的 paired-counterfactual enhancement，不阻断单路径 Online Pilot-T。** Phase-2 → canonical commit 窄路径已实现，其真实 env/recorder 逻辑用临时 `/tmp` 依赖 shim 和脚本化 backend 跑通；当前机器缺少原生 `gymnasium`/`openai` 依赖，仍需服务器验收。本文不改变 Action Contract V1、canonical V1 speech ontology、真实投票或冻结 ToM/mapper。
+状态：**当前只提供 live PRE 身份/漂移审计与 canonical speech commit，不提供完整 checkpoint、restore 或 paired branch executor。** 原 `PlannedBranchV1`、配对规划及仅抛异常的 capture/clone/restore/run 占位 API 没有生产调用或正式实验责任，已删除。`Phase2CheckpointClosureV1` 的 schema、digest、固定 blockers 与 `executable=false` 保持不变，仍用于真实 commit lineage；preflight 的 `paired_branch_replay_ready` 仍为 false。下文 shim/服务器待验收描述是当时本地验收记录；最新阶段见 [工程状态](phase2-current-status.md)。本文不改变 Action Contract V1、canonical V1 speech ontology、真实投票或冻结 ToM/mapper。
 
 ## PRE 的完整状态闭包
 
@@ -15,7 +15,7 @@
 | 进程与外部生成 | `random.getstate()`、环境独立 `_rng`、未来如果使用的 NumPy/torch RNG、backend request 配置、model revision、temperature/seed、远端响应 | `run_random.build_runtime` 在开局 `random.seed`，env 使用独立 `random.Random`；没有中途 paired-seed 注入。当前 `OpenAICompatibleBackend.chat_with_metadata` 每次发送完整 `messages` 的 `chat.completions.create` 请求，代码中没有 server-side conversation id；但远端采样的精确可复现性/seed 支持未被证明。 |
 | ToM/Phase-2 | 冻结 predictor/mapper 的 artifact identity、当前 PRE Q/R2/p 的来源、任何 runtime cache；分支后必须从新 PRE 重算 | 不能把 T0 p-panel 当成 Probe T3 panel。当前 callback `wolf_speech_tom(prefix, observation)` 在发言边界调用，但并非 checkpoint。 |
 
-`Phase2CheckpointClosureV1` 只保存当前 `(game_id,boundary_id,prefix_digest,acting_wolf,phase,public_history_digest)`、本地环境状态指纹、固定 blocker 列表和 `executable=false`，使用 canonical JSON 得到确定 digest。`local_env_state_digest` 指纹覆盖 env 除外部 speech perceiver 以外的字段，仅用于检测提交前后环境漂移；它**不是**可恢复状态，也不覆盖 agent/recorder/backend，绝不能叫作完整 `checkpoint_state_digest`。`assess_phase2_checkpoint_closure` 核对 live recorder/env 与机会身份；它**不**保存私密状态，**不是** checkpoint。`capture_intervention_checkpoint`、`clone_phase2_checkpoint`、`restore_intervention_checkpoint`、`run_intervention_branch` 全部 fail closed。不存在可信 `checkpoint_state_digest`，因为尚无完整 state codec。任何宣称 restore 等价的测试此时都不可能成立。已有测试仅验证 lineage、确定性规划 ID 与拒绝执行，不把它们冒充 branch-isolation 测试。
+`Phase2CheckpointClosureV1` 只保存当前 `(game_id,boundary_id,prefix_digest,acting_wolf,phase,public_history_digest)`、本地环境状态指纹、固定 blocker 列表和 `executable=false`，使用 canonical JSON 得到确定 digest。`local_env_state_digest` 指纹覆盖 env 除外部 speech perceiver 以外的字段，仅用于检测提交前后环境漂移；它**不是**可恢复状态，也不覆盖 agent/recorder/backend，绝不能叫作完整 `checkpoint_state_digest`。`assess_phase2_checkpoint_closure` 核对 live recorder/env 与机会身份；它**不**保存私密状态，**不是** checkpoint。不存在可信 `checkpoint_state_digest`，因为尚无完整 state codec；当前也没有分支执行入口。保留的测试验证 live PRE lineage、漂移拒绝、非可执行 closure 与真实 canonical commit，不宣称 restore 等价或 branch isolation。
 
 未来可执行 V1 必须使用不可变、版本化、完整闭包字节，包含上述所有本地状态、随机状态、backend 配置/能力及源 PRE 身份；每次 clone 后在**隔离的 env、agent、recorder、audit、backend wrapper** 上计算同一 full-state digest。测试必须执行 `capture → mutate live → restore → digest equal`，以及 `clone A/B → 修改 A 的公私日志、角色/存活、队列、vote、agent memory、RNG、audit → B 和原 checkpoint 内容不变`。未知字段或 backend session/seed 不可恢复时 `executable=false`。配对随机数应把同一 checkpoint 的 branch-independent downstream seed 与 action namespace 分开，branch ID 由 checkpoint digest、treatment ID 和 seed 确定；外部 LLM 若不支持固定采样种子，只能声明环境随机数配对，不能声称语言结果完全配对。
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.phase2.test_decision_opportunity import Mapper, context, opportunity, q_matrix
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from werewolf.phase2_actions import Action
 from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
 from werewolf.phase2_online_plan import (

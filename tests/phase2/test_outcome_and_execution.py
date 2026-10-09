@@ -1,14 +1,10 @@
-"""Synthetic contract checks; no gameplay replay or real LLM use."""
+"""Frozen reference-loss and verified speech preparation contract checks."""
 
 import pytest
 
-from scripts.phase2_integration_seam import prepare_phase2_intervention_speech
+from werewolf.phase2_execution import prepare_phase2_intervention_speech
 from tests.phase2.test_decision_opportunity import opportunity
 from werewolf.phase2_actions import Action, push_plan
-from werewolf.phase2_intervention import (
-    CheckpointUnavailable, capture_intervention_checkpoint, plan_paired_branches,
-    run_intervention_branch,
-)
 from werewolf.phase2_language import Phase2SpeechSemanticV1, PublicLanguageContextV1
 from werewolf.phase2_offline import (
     ReferenceTables, ResolvedOutcome, ValueEstimate, ValueTable,
@@ -43,23 +39,6 @@ def test_outcome_uses_frozen_taxonomy_transition_and_reference(exiled, category,
 def test_outcome_rejects_exile_outside_pre_alive():
     with pytest.raises(OutcomeError):
         extract_phase2_day_outcome(opportunity(), "player8", values())
-
-
-def test_paired_plans_share_checkpoint_seed_but_cannot_run():
-    opp = opportunity()
-    treatments = tuple(build_phase2_treatment(
-        opp, action, assignment_source="paired_branch", assignment_probability=1.0,
-        randomization_key="pilot-x") for action in opp.legal_actions)
-    branches = plan_paired_branches("full-state-checkpoint-required", treatments,
-                                    downstream_seed=123)
-    assert len({branch.checkpoint_identity for branch in branches}) == 1
-    assert len({branch.downstream_seed for branch in branches}) == 1
-    assert len({branch.branch_identity for branch in branches}) == len(branches)
-    assert all(not branch.executable for branch in branches)
-    with pytest.raises(CheckpointUnavailable):
-        capture_intervention_checkpoint(opp)
-    with pytest.raises(CheckpointUnavailable):
-        run_intervention_branch(branches[0])
 
 
 class Actor:

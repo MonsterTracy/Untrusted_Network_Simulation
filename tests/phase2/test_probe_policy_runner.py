@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.phase2.test_probe_policy_plan import public_opportunity
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from tests.canonical_collection.test_pre_prefix import _attempt
 from werewolf.canonical_collection.pre import (
     AuthoritativePREPrefix, construct_authoritative_pre_prefix, validate_authoritative_pre_prefix,

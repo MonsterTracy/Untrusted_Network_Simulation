@@ -18,7 +18,7 @@ import pytest
 import yaml
 
 from scripts.qwen3_gameplay_predictor import FIT_DIGEST, SEAL_DIGEST
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from tests.phase2.test_probe_plan_provenance import (
     SOURCE_COMMIT, probe_inputs, server_input_scope, shared_admission_fixture,
 )

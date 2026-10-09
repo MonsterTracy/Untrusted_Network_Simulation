@@ -1,0 +1,11 @@
+{
+  "schema_version": "phase2_router_gameplay_v1",
+  "purpose": "formal",
+  "campaign_id": "paper-phase2-router-gameplay-formal-v1",
+  "randomized_games": null,
+  "planning_status": "UNFROZEN",
+  "qualification": null,
+  "qualification_gate": null,
+  "paths": {"plan": null, "work": null, "destination": null},
+  "excluded_game_plans": null
+}

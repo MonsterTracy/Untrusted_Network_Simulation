@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from tests.phase2.test_decision_opportunity import opportunity
-from tests.phase2.test_intervention_risk import values
+from tests.phase2.test_outcome_and_execution import values
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.phase2_actions import Action
 from werewolf.phase2_outcome import extract_phase2_day_outcome
