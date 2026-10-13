@@ -200,11 +200,18 @@ def inspect_inputs():
     return provenance, base_url
 
 
-def plan_fields(campaign, head, provenance):
+def plan_fields(campaign, head, provenance, *, split_protocol=None):
     environment = {**provenance, "configured_call_limit": str(campaign["call_limit"]),
                    "gameplay_prompt_profile": STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
                    "seed_pool_size": str(campaign["seed_pool_size"]),
                    "target_success_count": str(campaign["target_games"])}
+    if split_protocol is not None:
+        from werewolf.canonical_split import PROTOCOL_BINDING
+        protocol = split_protocol.manifest
+        if (protocol["collection_id"] != campaign["collection_id"]
+                or protocol["target_success_count"] != campaign["target_games"]):
+            raise ValueError("Split Protocol does not match collection campaign")
+        environment[PROTOCOL_BINDING] = split_protocol.digest
     return dict(
         collection_id=campaign["collection_id"],
         target_canonical_success_count=campaign["target_games"],
@@ -244,8 +251,10 @@ def publish_plan(path, plan):
     return loaded
 
 
-def run_campaign(campaign_path=None, *, resume=False):
-    root = cli._storage_root(STORAGE)
+def run_campaign(campaign_path=None, *, resume=False, split_protocol_path=None, split_protocol_digest=None,
+                 storage_profile=None):
+    storage_profile = STORAGE if storage_profile is None else Path(storage_profile)
+    root = cli._storage_root(storage_profile)
     campaign_path = campaign_path or root / "operator/collection_campaign.json"
     campaign = validate_campaign(read_json(campaign_path))
     identity = campaign["collection_id"]
@@ -258,9 +267,16 @@ def run_campaign(campaign_path=None, *, resume=False):
         plan = load_plan(plan_path)
     elif plan_path.exists() or destination.exists():
         raise ValueError("existing Plan/destination: no implicit restart; --resume requires both")
+    split_protocol = None
+    if split_protocol_path is not None or split_protocol_digest is not None:
+        from werewolf.canonical_split import open_split_protocol
+        if split_protocol_path is None or split_protocol_digest is None:
+            raise ValueError("provide both Split Protocol path and trusted digest")
+        split_protocol_path = cli._artifact_path(root, split_protocol_path, "split_protocols")
+        split_protocol = open_split_protocol(split_protocol_path, expected_digest=split_protocol_digest)
     head = clean_head()
     provenance, base_url = inspect_inputs()
-    fields = plan_fields(campaign, head, provenance)
+    fields = plan_fields(campaign, head, provenance, split_protocol=split_protocol)
     if resume:
         for field, expected in fields.items():
             actual = dict(plan.environment_provenance) if field == "environment_provenance" else getattr(plan, field)
@@ -290,20 +306,27 @@ def run_campaign(campaign_path=None, *, resume=False):
                       "plan_digest": plan.plan_digest, "plan_path": str(plan_path),
                       "canonical_destination": str(destination), "mode": "resume" if resume else "new"},
                      sort_keys=True), flush=True)
-    args = ["--storage-profile", str(STORAGE), "collect", "--plan", str(plan_path),
+    args = ["--storage-profile", str(storage_profile), "collect", "--plan", str(plan_path),
             "--runtime-config", str(RUNTIME), "--call-limit", bound["configured_call_limit"],
             "--destination", plan.collection_id]
     if resume:
         args.append("--resume")
+    if split_protocol is not None:
+        args.extend(["--split-protocol", str(split_protocol_path), "--split-protocol-digest", split_protocol.digest])
     return cli.main(args)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", type=Path)
+    parser.add_argument("--storage-profile", type=Path, help="explicit custody storage; defaults to configs/server.json")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--split-protocol", type=Path)
+    parser.add_argument("--split-protocol-digest")
     args = parser.parse_args()
-    return run_campaign(args.campaign, resume=args.resume)
+    return run_campaign(args.campaign, resume=args.resume,
+                        split_protocol_path=args.split_protocol, split_protocol_digest=args.split_protocol_digest,
+                        storage_profile=args.storage_profile)
 
 
 if __name__ == "__main__":

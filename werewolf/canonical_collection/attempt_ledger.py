@@ -471,6 +471,15 @@ def validate_attempt_claim(
     """Validate a claim against its exact immutable Collection Plan."""
 
     validate_collection_plan(plan)
+    return _validate_claim_against_validated_plan(claim, plan)
+
+
+def _validate_claim_against_validated_plan(
+    claim: AttemptClaim,
+    plan: CollectionPlan,
+) -> AttemptClaim:
+    """Internal batch check; its caller has validated this frozen Plan."""
+
     if not isinstance(claim, AttemptClaim):
         raise TypeError("claim must be an AttemptClaim")
     if claim.schema_version != ATTEMPT_CLAIM_SCHEMA_VERSION:
@@ -669,7 +678,18 @@ def validate_attempt_terminal(
 ) -> AttemptTerminal:
     """Validate a terminal against its exact plan and prior claim."""
 
-    validate_attempt_claim(claim, plan)
+    validate_collection_plan(plan)
+    return _validate_terminal_against_validated_plan(terminal, plan, claim)
+
+
+def _validate_terminal_against_validated_plan(
+    terminal: AttemptTerminal,
+    plan: CollectionPlan,
+    claim: AttemptClaim,
+) -> AttemptTerminal:
+    """Retain all terminal/claim checks without rehashing the shared Plan."""
+
+    _validate_claim_against_validated_plan(claim, plan)
     if not isinstance(terminal, AttemptTerminal):
         raise TypeError("terminal must be an AttemptTerminal")
     if terminal.schema_version != ATTEMPT_TERMINAL_SCHEMA_VERSION:
@@ -1194,10 +1214,10 @@ _TERMINAL_RECORD_FIELDS = frozenset(
 )
 
 
-def _claim_from_record(value: dict[str, Any], plan: CollectionPlan) -> AttemptClaim:
+def _decode_claim_record(value: dict[str, Any]) -> AttemptClaim:
     if set(value) != _CLAIM_RECORD_FIELDS or value.get("record_type") != "claim":
         raise LedgerValidationError("attempt claim has an invalid field set")
-    claim = AttemptClaim(
+    return AttemptClaim(
         schema_version=value["schema_version"],
         plan_digest=value["plan_digest"],
         collection_id=value["collection_id"],
@@ -1208,6 +1228,10 @@ def _claim_from_record(value: dict[str, Any], plan: CollectionPlan) -> AttemptCl
         claim_timestamp_utc=value["claim_timestamp_utc"],
         record_digest=value["record_digest"],
     )
+
+
+def _claim_from_record(value: dict[str, Any], plan: CollectionPlan) -> AttemptClaim:
+    claim = _decode_claim_record(value)
     try:
         return validate_attempt_claim(claim, plan)
     except (TypeError, ValueError) as error:
@@ -1270,11 +1294,14 @@ def _state_from_records(
     claims: Sequence[AttemptClaim],
     terminals: Sequence[AttemptTerminal],
 ) -> AttemptLedgerState:
+    # A Plan is shared by every record. Validate it once per invocation, never
+    # cache across calls: a later read must still reject changed Plan/files.
+    validate_collection_plan(plan)
     claims_by_ordinal: dict[int, AttemptClaim] = {}
     attempt_ids: set[str] = set()
     for claim in claims:
         try:
-            validate_attempt_claim(claim, plan)
+            _validate_claim_against_validated_plan(claim, plan)
         except (TypeError, ValueError) as error:
             raise LedgerValidationError("invalid attempt claim") from error
         if claim.ordinal in claims_by_ordinal:
@@ -1295,7 +1322,7 @@ def _state_from_records(
         if claim is None:
             raise LedgerValidationError("attempt terminal exists without a claim")
         try:
-            validate_attempt_terminal(terminal, plan, claim)
+            _validate_terminal_against_validated_plan(terminal, plan, claim)
         except (TypeError, ValueError) as error:
             raise LedgerValidationError("invalid attempt terminal") from error
         terminals_by_ordinal[terminal.ordinal] = terminal
@@ -1369,7 +1396,7 @@ def validate_attempt_ledger(
             )
         value = _load_canonical_record(path)
         if match.group("record_type") == "claim":
-            record: AttemptClaim | AttemptTerminal = _claim_from_record(value, plan)
+            record: AttemptClaim | AttemptTerminal = _decode_claim_record(value)
             claims.append(record)
         else:
             record = _terminal_from_record(value, plan)

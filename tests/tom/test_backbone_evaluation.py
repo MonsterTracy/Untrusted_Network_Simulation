@@ -22,41 +22,134 @@ def test_historical_reader_rejects_engineering_execution(fixture):
     assert not (execution.snapshot.path.parent / "evaluations").exists()
 
 
-def test_evaluation_source_is_independent_but_inference_bytes_are_frozen(monkeypatch):
+# Independently pin the complete source inventory; dropping a production entry
+# must not silently remove a historical source from this contract test.
+HISTORICAL_INFERENCE_SOURCES = (
+    "werewolf/artifact_io/__init__.py",
+    "werewolf/artifact_io/canonical.py",
+    "werewolf/artifact_io/tensor_state.py",
+    "werewolf/canonical_collection/__init__.py",
+    "werewolf/canonical_collection/attempt_ledger.py",
+    "werewolf/canonical_collection/failure_evidence.py",
+    "werewolf/canonical_collection/frozen_json.py",
+    "werewolf/canonical_collection/game_bundle.py",
+    "werewolf/canonical_collection/pre.py",
+    "werewolf/canonical_collection/public_history.py",
+    "werewolf/canonical_collection/speech.py",
+    "werewolf/canonical_collection/trajectory_evidence.py",
+    "werewolf/development_publication.py",
+    "werewolf/structured_history.py",
+    "werewolf/tom/backbone_execution.py",
+    "werewolf/tom/backbone_model.py",
+    "werewolf/tom/backbone_study.py",
+    "werewolf/tom/dataset.py",
+    "werewolf/tom/experiment.py",
+    "werewolf/tom/model.py",
+    "werewolf/tom/population.py",
+    "werewolf/tom/protocol.py",
+    "werewolf/tom/state.py",
+    "werewolf/tom/temporal.py",
+    "werewolf/tom/training.py",
+)
+
+
+@pytest.fixture
+def historical_evaluation_source(monkeypatch):
+    """Supply genuine archived bytes as the local source, keeping all checks real."""
     from pathlib import Path
     import subprocess
     project = Path(m.__file__).resolve().parents[2]
-    revision = m.TRAINING_REVISION
+    revision = "ebf98b7e3249f78d3f1fa1fd46c20affe0486913"
+    assert m.TRAINING_REVISION == revision
+    assert m.INFERENCE_SOURCES == HISTORICAL_INFERENCE_SOURCES
     assert subprocess.check_output(["git", "-C", str(project), "cat-file", "-t", revision], text=True).strip() == "commit"
-    assert {"werewolf/canonical_collection/pre.py", "werewolf/canonical_collection/public_history.py",
-            "werewolf/development_publication.py"} <= set(m.INFERENCE_SOURCES)
+    assert subprocess.check_output(["git", "-C", str(project), "rev-parse", f"{revision}^{{commit}}"], text=True).strip() == revision
+    frozen = {project / relative: subprocess.check_output(
+        ["git", "-C", str(project), "show", f"{revision}:{relative}"])
+        for relative in HISTORICAL_INFERENCE_SOURCES}
+    original_read = Path.read_bytes
+    def read_historical(path):
+        return frozen[path] if path in frozen else original_read(path)
+    monkeypatch.setattr(Path, "read_bytes", read_historical)
     old_runtime = {"source_revision": "reference-scientific-revision", "implementation_digest": "a" * 64,
                    "torch": "frozen"}
     owner = SimpleNamespace(execution=SimpleNamespace(config=object(), manifest={
         "runtime": old_runtime, "execution_source": {"source_revision": revision,
         "implementation_digest": "a" * 64}}))
-    current = {**old_runtime, "implementation_digest": "b" * 64}
-    monkeypatch.setattr(training, "_runtime", lambda _: ({"source_revision": "c" * 40,
-        "implementation_digest": "b" * 64}, current))
-    source, runtime = m._evaluation_source(owner)
-    assert source["source_revision"] != revision
-    assert runtime["implementation_digest"] != old_runtime["implementation_digest"]
-    with monkeypatch.context() as patch:
-        patch.setattr(m, "INFERENCE_SOURCES", ("werewolf/tom/nonexistent_archived_source.py",))
-        with pytest.raises(ValueError, match="historical inference source unavailable"):
-            m._evaluation_source(owner)
-    with monkeypatch.context() as patch:
-        original_read = Path.read_bytes
-        changed = project / "werewolf/canonical_collection/public_history.py"
-        patch.setattr(Path, "read_bytes", lambda path: b"changed-public-history" if path == changed else original_read(path))
-        patch.setattr(m, "open_sealed_training", lambda *_: owner)
+    source = {"source_revision": "c" * 40, "implementation_digest": "b" * 64}
+    current = {**old_runtime, "implementation_digest": source["implementation_digest"]}
+    monkeypatch.setattr(training, "_runtime", lambda _: (source, current))
+    return SimpleNamespace(project=project, owner=owner, source=source, runtime=current,
+                           frozen=frozen, original_read=original_read)
+
+
+def test_evaluation_source_is_independent_but_inference_bytes_are_frozen(historical_evaluation_source):
+    case = historical_evaluation_source
+    source, runtime = m._evaluation_source(case.owner)
+    assert source == case.source and runtime == case.runtime
+    assert source["source_revision"] != m.TRAINING_REVISION
+    assert runtime["implementation_digest"] != case.owner.execution.manifest["runtime"]["implementation_digest"]
+
+
+@pytest.mark.parametrize("relative", HISTORICAL_INFERENCE_SOURCES)
+def test_evaluation_rejects_each_changed_inference_source(historical_evaluation_source, monkeypatch, relative):
+    from pathlib import Path
+    case = historical_evaluation_source
+    changed = case.project / relative
+    original_read = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda path:
+                        case.frozen[path] + b"\n# changed source\n" if path == changed else original_read(path))
+    with pytest.raises(ValueError, match="historical inference source changed"):
+        m._evaluation_source(case.owner)
+
+
+def test_evaluation_rejects_unavailable_historical_source(historical_evaluation_source, monkeypatch):
+    case = historical_evaluation_source
+    original_check_output = m.subprocess.check_output
+    command = ["git", "-C", str(case.project), "show",
+               f"{m.TRAINING_REVISION}:{HISTORICAL_INFERENCE_SOURCES[0]}"]
+    def unavailable(args, **kwargs):
+        if args == command:
+            raise m.subprocess.CalledProcessError(128, args)
+        return original_check_output(args, **kwargs)
+    monkeypatch.setattr(m.subprocess, "check_output", unavailable)
+    with pytest.raises(ValueError, match="historical inference source unavailable"):
+        m._evaluation_source(case.owner)
+
+
+def test_evaluation_rejects_runtime_drift(historical_evaluation_source, monkeypatch):
+    case = historical_evaluation_source
+    monkeypatch.setattr(training, "_runtime", lambda _: (case.source, {**case.runtime, "torch": "drift"}))
+    with pytest.raises(ValueError, match="runtime differs"):
+        m._evaluation_source(case.owner)
+
+
+def test_evaluation_rejects_source_runtime_mismatch(historical_evaluation_source, monkeypatch):
+    case = historical_evaluation_source
+    monkeypatch.setattr(training, "_runtime", lambda _: (case.source,
+                        {**case.runtime, "implementation_digest": "d" * 64}))
+    with pytest.raises(ValueError, match="evaluation source/runtime mismatch"):
+        m._evaluation_source(case.owner)
+
+
+@pytest.mark.parametrize("revision", ("0" * 40, "invalid-revision"))
+def test_evaluation_rejects_wrong_training_revision(historical_evaluation_source, revision):
+    case = historical_evaluation_source
+    case.owner.execution.manifest["execution_source"]["source_revision"] = revision
+    with pytest.raises(ValueError, match="invalid historical training revision"):
+        m._evaluation_source(case.owner)
+
+
+def test_evaluation_checks_actual_checkout_bytes(historical_evaluation_source, monkeypatch):
+    from pathlib import Path
+    case = historical_evaluation_source
+    changed = any(case.original_read(path) != frozen for path, frozen in case.frozen.items())
+    monkeypatch.setattr(Path, "read_bytes", case.original_read)
+    if changed:
         with pytest.raises(ValueError, match="historical inference source changed"):
-            m.prepare_evaluation(project / "unused-training", "e" * 64, "f" * 64, revision)
-    with monkeypatch.context() as patch:
-        patch.setattr(training, "_runtime", lambda _: ({"source_revision": "c" * 40,
-            "implementation_digest": "b" * 64}, {**current, "torch": "drift"}))
-        with pytest.raises(ValueError, match="runtime differs"):
-            m._evaluation_source(owner)
+            m._evaluation_source(case.owner)
+    else:
+        assert m._evaluation_source(case.owner) == (case.source, case.runtime)
 
 
 def test_shared_whole_game_draws_and_fixed_uniform_direction():

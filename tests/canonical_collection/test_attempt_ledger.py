@@ -597,6 +597,59 @@ def test_ledger_validation_rejects_changed_referenced_game_bundle(tmp_path):
         validate_attempt_ledger(ledger_directory, plan)
 
 
+def test_batch_validation_reuses_plan_checks_but_rehashes_artifacts_each_read(tmp_path, monkeypatch):
+    plan = _plan(ordered_seed_pool=tuple(range(1, 8701)), target_canonical_success_count=5800)
+    directory = _ledger(tmp_path, plan)
+    for ordinal in range(3):
+        claim = _claim(plan, ordinal=ordinal, attempt_id=f"attempt-{ordinal:03d}")
+        publish_ledger_record(directory, plan, claim)
+        if ordinal == 0:
+            terminal = _terminal(plan, claim, directory, outcome=TerminalOutcome.CANONICAL_SUCCESS)
+        else:
+            terminal = _terminal(plan, claim, directory)
+        publish_ledger_record(directory, plan, terminal)
+
+    checked_plans, checked_artifacts = [], []
+    validate_plan, verify = ledger_module.validate_collection_plan, ledger_module.verify_artifact
+
+    def observe_plan(candidate):
+        checked_plans.append(candidate.plan_digest)
+        return validate_plan(candidate)
+
+    def observe_artifact(path, **kwargs):
+        checked_artifacts.append(path)
+        return verify(path, **kwargs)
+
+    monkeypatch.setattr(ledger_module, "validate_collection_plan", observe_plan)
+    monkeypatch.setattr(ledger_module, "verify_artifact", observe_artifact)
+    state = validate_attempt_ledger(directory, plan)
+    assert len(state.claims) == len(state.terminals) == 3
+    # Outer Plan and batch boundary; not one full 8700-seed hash per record.
+    assert len(checked_plans) == 2
+    assert len(checked_artifacts) == 1
+
+    payload = directory.parent / "games/game-000/public/fixture.json"
+    payload.write_bytes(b"changed bundle")
+    with pytest.raises(LedgerValidationError, match="bundle is missing or invalid"):
+        validate_attempt_ledger(directory, plan)
+    assert len(checked_artifacts) == 2
+
+
+def test_batch_state_still_rejects_forged_plan_and_record(tmp_path):
+    plan = _plan()
+    directory = _ledger(tmp_path, plan)
+    claim = _claim(plan)
+    publish_ledger_record(directory, plan, claim)
+    terminal = _terminal(plan, claim, directory)
+    publish_ledger_record(directory, plan, terminal)
+    with pytest.raises(ValueError, match="digest mismatch"):
+        ledger_module._state_from_records(replace(plan, target_canonical_success_count=1), (claim,), (terminal,))
+    with pytest.raises(LedgerValidationError, match="invalid attempt claim"):
+        ledger_module._state_from_records(plan, (replace(claim, seed=999),), (terminal,))
+    with pytest.raises(LedgerValidationError, match="invalid attempt terminal"):
+        ledger_module._state_from_records(plan, (claim,), (replace(terminal, record_digest="0" * 64),))
+
+
 def test_recovery_derives_all_partial_evidence_instead_of_trusting_digests(
     tmp_path,
 ):

@@ -18,6 +18,39 @@ def test_campaign_accepts_explicit_values():
     assert operator.validate_campaign(CAMPAIGN) == CAMPAIGN
 
 
+def test_split_protocol_bound_before_live_preflight_and_preserved_on_resume(campaign_run):
+    from werewolf.canonical_split import publish_split_protocol, PROTOCOL_BINDING
+    protocol = publish_split_protocol(campaign_run.root / "split-protocol", protocol_id="split-protocol",
+        collection_id=CAMPAIGN["collection_id"], development_count=250, test_count=50, split_seed=20261012)
+    kwargs = dict(split_protocol_path=protocol.artifact.path, split_protocol_digest=protocol.digest)
+    operator.run_campaign(campaign_run.path, **kwargs)
+    plan = operator.load_plan(campaign_run.plan)
+    assert dict(plan.environment_provenance)[PROTOCOL_BINDING] == protocol.digest
+    assert campaign_run.collector.call_args.args[0][-4:] == [
+        "--split-protocol", str(protocol.artifact.path), "--split-protocol-digest", protocol.digest]
+    campaign_run.destination.mkdir(parents=True)
+    (campaign_run.destination / "existing-ledger-evidence").write_text("keep")
+    before = campaign_run.plan.read_bytes()
+    operator.run_campaign(campaign_run.path, resume=True, **kwargs)
+    assert campaign_run.plan.read_bytes() == before
+    campaign_run.health.reset_mock()
+    with pytest.raises(ValueError, match="mismatch"):
+        operator.run_campaign(campaign_run.path, resume=True)
+    campaign_run.health.assert_not_called()
+
+
+def test_wrong_split_protocol_rejected_before_live_preflight(campaign_run):
+    from werewolf.canonical_split import publish_split_protocol
+    protocol = publish_split_protocol(campaign_run.root / "split-protocol", protocol_id="split-protocol",
+        collection_id="another-collection", development_count=250, test_count=50, split_seed=20261012)
+    with pytest.raises(ValueError, match="match collection"):
+        operator.run_campaign(campaign_run.path, split_protocol_path=protocol.artifact.path,
+                             split_protocol_digest=protocol.digest)
+    campaign_run.health.assert_not_called()
+    campaign_run.collector.assert_not_called()
+    assert not campaign_run.plan.exists()
+
+
 @pytest.mark.parametrize("field,value", [
     ("target_games", 0), ("target_games", -1), ("target_games", True),
     ("seed_pool_size", True), ("seed_pool_size", 299), ("seed_pool_size", 450.0),
@@ -104,6 +137,22 @@ def test_new_campaign_freezes_once_reloads_and_delegates(campaign_run, monkeypat
         "--runtime-config", str(operator.RUNTIME), "--call-limit", "1000",
         "--destination", CAMPAIGN["collection_id"]])
     assert "COLLECTION PLAN FROZEN" in capsys.readouterr().out
+
+
+def test_explicit_custody_storage_preserves_default_and_resume(campaign_run, monkeypatch):
+    profile = campaign_run.root / "custody-storage.json"
+    profile.write_text(json.dumps({"artifact_root": str(campaign_run.root)}))
+    read_root = Mock(wraps=operator.cli._storage_root)
+    monkeypatch.setattr(operator.cli, "_storage_root", read_root)
+    operator.run_campaign(campaign_run.path, storage_profile=profile)
+    read_root.assert_called_once_with(profile)
+    assert campaign_run.collector.call_args.args[0][:2] == ["--storage-profile", str(profile)]
+    original_plan = campaign_run.plan.read_bytes()
+    campaign_run.destination.mkdir(parents=True)
+    (campaign_run.destination / "keep").write_text("existing ledger")
+    operator.run_campaign(campaign_run.path, storage_profile=profile, resume=True)
+    assert campaign_run.plan.read_bytes() == original_plan
+    assert campaign_run.collector.call_args.args[0][-1] == "--resume"
 
 
 def test_resume_reuses_plan_without_seed_regeneration(campaign_run, monkeypatch, capsys):

@@ -1,0 +1,6 @@
+{
+  "collection_id": "canonical-example-v1",
+  "target_games": 10,
+  "seed_pool_size": 15,
+  "call_limit": 500
+}

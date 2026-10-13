@@ -322,6 +322,15 @@ def _collection_identity(
 
 
 def _validate_verified_collection(collection: VerifiedCollection) -> None:
+    from werewolf.canonical_collection import validate_collection_plan
+    from werewolf.canonical_collection.attempt_ledger import _state_from_records
+    try:
+        validate_collection_plan(collection.plan)
+        state = _state_from_records(collection.plan, collection.ledger_state.claims, collection.ledger_state.terminals)
+    except (TypeError, ValueError) as error:
+        raise ArtifactValidationError("verified collection Plan/Ledger records are invalid") from error
+    if state != collection.ledger_state:
+        raise ArtifactValidationError("verified collection Ledger state was substituted")
     if collection.plan.plan_digest != collection.ledger_state.plan_digest:
         raise ArtifactValidationError("verified collection plan/ledger mismatch")
     if (
@@ -808,6 +817,8 @@ def publish_development(
     if not isinstance(collection, VerifiedCollection):
         raise TypeError("collection must be a VerifiedCollection")
     _validate_verified_collection(collection)
+    if "canonical_split_protocol_digest" in dict(collection.plan.environment_provenance):
+        raise ArtifactValidationError("split-bound Collection requires explicit Development Publication V2")
     if _SAFE_IDENTITY.fullmatch(publication_id) is None:
         raise ValueError("publication_id must be one safe path component")
     destination = Path(destination)

@@ -72,6 +72,33 @@ def build_parser():
     collect.add_argument("--call-limit", type=int, required=True)
     collect.add_argument("--destination", type=Path, required=True)
     collect.add_argument("--resume", action="store_true", help="explicitly continue the exact collection ledger")
+    collect.add_argument("--split-protocol", type=Path)
+    collect.add_argument("--split-protocol-digest")
+    split_protocol = commands.add_parser("prepare-canonical-split-protocol")
+    split_protocol.add_argument("--config", type=Path, help="explicit split parameters JSON; cannot be combined with parameter flags")
+    split_protocol.add_argument("--collection-id")
+    split_protocol.add_argument("--development-count", type=int)
+    split_protocol.add_argument("--test-count", type=int)
+    split_protocol.add_argument("--split-seed", type=int)
+    split_protocol.add_argument("--destination", type=Path, required=True)
+    split = commands.add_parser("publish-canonical-split")
+    split.add_argument("--collection", type=Path, required=True)
+    split.add_argument("--runtime-config", type=Path, required=True)
+    split.add_argument("--split-protocol", type=Path, required=True)
+    split.add_argument("--split-protocol-digest", required=True)
+    split.add_argument("--destination", type=Path, required=True)
+    publication_v2 = commands.add_parser("publish-development-v2")
+    publication_v2.add_argument("--collection", type=Path, required=True)
+    publication_v2.add_argument("--runtime-config", type=Path, required=True)
+    publication_v2.add_argument("--split", type=Path, required=True)
+    publication_v2.add_argument("--split-digest", required=True)
+    publication_v2.add_argument("--destination", type=Path, required=True)
+    release = commands.add_parser("release-canonical-development-v2")
+    release.add_argument("--collection", type=Path, required=True)
+    release.add_argument("--runtime-config", type=Path, required=True)
+    release.add_argument("--split-protocol", type=Path, required=True)
+    release.add_argument("--split-protocol-digest", required=True)
+    release.add_argument("--destination", type=Path, required=True)
     publication = commands.add_parser("publish-development")
     publication.add_argument("--collection", type=Path, required=True)
     publication.add_argument("--runtime-config", type=Path, required=True)
@@ -80,6 +107,10 @@ def build_parser():
     experiment.add_argument("--publication", type=Path, required=True)
     experiment.add_argument("--protocol", type=Path, required=True)
     experiment.add_argument("--destination", type=Path, required=True)
+    terminal_audit = commands.add_parser("audit-canonical-terminals")
+    terminal_audit.add_argument("--collection", type=Path, required=True)
+    terminal_audit.add_argument("--runtime-config", type=Path, required=True)
+    terminal_audit.add_argument("--destination", type=Path, required=True)
     oof = commands.add_parser("run-development-oof")
     oof.add_argument("--experiment", type=Path, required=True)
     oof.add_argument("--resume", action="store_true", help="explicitly continue the exact existing run under its recovery policy")
@@ -87,6 +118,8 @@ def build_parser():
     validate.add_argument("path", type=Path)
     validate.add_argument("--runtime-config", type=Path)
     validate.add_argument("--experiment", type=Path, help="owning sealed experiment for final publication validation")
+    validate.add_argument("--expected-digest", help="trusted Protocol/Split digest for V2 artifacts, or trusted receipt digest for a release")
+    validate.add_argument("--collection", type=Path, help="owning Canonical Collection for native terminal audit validation")
     capacity = commands.add_parser("capacity-check", help="synthetic engineering check, not a scientific run")
     capacity.add_argument("--pre-count-per-game", type=int, required=True)
     capacity.add_argument("--max-seq-len", type=int, required=True)
@@ -170,7 +203,39 @@ def _runtime(path):
     return normalize_runtime_config(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 
-def validate_artifact(path, runtime_config=None, final_experiment_path=None):
+def validate_artifact(path, runtime_config=None, final_experiment_path=None, expected_digest=None, canonical_collection_path=None):
+    path = Path(path)
+    if (path / "manifest.json").is_file() and final_experiment_path is None:
+        kind = json.loads((path / "manifest.json").read_bytes()).get("artifact_type")
+        if kind == "canonical_collection_release":
+            if expected_digest is None:
+                raise ValueError("release validation requires --expected-digest")
+            from werewolf.canonical_release import verify_canonical_release
+            return verify_canonical_release(path, expected_digest=expected_digest,
+                                            artifact_root=path.parent.parent).manifest_digest
+        if kind == "canonical_collection_terminal_audit":
+            if canonical_collection_path is None:
+                raise ValueError("terminal audit validation requires --collection and --runtime-config")
+            from werewolf.canonical_terminal_audit import verify_collection_terminal_audit
+            from werewolf.canonical_collection.production_runtime import classic7_replay_executor
+            from werewolf.development_publication import open_verified_collection
+            config = _runtime(runtime_config)
+            collection = open_verified_collection(canonical_collection_path, replay_executor=classic7_replay_executor(config))
+            return verify_collection_terminal_audit(path, collection, runtime_config=config).manifest_digest
+        if kind in {"canonical_split_protocol", "canonical_game_split", "development_publication_v2"}:
+            if expected_digest is None:
+                raise ValueError("V2 validation requires --expected-digest from a trusted source")
+            if kind == "canonical_split_protocol":
+                from werewolf.canonical_split import open_split_protocol
+                return open_split_protocol(path, expected_digest=expected_digest).digest
+            if kind == "canonical_game_split":
+                from werewolf.canonical_split import open_canonical_split
+                return open_canonical_split(path, expected_digest=expected_digest).digest
+            from werewolf.development_publication_v2 import open_development_publication_v2
+            from werewolf.development_publication import open_role_sidecar
+            publication = open_development_publication_v2(path, expected_split_digest=expected_digest)
+            open_role_sidecar(publication)
+            return publication.manifest_digest
     from werewolf.development_publication import open_publication, open_role_sidecar, open_verified_collection
     from werewolf.canonical_collection.production_runtime import classic7_replay_executor
     from werewolf.tom.experiment import open_experiment, validate_experiment_preflight
@@ -244,6 +309,76 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command == "release-canonical-development-v2":
+        from werewolf.canonical_release import publish_canonical_release
+        from werewolf.canonical_split import open_split_protocol
+        from werewolf.development_publication import open_verified_collection
+        from werewolf.canonical_collection.production_runtime import classic7_replay_executor
+        config = _runtime(args.runtime_config)
+        protocol = open_split_protocol(_artifact_path(root, args.split_protocol, "split_protocols"),
+            expected_digest=args.split_protocol_digest)
+        collection = open_verified_collection(_artifact_path(root, args.collection, "canonical"),
+            replay_executor=classic7_replay_executor(config))
+        artifact = publish_canonical_release(collection, protocol,
+            _artifact_path(root, args.destination, "releases"), runtime_config=config, artifact_root=root)
+        print(artifact.manifest_digest)
+        return 0
+    if args.command == "audit-canonical-terminals":
+        from werewolf.canonical_terminal_audit import publish_collection_terminal_audit
+        from werewolf.canonical_collection.production_runtime import classic7_replay_executor
+        from werewolf.development_publication import open_verified_collection
+        config = _runtime(args.runtime_config)
+        collection = open_verified_collection(_artifact_path(root, args.collection, "canonical"),
+            replay_executor=classic7_replay_executor(config))
+        identity = publish_collection_terminal_audit(collection, _artifact_path(root, args.destination, "terminal_audits"),
+            runtime_config=config).manifest_digest
+        print(identity)
+        return 0
+    if args.command in {"prepare-canonical-split-protocol", "publish-canonical-split", "publish-development-v2"}:
+        from werewolf.canonical_split import publish_split_protocol, open_split_protocol, open_canonical_split, publish_canonical_split
+        if args.command == "prepare-canonical-split-protocol":
+            destination = _artifact_path(root, args.destination, "split_protocols")
+            parameters = {"collection_id": args.collection_id, "development_count": args.development_count,
+                          "test_count": args.test_count, "split_seed": args.split_seed}
+            if args.config is not None:
+                if any(value is not None for value in parameters.values()):
+                    raise ValueError("split --config cannot be combined with parameter flags")
+                def unique_split_keys(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError("duplicate split config field")
+                        result[key] = value
+                    return result
+                value = json.loads(args.config.read_bytes(), object_pairs_hook=unique_split_keys)
+                if not isinstance(value, dict) or set(value) != set(parameters):
+                    raise ValueError("split config requires exactly collection_id, development_count, test_count, split_seed")
+                parameters = value
+            elif any(value is None for value in parameters.values()):
+                raise ValueError("provide --config or all four split parameter flags")
+            identity = publish_split_protocol(destination, protocol_id=destination.name,
+                **parameters).digest
+        else:
+            from werewolf.development_publication import open_verified_collection
+            from werewolf.canonical_collection.production_runtime import classic7_replay_executor
+            collection_path = _artifact_path(root, args.collection, "canonical")
+            if args.command == "publish-canonical-split":
+                protocol = open_split_protocol(_artifact_path(root, args.split_protocol, "split_protocols"),
+                    expected_digest=args.split_protocol_digest)
+                destination = _artifact_path(root, args.destination, "splits")
+            else:
+                split = open_canonical_split(_artifact_path(root, args.split, "splits"), expected_digest=args.split_digest)
+                destination = _artifact_path(root, args.destination, "publications")
+            collection = open_verified_collection(collection_path,
+                replay_executor=classic7_replay_executor(_runtime(args.runtime_config)))
+            if args.command == "publish-canonical-split":
+                identity = publish_canonical_split(collection, protocol, destination, split_id=destination.name).digest
+            else:
+                from werewolf.development_publication_v2 import publish_development_v2
+                identity = publish_development_v2(collection, split, destination,
+                    publication_id=destination.name).public.manifest_digest
+        print(identity)
+        return 0
     if args.command in {"prepare-qwen3-final-fit", "run-qwen3-final-fit",
                         "seal-qwen3-final-fit", "validate-qwen3-final-fit"}:
         from werewolf.tom.qwen3_final import open_fit, prepare, run, seal, verify_seal
@@ -356,6 +491,13 @@ def main(argv=None):
         config = _runtime(args.runtime_config)
         plan = collection_plan_from_record(json.loads(args.plan.read_bytes()))
         declared = dict(plan.environment_provenance)
+        from werewolf.canonical_split import PROTOCOL_BINDING, open_split_protocol, validate_protocol_plan
+        if PROTOCOL_BINDING in declared or args.split_protocol is not None or args.split_protocol_digest is not None:
+            if args.split_protocol is None or args.split_protocol_digest is None:
+                raise ValueError("split-bound collection requires --split-protocol and --split-protocol-digest")
+            protocol = open_split_protocol(_artifact_path(root, args.split_protocol, "split_protocols"),
+                expected_digest=args.split_protocol_digest)
+            validate_protocol_plan(protocol.manifest, plan)
         if (declared.get("runtime_config_sha256") != sha256_bytes(canonical_json_bytes(config))
             or declared.get("configured_call_limit") != str(args.call_limit)):
             raise ValueError("Collection Plan must bind normalized runtime config and call limit")
@@ -381,8 +523,14 @@ def main(argv=None):
         _require_resume(runs, args.resume)
         identity = run_development_oof(experiment)["record_digest"]
     else:
-        identity = (validate_artifact(args.path, args.runtime_config, args.experiment) if args.experiment is not None
-                    else validate_artifact(args.path, args.runtime_config))
+        if args.collection is not None:
+            identity = validate_artifact(args.path, args.runtime_config, args.experiment, args.expected_digest,
+                                        _artifact_path(root, args.collection, "canonical"))
+        elif args.expected_digest is not None:
+            identity = validate_artifact(args.path, args.runtime_config, args.experiment, args.expected_digest)
+        else:
+            identity = (validate_artifact(args.path, args.runtime_config, args.experiment) if args.experiment is not None
+                        else validate_artifact(args.path, args.runtime_config))
     print(identity)
     return 0
 

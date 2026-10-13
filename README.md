@@ -1,5 +1,7 @@
 # Classic7 observer-conditioned ToM
 
+Data Acquisition & Preprocessing: [technical lifecycle and operation](docs/research/data-acquisition-preprocessing.md) · [branch registry draft](docs/BRANCHES.md).
+
 This repository owns canonical scientific game generation and the public-only
 Theory-of-Mind mainline for seven-player, multi-day text Werewolf:
 two Werewolves, three Villagers, one Seer and one Witch, including Night0.

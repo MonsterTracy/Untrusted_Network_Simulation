@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from werewolf.artifact_io import canonical_json_bytes, publish_artifact, verify_artifact, sha256_bytes
+from werewolf.artifact_io import ArtifactValidationError, canonical_json_bytes, publish_artifact, verify_artifact, sha256_bytes
 from werewolf.development_publication import (PublicGameView, PublishedGame, VerifiedCollection,
     _validate_verified_collection, _published_game_from_bundle, _published_game_from_record,
     _publication_statistics, _load_canonical_json, _role_assignment, _SAFE_IDENTITY, _require_digest)
@@ -35,6 +35,8 @@ def publish_final_publication(collection, destination, *, publication_id, model_
     if not isinstance(collection, VerifiedCollection):
         raise TypeError("final publication requires a verified collection")
     _validate_verified_collection(collection)
+    if "canonical_split_protocol_digest" in dict(collection.plan.environment_provenance):
+        raise ArtifactValidationError("split-bound Test requires the V2 sealed evaluation contract; V1 cannot publish it")
     _require_digest(model_seal_digest, "model_seal_digest")
     if not _SAFE_IDENTITY.fullmatch(publication_id) or Path(destination).name != publication_id:
         raise ValueError("invalid final publication identity")
@@ -93,6 +95,8 @@ def open_final_publication(path, *, model_seal_digest):
         collection_plan_from_record, _claim_from_record, _terminal_from_record, _state_from_records)
     from werewolf.development_publication import _collection_identity, _exclusion_from_record
     plan = collection_plan_from_record(_load_canonical_json(artifact.path / "collection_plan.json"))
+    if "canonical_split_protocol_digest" in dict(plan.environment_provenance):
+        raise ArtifactValidationError("split-bound Test cannot use the V1 final publication reader")
     ledger = _load_canonical_json(artifact.path / "attempt_ledger.json")
     if set(ledger) != {"claims", "terminals"}:
         raise ValueError("invalid final ledger fields")
