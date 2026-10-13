@@ -12,13 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: pip
           cache-dependency-path: setup.py
       - name: Install project and test dependencies
-        run: python -m pip install -e ".[tom,dev]"
+        run: python -m pip install -e ".[tom,mapper,dev]"
       - name: Compile Python sources
         run: python -m compileall run_random.py werewolf tests
       - name: Run self-contained test suite
