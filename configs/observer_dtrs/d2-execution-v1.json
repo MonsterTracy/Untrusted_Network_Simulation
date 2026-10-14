@@ -1,0 +1,206 @@
+{
+  "protocol_id": "observer_dtrs_d2_conditional_development_v1",
+  "status": "FROZEN_NOT_RUN",
+  "dataset_digest": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+  "research_scope": "conditional_downstream_development_validation_not_independent_end_to_end_test",
+  "known_source_limitations": [
+    "historical_training_rng_seed_includes_full_publication_bound_preparation_digest",
+    "architecture_selection_independence_not_established"
+  ],
+  "split": {
+    "unit": "whole_game",
+    "pool_across_tom_holdouts": false,
+    "tom_holdouts": 5,
+    "games_per_tom_holdout": 300,
+    "downstream_outer_folds": 5,
+    "downstream_inner_folds": 3,
+    "hash_domain": "observer-dtrs-d2-development-split-v1",
+    "protocol_seed": 20261014,
+    "hash_input": [
+      "domain",
+      "protocol_seed",
+      "tom_fold",
+      "parent_outer_or_null",
+      "game_id"
+    ],
+    "dataset_digest_role": "identity_validation_only_not_numeric_control",
+    "ordering": "sha256_canonical_json_then_game_id",
+    "assignment": "sorted_rank_mod_fold_count",
+    "label_stratification": false,
+    "seed_search": false
+  },
+  "primary_estimand": "uniform_game_then_uniform_eligible_observer_sample",
+  "training_weight": "1/full_eligible_sample_count_of_training_game",
+  "primary_models": [
+    "OBS-EQ0",
+    "OBS-EQ1"
+  ],
+  "extension_candidates_not_primary": [
+    "OBS-EQ2-dW",
+    "OBS-EQ3-acting_share"
+  ],
+  "histogram": {
+    "strata": [
+      "phase",
+      "nW"
+    ],
+    "continuous_attribute": "r",
+    "requested_bin_counts": [
+      1,
+      3,
+      5
+    ],
+    "edge_fit_scope": "current_inner_or_outer_training_games_only",
+    "edge_rule": "left_inverse_game_weighted_empirical_cdf_within_stratum",
+    "tie_rule": "deduplicate_edges_remove_max_endpoint_keep_supported_min_atom_never_split_equal_r",
+    "min_distinct_games": 10,
+    "min_kish_game_mass_effective_support": 5,
+    "support_float_tolerance": 1e-12,
+    "merge_rule": "leftmost_failing_leaf_merge_with_adjacent_smaller_mass_tie_left",
+    "one_leaf_rule": "return_current_model_stratum_parent_probability",
+    "eq1_single_bin": "identical_to_EQ0_with_same_lambda_and_training_games_no_extra_shrinkage",
+    "mass_input_tolerance": "r_in_[0,1+1e-6]_matching_D1_Q_sum_tolerance_no_clipping",
+    "weighted_quantile_reduction": "math.fsum_float64_sorted_r_then_sample_id_left_inverse"
+  },
+  "smoothing": {
+    "root": "(weighted_positive_mass+0.5)/(total_game_mass+1)",
+    "path": [
+      "global",
+      "nW",
+      "phase_x_nW",
+      "r_bin"
+    ],
+    "lambda_grid_game_equivalent_mass": [
+      0.25,
+      1,
+      4
+    ],
+    "shared_lambda_across_levels": true,
+    "unseen_cell": "nearest_observed_parent",
+    "single_class_cell": "retain_and_shrink_no_label_based_merge",
+    "interpretation": "regularized_weighted_shrinkage_not_exact_beta_binomial_posterior",
+    "root_prior": {
+      "positive_mass": 0.5,
+      "negative_mass": 0.5,
+      "total_mass": 1
+    },
+    "probability_validation": "finite_strictly_between_0_and_1_for_smoothed_models_no_output_clipping"
+  },
+  "selection": {
+    "objective": "inner_held_out_game_equal_brier",
+    "tie_absolute_tolerance": 1e-08,
+    "tie_break": [
+      "fewer_requested_bins",
+      "larger_lambda"
+    ],
+    "relearn_edges_on_outer_training_after_selection": true,
+    "outer_test_used_for_selection": false,
+    "pairing": "same_games_weights_inner_partitions_objective_tolerance; EQ0_lambda_grid_is_EQ1_B1_subset",
+    "tie_definition": "candidate_loss <= minimum_loss+1e-8_then_fewer_bins_then_larger_lambda",
+    "record_equal_sensitivity": "same_partitions_and_grid; inner_pooled_record_Brier=sum_g(n_g*BS_g)/sum_g(n_g); ties_unchanged"
+  },
+  "evaluation": {
+    "primary": "game_equal_binary_brier",
+    "secondary": [
+      "game_equal_natural_log_loss",
+      "record_equal_scores",
+      "calibration_bias",
+      "fixed_bin_reliability"
+    ],
+    "paired_difference": "OBS-EQ1_minus_OBS-EQ0_negative_is_better",
+    "log_loss_score_epsilon": 1e-12,
+    "probability_output_clipping": false,
+    "calibration_bin_edges": [
+      0,
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1
+    ],
+    "calibration_interval_min_games": 20,
+    "report_successful_empty_as_audit_subgroup_only": true,
+    "posthoc_probability_recalibration": false,
+    "log_loss_rule": "clip_only_for_scoring_to_[epsilon,1-epsilon]; report_clipped_rows_and_exact_wrong_endpoint_count; preserve_raw_predictions"
+  },
+  "uncertainty": {
+    "cluster": "whole_game",
+    "paired_resampling": true,
+    "strata": [
+      "tom_fold",
+      "downstream_outer_fold"
+    ],
+    "replicates": 2000,
+    "generator": "numpy_PCG64",
+    "seed": 20261014,
+    "draw_order": "replicate_major_then_lexicographic_tom_fold_outer_fold_then_game_id_sorted",
+    "draw_call": "rng.integers(0,60,size=60,dtype=int64)_shared_across_models_and_metrics",
+    "interval": "percentile_95_linear_quantile",
+    "scope": "approximate_fixed_prediction_case_composition_stability_not_full_training_variance",
+    "record_equal_sensitivity": "same_paired_game_draws; recompute_record_weighted_ratio_with_replicated_game_sizes_not_row_bootstrap"
+  },
+  "training_target": "event_label_y_in_explicit_offline_fit_and_evaluation_only",
+  "prediction_attributes": [
+    "phase",
+    "nW",
+    "r"
+  ],
+  "forbidden_prediction_attributes": [
+    "supervision",
+    "raw_suspicion_support",
+    "effective_suspicion_support",
+    "successful_empty_flag",
+    "training_q_target",
+    "Theta_AC"
+  ],
+  "excluded_this_stage": [
+    "tom_retraining",
+    "six_losses",
+    "POS_BND_NEG",
+    "speech_policy"
+  ],
+  "numeric_control_policy": "fixed_protocol_seeds_only_no_publication_dataset_or_provenance_digest_as_numeric_rng_input",
+  "schema_version": "observer_dtrs_d2_execution_protocol_v1",
+  "parent_proposal_digest": "d393bca91c584a17f5d7a84c804b51d0d012ad4f3651cd5bf3b1e23e60c7f53c",
+  "secondary_preregistered_baselines": [
+    "OBS-EF",
+    "OBS-LR-r"
+  ],
+  "freeze_date": "2026-10-14",
+  "support_definition": {
+    "weights_game_equal": "u_gj=1/n_g_full_eligible_game",
+    "weights_record_equal_sensitivity": "u_gj=G_train/N_train",
+    "cell_mass": "E_C=sum_gj u_gj 1_C",
+    "positive_mass": "S_C=sum_gj u_gj Y_gj 1_C",
+    "game_mass": "a_gC=sum_j u_gj 1_C",
+    "kish_games": "H_C=(sum_g a_gC)^2/sum_g a_gC^2; zero_support=0",
+    "distinct_games": "count games with a_gC>0",
+    "zero_support": "no estimate; nearest_observed_parent; empty_entire_fit_is_error"
+  },
+  "secondary_logistic": {
+    "id": "OBS-LR-r",
+    "design": "global_intercept+3_phase_nW_dummies+2_nW_r_slopes",
+    "reference_stratum": [
+      "discussion",
+      1
+    ],
+    "penalty": "all_coefficients_except_global_intercept",
+    "tau_grid": [
+      0.001,
+      0.01,
+      0.1,
+      1
+    ],
+    "objective": "sum_u_logloss/G_train+tau*L2_nonintercept/2",
+    "standardization": "training_weighted_global_r_mean_std_zero_variance_z0",
+    "selection": "same_inner_game_Brier; tie_larger_tau; refit_outer_train",
+    "single_class_training": "root_smoothed_constant",
+    "execution_stage": "D2b-2_implementation_and_acceptance_required_before_formal_comparison"
+  },
+  "historical_rng_limit_must_be_reported": true
+}
