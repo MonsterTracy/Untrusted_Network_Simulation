@@ -1,0 +1,2613 @@
+{
+  "boundary_examples": {
+    "bnd_then_neg_then_pos": {
+      "1/2": {
+        "loss_digest": "40b00c4a8694eeb96724f010cb71dfe142b43c5a3e7a5bd268128e8e016bb3ba",
+        "minimizing_actions": [
+          "BND"
+        ],
+        "probability": 0.5,
+        "probability_exact": "1/2",
+        "region": "BND",
+        "risk_gap": 0.25,
+        "risk_gap_exact": "1/4",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.5,
+          "POS": 0.5
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "1/2",
+          "POS": "1/2"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.25,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "bnd_then_neg_then_pos"
+      },
+      "1/4": {
+        "loss_digest": "40b00c4a8694eeb96724f010cb71dfe142b43c5a3e7a5bd268128e8e016bb3ba",
+        "minimizing_actions": [
+          "BND",
+          "NEG"
+        ],
+        "probability": 0.25,
+        "probability_exact": "1/4",
+        "region": "BND",
+        "risk_gap": 0.0,
+        "risk_gap_exact": "0",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.25,
+          "POS": 0.75
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "1/4",
+          "POS": "3/4"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.0,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "bnd_then_neg_then_pos"
+      },
+      "3/4": {
+        "loss_digest": "40b00c4a8694eeb96724f010cb71dfe142b43c5a3e7a5bd268128e8e016bb3ba",
+        "minimizing_actions": [
+          "POS",
+          "BND"
+        ],
+        "probability": 0.75,
+        "probability_exact": "3/4",
+        "region": "BND",
+        "risk_gap": 0.0,
+        "risk_gap_exact": "0",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.75,
+          "POS": 0.25
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "3/4",
+          "POS": "1/4"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.0,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "bnd_then_neg_then_pos"
+      }
+    },
+    "terminal_neg_then_pos_then_bnd": {
+      "1/2": {
+        "loss_digest": "5df7f77a967d576d6c48bc978882c82f767e6b15d414c86cc5b80a90ebdc58b8",
+        "minimizing_actions": [
+          "BND"
+        ],
+        "probability": 0.5,
+        "probability_exact": "1/2",
+        "region": "BND",
+        "risk_gap": 0.25,
+        "risk_gap_exact": "1/4",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.5,
+          "POS": 0.5
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "1/2",
+          "POS": "1/2"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.25,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "terminal_neg_then_pos_then_bnd"
+      },
+      "1/4": {
+        "loss_digest": "5df7f77a967d576d6c48bc978882c82f767e6b15d414c86cc5b80a90ebdc58b8",
+        "minimizing_actions": [
+          "BND",
+          "NEG"
+        ],
+        "probability": 0.25,
+        "probability_exact": "1/4",
+        "region": "NEG",
+        "risk_gap": 0.0,
+        "risk_gap_exact": "0",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.25,
+          "POS": 0.75
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "1/4",
+          "POS": "3/4"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.0,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "terminal_neg_then_pos_then_bnd"
+      },
+      "3/4": {
+        "loss_digest": "5df7f77a967d576d6c48bc978882c82f767e6b15d414c86cc5b80a90ebdc58b8",
+        "minimizing_actions": [
+          "POS",
+          "BND"
+        ],
+        "probability": 0.75,
+        "probability_exact": "3/4",
+        "region": "POS",
+        "risk_gap": 0.0,
+        "risk_gap_exact": "0",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.75,
+          "POS": 0.25
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "3/4",
+          "POS": "1/4"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.0,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "terminal_neg_then_pos_then_bnd"
+      }
+    },
+    "terminal_pos_then_neg_then_bnd": {
+      "1/2": {
+        "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+        "minimizing_actions": [
+          "BND"
+        ],
+        "probability": 0.5,
+        "probability_exact": "1/2",
+        "region": "BND",
+        "risk_gap": 0.25,
+        "risk_gap_exact": "1/4",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.5,
+          "POS": 0.5
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "1/2",
+          "POS": "1/2"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.25,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "terminal_pos_then_neg_then_bnd"
+      },
+      "1/4": {
+        "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+        "minimizing_actions": [
+          "BND",
+          "NEG"
+        ],
+        "probability": 0.25,
+        "probability_exact": "1/4",
+        "region": "NEG",
+        "risk_gap": 0.0,
+        "risk_gap_exact": "0",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.25,
+          "POS": 0.75
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "1/4",
+          "POS": "3/4"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.0,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "terminal_pos_then_neg_then_bnd"
+      },
+      "3/4": {
+        "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+        "minimizing_actions": [
+          "POS",
+          "BND"
+        ],
+        "probability": 0.75,
+        "probability_exact": "3/4",
+        "region": "POS",
+        "risk_gap": 0.0,
+        "risk_gap_exact": "0",
+        "risks": {
+          "BND": 0.25,
+          "NEG": 0.75,
+          "POS": 0.25
+        },
+        "risks_exact": {
+          "BND": "1/4",
+          "NEG": "3/4",
+          "POS": "1/4"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "threshold_distance": 0.0,
+        "thresholds": {
+          "exact_values": {
+            "alpha": "3/4",
+            "beta": "1/4",
+            "gamma": "1/2"
+          },
+          "nondegenerate": true,
+          "regime": "NONDEGENERATE",
+          "values": {
+            "alpha": 0.75,
+            "beta": 0.25,
+            "gamma": 0.5
+          }
+        },
+        "tie_policy": "terminal_pos_then_neg_then_bnd"
+      }
+    }
+  },
+  "candidate_count_per_explicit_policy": {
+    "bnd_then_neg_then_pos": 45,
+    "terminal_neg_then_pos_then_bnd": 45,
+    "terminal_pos_then_neg_then_bnd": 45
+  },
+  "evaluation": {
+    "game_equal": {
+      "NEG_error_rate": 1.0,
+      "POS_error_rate": 0.75,
+      "by_game": {
+        "controlled-A": {
+          "NEG_error_rate": null,
+          "POS_error_rate": 1.0,
+          "decided_coverage": 1.0,
+          "false_negative_joint": 0.0,
+          "false_negative_rate_given_Y1": null,
+          "false_positive_joint": 1.0,
+          "false_positive_rate_given_Y0": 1.0,
+          "games": 1,
+          "mass": 1.0,
+          "realized_risk": 1.0,
+          "regions": {
+            "BND": {
+              "event_rate": null,
+              "games": 0,
+              "loss_contribution": 0.0,
+              "mass": 0.0,
+              "proportion": 0.0,
+              "rows": 0
+            },
+            "NEG": {
+              "event_rate": null,
+              "games": 0,
+              "loss_contribution": 0.0,
+              "mass": 0.0,
+              "proportion": 0.0,
+              "rows": 0
+            },
+            "POS": {
+              "event_rate": 0.0,
+              "games": 1,
+              "loss_contribution": 1.0,
+              "mass": 1.0,
+              "proportion": 1.0,
+              "rows": 1
+            }
+          },
+          "rows": 1,
+          "selective_error_rate": 1.0
+        },
+        "controlled-B": {
+          "NEG_error_rate": 1.0,
+          "POS_error_rate": 0.0,
+          "decided_coverage": 0.6666666666666666,
+          "false_negative_joint": 0.3333333333333333,
+          "false_negative_rate_given_Y1": 0.3333333333333333,
+          "false_positive_joint": 0.0,
+          "false_positive_rate_given_Y0": null,
+          "games": 1,
+          "mass": 1.0,
+          "realized_risk": 0.4166666666666667,
+          "regions": {
+            "BND": {
+              "event_rate": 1.0,
+              "games": 1,
+              "loss_contribution": 0.08333333333333333,
+              "mass": 0.3333333333333333,
+              "proportion": 0.3333333333333333,
+              "rows": 1
+            },
+            "NEG": {
+              "event_rate": 1.0,
+              "games": 1,
+              "loss_contribution": 0.3333333333333333,
+              "mass": 0.3333333333333333,
+              "proportion": 0.3333333333333333,
+              "rows": 1
+            },
+            "POS": {
+              "event_rate": 1.0,
+              "games": 1,
+              "loss_contribution": 0.0,
+              "mass": 0.3333333333333333,
+              "proportion": 0.3333333333333333,
+              "rows": 1
+            }
+          },
+          "rows": 3,
+          "selective_error_rate": 0.5
+        }
+      },
+      "decided_coverage": 0.8333333333333334,
+      "decisions": [
+        {
+          "game_id": "controlled-A",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "POS"
+          ],
+          "probability": 0.9,
+          "probability_exact": "9/10",
+          "region": "POS",
+          "risk_gap": 0.15,
+          "risk_gap_exact": "3/20",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.9,
+            "POS": 0.1
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "9/10",
+            "POS": "1/10"
+          },
+          "sample_id": "a",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.15,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        {
+          "game_id": "controlled-B",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "NEG"
+          ],
+          "probability": 0.1,
+          "probability_exact": "1/10",
+          "region": "NEG",
+          "risk_gap": 0.15,
+          "risk_gap_exact": "3/20",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.1,
+            "POS": 0.9
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "1/10",
+            "POS": "9/10"
+          },
+          "sample_id": "b1",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.15,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        {
+          "game_id": "controlled-B",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "BND"
+          ],
+          "probability": 0.5,
+          "probability_exact": "1/2",
+          "region": "BND",
+          "risk_gap": 0.25,
+          "risk_gap_exact": "1/4",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.5,
+            "POS": 0.5
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "1/2",
+            "POS": "1/2"
+          },
+          "sample_id": "b2",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.25,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        {
+          "game_id": "controlled-B",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "POS"
+          ],
+          "probability": 0.9,
+          "probability_exact": "9/10",
+          "region": "POS",
+          "risk_gap": 0.15,
+          "risk_gap_exact": "3/20",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.9,
+            "POS": 0.1
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "9/10",
+            "POS": "1/10"
+          },
+          "sample_id": "b3",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.15,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        }
+      ],
+      "false_negative_joint": 0.16666666666666666,
+      "false_negative_rate_given_Y1": 0.3333333333333333,
+      "false_positive_joint": 0.5,
+      "false_positive_rate_given_Y0": 1.0,
+      "fixed_action_risks": {
+        "BND": 0.25,
+        "NEG": 0.5,
+        "POS": 0.5
+      },
+      "forced_binary": {
+        "NEG_error_rate": 1.0,
+        "POS_error_rate": 0.75,
+        "decided_coverage": 1.0,
+        "false_negative_joint": 0.3333333333333333,
+        "false_negative_rate_given_Y1": 0.6666666666666666,
+        "false_positive_joint": 0.5,
+        "false_positive_rate_given_Y0": 1.0,
+        "games": 2,
+        "mass": 2.0,
+        "realized_risk": 0.8333333333333334,
+        "regions": {
+          "BND": {
+            "event_rate": null,
+            "games": 0,
+            "loss_contribution": 0.0,
+            "mass": 0.0,
+            "proportion": 0.0,
+            "rows": 0
+          },
+          "NEG": {
+            "event_rate": 1.0,
+            "games": 1,
+            "loss_contribution": 0.3333333333333333,
+            "mass": 0.6666666666666666,
+            "proportion": 0.3333333333333333,
+            "rows": 2
+          },
+          "POS": {
+            "event_rate": 0.25,
+            "games": 2,
+            "loss_contribution": 0.5,
+            "mass": 1.3333333333333333,
+            "proportion": 0.6666666666666666,
+            "rows": 2
+          }
+        },
+        "rows": 4,
+        "selective_error_rate": 0.8333333333333334,
+        "tie_policy": "terminal_neg_then_pos_then_bnd"
+      },
+      "games": 2,
+      "loss": {
+        "cost_units": "as_supplied_no_automatic_normalization",
+        "costs": {
+          "b0": 0.25,
+          "b1": 0.25,
+          "c_fn": 1.0,
+          "c_fp": 1.0
+        },
+        "exact_costs": {
+          "b0": "1/4",
+          "b1": "1/4",
+          "c_fn": "1",
+          "c_fp": "1"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "tie_policy": "terminal_pos_then_neg_then_bnd"
+      },
+      "mass": 2.0,
+      "predicted_minimum_risk": 0.125,
+      "realized_risk": 0.7083333333333334,
+      "regions": {
+        "BND": {
+          "event_rate": 1.0,
+          "games": 1,
+          "loss_contribution": 0.041666666666666664,
+          "mass": 0.3333333333333333,
+          "proportion": 0.16666666666666666,
+          "rows": 1
+        },
+        "NEG": {
+          "event_rate": 1.0,
+          "games": 1,
+          "loss_contribution": 0.16666666666666666,
+          "mass": 0.3333333333333333,
+          "proportion": 0.16666666666666666,
+          "rows": 1
+        },
+        "POS": {
+          "event_rate": 0.25,
+          "games": 2,
+          "loss_contribution": 0.5,
+          "mass": 1.3333333333333333,
+          "proportion": 0.6666666666666666,
+          "rows": 2
+        }
+      },
+      "rows": 4,
+      "schema_version": "observer_dtrs_explicit_offline_decision_evaluation_v1",
+      "scope": "explicit_offline_evaluation_not_a_verified_formal_artifact",
+      "selective_error_rate": 0.8,
+      "weighting": "game_equal"
+    },
+    "record_equal": {
+      "NEG_error_rate": 1.0,
+      "POS_error_rate": 0.5,
+      "by_game": {
+        "controlled-A": {
+          "NEG_error_rate": null,
+          "POS_error_rate": 1.0,
+          "decided_coverage": 1.0,
+          "false_negative_joint": 0.0,
+          "false_negative_rate_given_Y1": null,
+          "false_positive_joint": 1.0,
+          "false_positive_rate_given_Y0": 1.0,
+          "games": 1,
+          "mass": 1.0,
+          "realized_risk": 1.0,
+          "regions": {
+            "BND": {
+              "event_rate": null,
+              "games": 0,
+              "loss_contribution": 0.0,
+              "mass": 0.0,
+              "proportion": 0.0,
+              "rows": 0
+            },
+            "NEG": {
+              "event_rate": null,
+              "games": 0,
+              "loss_contribution": 0.0,
+              "mass": 0.0,
+              "proportion": 0.0,
+              "rows": 0
+            },
+            "POS": {
+              "event_rate": 0.0,
+              "games": 1,
+              "loss_contribution": 1.0,
+              "mass": 1.0,
+              "proportion": 1.0,
+              "rows": 1
+            }
+          },
+          "rows": 1,
+          "selective_error_rate": 1.0
+        },
+        "controlled-B": {
+          "NEG_error_rate": 1.0,
+          "POS_error_rate": 0.0,
+          "decided_coverage": 0.6666666666666666,
+          "false_negative_joint": 0.3333333333333333,
+          "false_negative_rate_given_Y1": 0.3333333333333333,
+          "false_positive_joint": 0.0,
+          "false_positive_rate_given_Y0": null,
+          "games": 1,
+          "mass": 3.0,
+          "realized_risk": 0.4166666666666667,
+          "regions": {
+            "BND": {
+              "event_rate": 1.0,
+              "games": 1,
+              "loss_contribution": 0.08333333333333333,
+              "mass": 1.0,
+              "proportion": 0.3333333333333333,
+              "rows": 1
+            },
+            "NEG": {
+              "event_rate": 1.0,
+              "games": 1,
+              "loss_contribution": 0.3333333333333333,
+              "mass": 1.0,
+              "proportion": 0.3333333333333333,
+              "rows": 1
+            },
+            "POS": {
+              "event_rate": 1.0,
+              "games": 1,
+              "loss_contribution": 0.0,
+              "mass": 1.0,
+              "proportion": 0.3333333333333333,
+              "rows": 1
+            }
+          },
+          "rows": 3,
+          "selective_error_rate": 0.5
+        }
+      },
+      "decided_coverage": 0.75,
+      "decisions": [
+        {
+          "game_id": "controlled-A",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "POS"
+          ],
+          "probability": 0.9,
+          "probability_exact": "9/10",
+          "region": "POS",
+          "risk_gap": 0.15,
+          "risk_gap_exact": "3/20",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.9,
+            "POS": 0.1
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "9/10",
+            "POS": "1/10"
+          },
+          "sample_id": "a",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.15,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        {
+          "game_id": "controlled-B",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "NEG"
+          ],
+          "probability": 0.1,
+          "probability_exact": "1/10",
+          "region": "NEG",
+          "risk_gap": 0.15,
+          "risk_gap_exact": "3/20",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.1,
+            "POS": 0.9
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "1/10",
+            "POS": "9/10"
+          },
+          "sample_id": "b1",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.15,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        {
+          "game_id": "controlled-B",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "BND"
+          ],
+          "probability": 0.5,
+          "probability_exact": "1/2",
+          "region": "BND",
+          "risk_gap": 0.25,
+          "risk_gap_exact": "1/4",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.5,
+            "POS": 0.5
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "1/2",
+            "POS": "1/2"
+          },
+          "sample_id": "b2",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.25,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        {
+          "game_id": "controlled-B",
+          "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+          "minimizing_actions": [
+            "POS"
+          ],
+          "probability": 0.9,
+          "probability_exact": "9/10",
+          "region": "POS",
+          "risk_gap": 0.15,
+          "risk_gap_exact": "3/20",
+          "risks": {
+            "BND": 0.25,
+            "NEG": 0.9,
+            "POS": 0.1
+          },
+          "risks_exact": {
+            "BND": "1/4",
+            "NEG": "9/10",
+            "POS": "1/10"
+          },
+          "sample_id": "b3",
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "threshold_distance": 0.15,
+          "thresholds": {
+            "exact_values": {
+              "alpha": "3/4",
+              "beta": "1/4",
+              "gamma": "1/2"
+            },
+            "nondegenerate": true,
+            "regime": "NONDEGENERATE",
+            "values": {
+              "alpha": 0.75,
+              "beta": 0.25,
+              "gamma": 0.5
+            }
+          },
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        }
+      ],
+      "false_negative_joint": 0.25,
+      "false_negative_rate_given_Y1": 0.3333333333333333,
+      "false_positive_joint": 0.25,
+      "false_positive_rate_given_Y0": 1.0,
+      "fixed_action_risks": {
+        "BND": 0.25,
+        "NEG": 0.75,
+        "POS": 0.25
+      },
+      "forced_binary": {
+        "NEG_error_rate": 1.0,
+        "POS_error_rate": 0.5,
+        "decided_coverage": 1.0,
+        "false_negative_joint": 0.5,
+        "false_negative_rate_given_Y1": 0.6666666666666666,
+        "false_positive_joint": 0.25,
+        "false_positive_rate_given_Y0": 1.0,
+        "games": 2,
+        "mass": 4.0,
+        "realized_risk": 0.75,
+        "regions": {
+          "BND": {
+            "event_rate": null,
+            "games": 0,
+            "loss_contribution": 0.0,
+            "mass": 0.0,
+            "proportion": 0.0,
+            "rows": 0
+          },
+          "NEG": {
+            "event_rate": 1.0,
+            "games": 1,
+            "loss_contribution": 0.5,
+            "mass": 2.0,
+            "proportion": 0.5,
+            "rows": 2
+          },
+          "POS": {
+            "event_rate": 0.5,
+            "games": 2,
+            "loss_contribution": 0.25,
+            "mass": 2.0,
+            "proportion": 0.5,
+            "rows": 2
+          }
+        },
+        "rows": 4,
+        "selective_error_rate": 0.75,
+        "tie_policy": "terminal_neg_then_pos_then_bnd"
+      },
+      "games": 2,
+      "loss": {
+        "cost_units": "as_supplied_no_automatic_normalization",
+        "costs": {
+          "b0": 0.25,
+          "b1": 0.25,
+          "c_fn": 1.0,
+          "c_fp": 1.0
+        },
+        "exact_costs": {
+          "b0": "1/4",
+          "b1": "1/4",
+          "c_fn": "1",
+          "c_fp": "1"
+        },
+        "schema_version": "observer_dtrs_six_loss_decision_v1",
+        "tie_policy": "terminal_pos_then_neg_then_bnd"
+      },
+      "mass": 4.0,
+      "predicted_minimum_risk": 0.1375,
+      "realized_risk": 0.5625,
+      "regions": {
+        "BND": {
+          "event_rate": 1.0,
+          "games": 1,
+          "loss_contribution": 0.0625,
+          "mass": 1.0,
+          "proportion": 0.25,
+          "rows": 1
+        },
+        "NEG": {
+          "event_rate": 1.0,
+          "games": 1,
+          "loss_contribution": 0.25,
+          "mass": 1.0,
+          "proportion": 0.25,
+          "rows": 1
+        },
+        "POS": {
+          "event_rate": 0.5,
+          "games": 2,
+          "loss_contribution": 0.25,
+          "mass": 2.0,
+          "proportion": 0.5,
+          "rows": 2
+        }
+      },
+      "rows": 4,
+      "schema_version": "observer_dtrs_explicit_offline_decision_evaluation_v1",
+      "scope": "explicit_offline_evaluation_not_a_verified_formal_artifact",
+      "selective_error_rate": 0.6666666666666666,
+      "weighting": "record_equal"
+    }
+  },
+  "file_sha256": {
+    "scripts/check_observer_dtrs_decisions.py": "2a756341e6f15c8956ecfe407fbc08b1c1099fb9d3c4cdbc60cabcd2938de262",
+    "tests/observer_dtrs/test_decision.py": "e5cc5be68b3cfc4b680e360156e118992dbcf91fdf77b117c5f7de890fe1ef86",
+    "tests/observer_dtrs/test_decision_offline.py": "03bd2d637f2c7c85f2ab650c8b7e6bc6691aba6de5def42438c8d27c05ac95fa",
+    "werewolf/observer_dtrs/decision.py": "bdbb89647dd1d226c98ebc9e130750c052426e7fa47d5277a6da80c90bba287b",
+    "werewolf/observer_dtrs/decision_offline.py": "5bec627d7089e9c0e25ec71bf728c50fed6458930e05394cba02a3c7d7a9fa55"
+  },
+  "formal_D3_experiment_run": false,
+  "formal_D3_protocol_frozen": false,
+  "formal_data_read": false,
+  "schema_version": "observer_dtrs_d3b_controlled_acceptance_v1",
+  "scope": "artificial_two_games_four_probabilities_only",
+  "stability": {
+    "cost_scenarios": [
+      {
+        "flipped_quality_fraction": 0.0,
+        "loss": {
+          "cost_units": "as_supplied_no_automatic_normalization",
+          "costs": {
+            "b0": 0.5,
+            "b1": 0.5,
+            "c_fn": 2.0,
+            "c_fp": 2.0
+          },
+          "exact_costs": {
+            "b0": "1/2",
+            "b1": "1/2",
+            "c_fn": "2",
+            "c_fp": "2"
+          },
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        "rows": [
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "f311b53617ffa2c1e362af1f4b6f8115318336516fa9e3dfc066baee55a64910",
+                  "minimizing_actions": [
+                    "POS"
+                  ],
+                  "probability": 0.9,
+                  "probability_exact": "9/10",
+                  "region": "POS",
+                  "risk_gap": 0.3,
+                  "risk_gap_exact": "3/10",
+                  "risks": {
+                    "BND": 0.5,
+                    "NEG": 1.8,
+                    "POS": 0.2
+                  },
+                  "risks_exact": {
+                    "BND": "1/2",
+                    "NEG": "9/5",
+                    "POS": "1/5"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.15,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "3/4",
+                      "beta": "1/4",
+                      "gamma": "1/2"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.75,
+                      "beta": 0.25,
+                      "gamma": 0.5
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 0.5,
+                    "b1": 0.5,
+                    "c_fn": 2.0,
+                    "c_fp": 2.0
+                  },
+                  "exact_costs": {
+                    "b0": "1/2",
+                    "b1": "1/2",
+                    "c_fn": "2",
+                    "c_fp": "2"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": false
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "a",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          },
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "f311b53617ffa2c1e362af1f4b6f8115318336516fa9e3dfc066baee55a64910",
+                  "minimizing_actions": [
+                    "NEG"
+                  ],
+                  "probability": 0.1,
+                  "probability_exact": "1/10",
+                  "region": "NEG",
+                  "risk_gap": 0.3,
+                  "risk_gap_exact": "3/10",
+                  "risks": {
+                    "BND": 0.5,
+                    "NEG": 0.2,
+                    "POS": 1.8
+                  },
+                  "risks_exact": {
+                    "BND": "1/2",
+                    "NEG": "1/5",
+                    "POS": "9/5"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.15,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "3/4",
+                      "beta": "1/4",
+                      "gamma": "1/2"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.75,
+                      "beta": 0.25,
+                      "gamma": 0.5
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 0.5,
+                    "b1": 0.5,
+                    "c_fn": 2.0,
+                    "c_fp": 2.0
+                  },
+                  "exact_costs": {
+                    "b0": "1/2",
+                    "b1": "1/2",
+                    "c_fn": "2",
+                    "c_fp": "2"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": false
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "NEG"
+              ],
+              "probability": 0.1,
+              "probability_exact": "1/10",
+              "region": "NEG",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.1,
+                "POS": 0.9
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/10",
+                "POS": "9/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "b1",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          },
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "f311b53617ffa2c1e362af1f4b6f8115318336516fa9e3dfc066baee55a64910",
+                  "minimizing_actions": [
+                    "BND"
+                  ],
+                  "probability": 0.5,
+                  "probability_exact": "1/2",
+                  "region": "BND",
+                  "risk_gap": 0.5,
+                  "risk_gap_exact": "1/2",
+                  "risks": {
+                    "BND": 0.5,
+                    "NEG": 1.0,
+                    "POS": 1.0
+                  },
+                  "risks_exact": {
+                    "BND": "1/2",
+                    "NEG": "1",
+                    "POS": "1"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.25,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "3/4",
+                      "beta": "1/4",
+                      "gamma": "1/2"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.75,
+                      "beta": 0.25,
+                      "gamma": 0.5
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 0.5,
+                    "b1": 0.5,
+                    "c_fn": 2.0,
+                    "c_fp": 2.0
+                  },
+                  "exact_costs": {
+                    "b0": "1/2",
+                    "b1": "1/2",
+                    "c_fn": "2",
+                    "c_fp": "2"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": false
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "BND"
+              ],
+              "probability": 0.5,
+              "probability_exact": "1/2",
+              "region": "BND",
+              "risk_gap": 0.25,
+              "risk_gap_exact": "1/4",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.5,
+                "POS": 0.5
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/2",
+                "POS": "1/2"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.25,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "b2",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          },
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "f311b53617ffa2c1e362af1f4b6f8115318336516fa9e3dfc066baee55a64910",
+                  "minimizing_actions": [
+                    "POS"
+                  ],
+                  "probability": 0.9,
+                  "probability_exact": "9/10",
+                  "region": "POS",
+                  "risk_gap": 0.3,
+                  "risk_gap_exact": "3/10",
+                  "risks": {
+                    "BND": 0.5,
+                    "NEG": 1.8,
+                    "POS": 0.2
+                  },
+                  "risks_exact": {
+                    "BND": "1/2",
+                    "NEG": "9/5",
+                    "POS": "1/5"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.15,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "3/4",
+                      "beta": "1/4",
+                      "gamma": "1/2"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.75,
+                      "beta": 0.25,
+                      "gamma": 0.5
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 0.5,
+                    "b1": 0.5,
+                    "c_fn": 2.0,
+                    "c_fp": 2.0
+                  },
+                  "exact_costs": {
+                    "b0": "1/2",
+                    "b1": "1/2",
+                    "c_fn": "2",
+                    "c_fp": "2"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": false
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "b3",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          }
+        ]
+      },
+      {
+        "flipped_quality_fraction": 0.8333333333333334,
+        "loss": {
+          "cost_units": "as_supplied_no_automatic_normalization",
+          "costs": {
+            "b0": 1.0,
+            "b1": 0.25,
+            "c_fn": 1.0,
+            "c_fp": 4.0
+          },
+          "exact_costs": {
+            "b0": "1",
+            "b1": "1/4",
+            "c_fn": "1",
+            "c_fp": "4"
+          },
+          "schema_version": "observer_dtrs_six_loss_decision_v1",
+          "tie_policy": "terminal_pos_then_neg_then_bnd"
+        },
+        "rows": [
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "3f2aa6f3f148253c6aa5f15858fc3004271837715ee0c92859bc3d9afb485045",
+                  "minimizing_actions": [
+                    "BND"
+                  ],
+                  "probability": 0.9,
+                  "probability_exact": "9/10",
+                  "region": "BND",
+                  "risk_gap": 0.075,
+                  "risk_gap_exact": "3/40",
+                  "risks": {
+                    "BND": 0.325,
+                    "NEG": 0.9,
+                    "POS": 0.4
+                  },
+                  "risks_exact": {
+                    "BND": "13/40",
+                    "NEG": "9/10",
+                    "POS": "2/5"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.023076923076923078,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "12/13",
+                      "beta": "4/7",
+                      "gamma": "4/5"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.9230769230769231,
+                      "beta": 0.5714285714285714,
+                      "gamma": 0.8
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 1.0,
+                    "b1": 0.25,
+                    "c_fn": 1.0,
+                    "c_fp": 4.0
+                  },
+                  "exact_costs": {
+                    "b0": "1",
+                    "b1": "1/4",
+                    "c_fn": "1",
+                    "c_fp": "4"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": true
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "a",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          },
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "3f2aa6f3f148253c6aa5f15858fc3004271837715ee0c92859bc3d9afb485045",
+                  "minimizing_actions": [
+                    "NEG"
+                  ],
+                  "probability": 0.1,
+                  "probability_exact": "1/10",
+                  "region": "NEG",
+                  "risk_gap": 0.825,
+                  "risk_gap_exact": "33/40",
+                  "risks": {
+                    "BND": 0.925,
+                    "NEG": 0.1,
+                    "POS": 3.6
+                  },
+                  "risks_exact": {
+                    "BND": "37/40",
+                    "NEG": "1/10",
+                    "POS": "18/5"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.4714285714285714,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "12/13",
+                      "beta": "4/7",
+                      "gamma": "4/5"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.9230769230769231,
+                      "beta": 0.5714285714285714,
+                      "gamma": 0.8
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 1.0,
+                    "b1": 0.25,
+                    "c_fn": 1.0,
+                    "c_fp": 4.0
+                  },
+                  "exact_costs": {
+                    "b0": "1",
+                    "b1": "1/4",
+                    "c_fn": "1",
+                    "c_fp": "4"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": false
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "NEG"
+              ],
+              "probability": 0.1,
+              "probability_exact": "1/10",
+              "region": "NEG",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.1,
+                "POS": 0.9
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/10",
+                "POS": "9/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "b1",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          },
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "3f2aa6f3f148253c6aa5f15858fc3004271837715ee0c92859bc3d9afb485045",
+                  "minimizing_actions": [
+                    "NEG"
+                  ],
+                  "probability": 0.5,
+                  "probability_exact": "1/2",
+                  "region": "NEG",
+                  "risk_gap": 0.125,
+                  "risk_gap_exact": "1/8",
+                  "risks": {
+                    "BND": 0.625,
+                    "NEG": 0.5,
+                    "POS": 2.0
+                  },
+                  "risks_exact": {
+                    "BND": "5/8",
+                    "NEG": "1/2",
+                    "POS": "2"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.07142857142857142,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "12/13",
+                      "beta": "4/7",
+                      "gamma": "4/5"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.9230769230769231,
+                      "beta": 0.5714285714285714,
+                      "gamma": 0.8
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 1.0,
+                    "b1": 0.25,
+                    "c_fn": 1.0,
+                    "c_fp": 4.0
+                  },
+                  "exact_costs": {
+                    "b0": "1",
+                    "b1": "1/4",
+                    "c_fn": "1",
+                    "c_fp": "4"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": true
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "BND"
+              ],
+              "probability": 0.5,
+              "probability_exact": "1/2",
+              "region": "BND",
+              "risk_gap": 0.25,
+              "risk_gap_exact": "1/4",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.5,
+                "POS": 0.5
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/2",
+                "POS": "1/2"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.25,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "b2",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          },
+          {
+            "alternatives": [
+              {
+                "decision": {
+                  "loss_digest": "3f2aa6f3f148253c6aa5f15858fc3004271837715ee0c92859bc3d9afb485045",
+                  "minimizing_actions": [
+                    "BND"
+                  ],
+                  "probability": 0.9,
+                  "probability_exact": "9/10",
+                  "region": "BND",
+                  "risk_gap": 0.075,
+                  "risk_gap_exact": "3/40",
+                  "risks": {
+                    "BND": 0.325,
+                    "NEG": 0.9,
+                    "POS": 0.4
+                  },
+                  "risks_exact": {
+                    "BND": "13/40",
+                    "NEG": "9/10",
+                    "POS": "2/5"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "threshold_distance": 0.023076923076923078,
+                  "thresholds": {
+                    "exact_values": {
+                      "alpha": "12/13",
+                      "beta": "4/7",
+                      "gamma": "4/5"
+                    },
+                    "nondegenerate": true,
+                    "regime": "NONDEGENERATE",
+                    "values": {
+                      "alpha": 0.9230769230769231,
+                      "beta": 0.5714285714285714,
+                      "gamma": 0.8
+                    }
+                  },
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "loss": {
+                  "cost_units": "as_supplied_no_automatic_normalization",
+                  "costs": {
+                    "b0": 1.0,
+                    "b1": 0.25,
+                    "c_fn": 1.0,
+                    "c_fp": 4.0
+                  },
+                  "exact_costs": {
+                    "b0": "1",
+                    "b1": "1/4",
+                    "c_fn": "1",
+                    "c_fp": "4"
+                  },
+                  "schema_version": "observer_dtrs_six_loss_decision_v1",
+                  "tie_policy": "terminal_pos_then_neg_then_bnd"
+                },
+                "region_flipped": true
+              }
+            ],
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "sample_id": "b3",
+            "scope": "declared_cost_sensitivity_not_cost_optimization"
+          }
+        ]
+      }
+    ],
+    "probability_scenarios": [
+      {
+        "radius": 0.0,
+        "rows": [
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "9/10",
+              "9/10"
+            ],
+            "optimal_actions_union": [
+              "POS"
+            ],
+            "sample_id": "a",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "POS"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "NEG"
+              ],
+              "probability": 0.1,
+              "probability_exact": "1/10",
+              "region": "NEG",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.1,
+                "POS": 0.9
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/10",
+                "POS": "9/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "1/10",
+              "1/10"
+            ],
+            "optimal_actions_union": [
+              "NEG"
+            ],
+            "sample_id": "b1",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "NEG"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "BND"
+              ],
+              "probability": 0.5,
+              "probability_exact": "1/2",
+              "region": "BND",
+              "risk_gap": 0.25,
+              "risk_gap_exact": "1/4",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.5,
+                "POS": 0.5
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/2",
+                "POS": "1/2"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.25,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "1/2",
+              "1/2"
+            ],
+            "optimal_actions_union": [
+              "BND"
+            ],
+            "sample_id": "b2",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "BND"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "9/10",
+              "9/10"
+            ],
+            "optimal_actions_union": [
+              "POS"
+            ],
+            "sample_id": "b3",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "POS"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          }
+        ],
+        "unstable_quality_fraction": 0.0
+      },
+      {
+        "radius": 0.01,
+        "rows": [
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "89/100",
+              "91/100"
+            ],
+            "optimal_actions_union": [
+              "POS"
+            ],
+            "sample_id": "a",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "POS"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "NEG"
+              ],
+              "probability": 0.1,
+              "probability_exact": "1/10",
+              "region": "NEG",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.1,
+                "POS": 0.9
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/10",
+                "POS": "9/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "9/100",
+              "11/100"
+            ],
+            "optimal_actions_union": [
+              "NEG"
+            ],
+            "sample_id": "b1",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "NEG"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "BND"
+              ],
+              "probability": 0.5,
+              "probability_exact": "1/2",
+              "region": "BND",
+              "risk_gap": 0.25,
+              "risk_gap_exact": "1/4",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.5,
+                "POS": 0.5
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/2",
+                "POS": "1/2"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.25,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "49/100",
+              "51/100"
+            ],
+            "optimal_actions_union": [
+              "BND"
+            ],
+            "sample_id": "b2",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "BND"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "89/100",
+              "91/100"
+            ],
+            "optimal_actions_union": [
+              "POS"
+            ],
+            "sample_id": "b3",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "POS"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          }
+        ],
+        "unstable_quality_fraction": 0.0
+      },
+      {
+        "radius": 0.05,
+        "rows": [
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "17/20",
+              "19/20"
+            ],
+            "optimal_actions_union": [
+              "POS"
+            ],
+            "sample_id": "a",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "POS"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "NEG"
+              ],
+              "probability": 0.1,
+              "probability_exact": "1/10",
+              "region": "NEG",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.1,
+                "POS": 0.9
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/10",
+                "POS": "9/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "1/20",
+              "3/20"
+            ],
+            "optimal_actions_union": [
+              "NEG"
+            ],
+            "sample_id": "b1",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "NEG"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "BND"
+              ],
+              "probability": 0.5,
+              "probability_exact": "1/2",
+              "region": "BND",
+              "risk_gap": 0.25,
+              "risk_gap_exact": "1/4",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.5,
+                "POS": 0.5
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "1/2",
+                "POS": "1/2"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.25,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "9/20",
+              "11/20"
+            ],
+            "optimal_actions_union": [
+              "BND"
+            ],
+            "sample_id": "b2",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "BND"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          },
+          {
+            "baseline": {
+              "loss_digest": "20abf8e630474b28d64a41b0a7c03017ce8e0f6bb05052e052156a6c56cd1a1e",
+              "minimizing_actions": [
+                "POS"
+              ],
+              "probability": 0.9,
+              "probability_exact": "9/10",
+              "region": "POS",
+              "risk_gap": 0.15,
+              "risk_gap_exact": "3/20",
+              "risks": {
+                "BND": 0.25,
+                "NEG": 0.9,
+                "POS": 0.1
+              },
+              "risks_exact": {
+                "BND": "1/4",
+                "NEG": "9/10",
+                "POS": "1/10"
+              },
+              "schema_version": "observer_dtrs_six_loss_decision_v1",
+              "threshold_distance": 0.15,
+              "thresholds": {
+                "exact_values": {
+                  "alpha": "3/4",
+                  "beta": "1/4",
+                  "gamma": "1/2"
+                },
+                "nondegenerate": true,
+                "regime": "NONDEGENERATE",
+                "values": {
+                  "alpha": 0.75,
+                  "beta": 0.25,
+                  "gamma": 0.5
+                }
+              },
+              "tie_policy": "terminal_pos_then_neg_then_bnd"
+            },
+            "interval_exact": [
+              "17/20",
+              "19/20"
+            ],
+            "optimal_actions_union": [
+              "POS"
+            ],
+            "sample_id": "b3",
+            "scope": "external_probability_sensitivity_not_confidence_interval",
+            "selected_regions": [
+              "POS"
+            ],
+            "stable_under_selected_tie_policy": true,
+            "worst_case_regret": 0.0
+          }
+        ],
+        "unstable_quality_fraction": 0.0
+      }
+    ],
+    "scope": "label_free_sensitivity_not_confidence_or_cost_selection",
+    "weighting": "game_equal"
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "D3_exact_paths": [
+    "configs/observer_dtrs/d3-execution-v1.json",
+    "docs/research/observer-dtrs-v1-d3-commit-plan.json",
+    "docs/research/observer-dtrs-v1-d3-prefreeze-acceptance.json",
+    "docs/research/observer-dtrs-v1-d3-prefreeze.md",
+    "docs/research/observer-dtrs-v1-d3a-controlled-validation.json",
+    "docs/research/observer-dtrs-v1-d3a-protocol.md",
+    "docs/research/observer-dtrs-v1-d3a-sources.md",
+    "docs/research/observer-dtrs-v1-d3b-controlled-acceptance.json",
+    "docs/research/observer-dtrs-v1-d3b.md",
+    "docs/research/observer-dtrs-v1-d3c-download-plan.md",
+    "docs/research/observer-dtrs-v1-d3c1-acceptance.json",
+    "docs/research/observer-dtrs-v1-d3c1.md",
+    "docs/research/observer-dtrs-v1-d3c2-acceptance.json",
+    "docs/research/observer-dtrs-v1-d3c2.md",
+    "docs/research/observer-dtrs-v1-d3d1-acceptance.json",
+    "docs/research/observer-dtrs-v1-d3d1.md",
+    "scripts/benchmark_observer_dtrs_decisions.py",
+    "scripts/check_observer_dtrs_decision_theory.py",
+    "scripts/check_observer_dtrs_decisions.py",
+    "scripts/inspect_observer_dtrs_sealed_d2.py",
+    "scripts/inspect_observer_dtrs_training_audit.py",
+    "scripts/run_observer_dtrs_decisions.py",
+    "tests/observer_dtrs/test_d3_runner.py",
+    "tests/observer_dtrs/test_decision.py",
+    "tests/observer_dtrs/test_decision_offline.py",
+    "tests/observer_dtrs/test_decision_theory.py",
+    "tests/observer_dtrs/test_sealed_d2.py",
+    "tests/observer_dtrs/test_training_audit.py",
+    "werewolf/observer_dtrs/d3_inputs_offline.py",
+    "werewolf/observer_dtrs/d3_protocol.py",
+    "werewolf/observer_dtrs/d3_runner.py",
+    "werewolf/observer_dtrs/d3_stability.py",
+    "werewolf/observer_dtrs/decision.py",
+    "werewolf/observer_dtrs/decision_offline.py",
+    "werewolf/observer_dtrs/sealed_d2_offline.py",
+    "werewolf/observer_dtrs/training_audit_offline.py"
+  ],
+  "D3_file_count": 36,
+  "base_revision": "3ff578f97b9d4c3620a15a67357ddabd848d10fc",
+  "branch": "three-way",
+  "commit_executed": false,
+  "instructions": "after explicit authorization: freeze lifecycle status and record new protocol digest, stage these exact D3 paths, commit, recheck real new OID guard; do not restore stash or stage unrelated files",
+  "original_research_stash_excluded": "c75cb291ac6a12b1ad697537d78ee98e0513dbd0",
+  "production_guard_required_new_paths": [
+    "configs/observer_dtrs/d3-execution-v1.json",
+    "scripts/run_observer_dtrs_decisions.py",
+    "werewolf/observer_dtrs/d3_inputs_offline.py",
+    "werewolf/observer_dtrs/d3_protocol.py",
+    "werewolf/observer_dtrs/d3_runner.py",
+    "werewolf/observer_dtrs/d3_stability.py",
+    "werewolf/observer_dtrs/decision.py",
+    "werewolf/observer_dtrs/decision_offline.py",
+    "werewolf/observer_dtrs/sealed_d2_offline.py",
+    "werewolf/observer_dtrs/training_audit_offline.py"
+  ],
+  "schema_version": "observer_dtrs_D3_commit_plan_v1",
+  "separate_D2_results_archive_paths": [
+    "docs/research/observer-dtrs-v1-d2-results-provenance.json",
+    "docs/research/observer-dtrs-v1-d2-results-tables.md",
+    "docs/research/observer-dtrs-v1-d2-results.md"
+  ],
+  "stage_groups": {
+    "D3_prefreeze_final": [
+      "docs/research/observer-dtrs-v1-d3-commit-plan.json",
+      "docs/research/observer-dtrs-v1-d3-prefreeze-acceptance.json",
+      "docs/research/observer-dtrs-v1-d3-prefreeze.md",
+      "scripts/benchmark_observer_dtrs_decisions.py",
+      "werewolf/observer_dtrs/d3_stability.py"
+    ],
+    "D3a": [
+      "docs/research/observer-dtrs-v1-d3a-controlled-validation.json",
+      "docs/research/observer-dtrs-v1-d3a-protocol.md",
+      "docs/research/observer-dtrs-v1-d3a-sources.md",
+      "scripts/check_observer_dtrs_decision_theory.py",
+      "tests/observer_dtrs/test_decision_theory.py"
+    ],
+    "D3b": [
+      "docs/research/observer-dtrs-v1-d3b-controlled-acceptance.json",
+      "docs/research/observer-dtrs-v1-d3b.md",
+      "docs/research/observer-dtrs-v1-d3c-download-plan.md",
+      "scripts/check_observer_dtrs_decisions.py",
+      "tests/observer_dtrs/test_decision.py",
+      "tests/observer_dtrs/test_decision_offline.py",
+      "werewolf/observer_dtrs/decision.py",
+      "werewolf/observer_dtrs/decision_offline.py"
+    ],
+    "D3c1": [
+      "docs/research/observer-dtrs-v1-d3c1-acceptance.json",
+      "docs/research/observer-dtrs-v1-d3c1.md",
+      "scripts/inspect_observer_dtrs_sealed_d2.py",
+      "tests/observer_dtrs/test_sealed_d2.py",
+      "werewolf/observer_dtrs/sealed_d2_offline.py"
+    ],
+    "D3c2": [
+      "docs/research/observer-dtrs-v1-d3c2-acceptance.json",
+      "docs/research/observer-dtrs-v1-d3c2.md",
+      "scripts/inspect_observer_dtrs_training_audit.py",
+      "tests/observer_dtrs/test_training_audit.py",
+      "werewolf/observer_dtrs/training_audit_offline.py"
+    ],
+    "D3d1_with_final_updates": [
+      "configs/observer_dtrs/d3-execution-v1.json",
+      "docs/research/observer-dtrs-v1-d3d1-acceptance.json",
+      "docs/research/observer-dtrs-v1-d3d1.md",
+      "scripts/run_observer_dtrs_decisions.py",
+      "tests/observer_dtrs/test_d3_runner.py",
+      "werewolf/observer_dtrs/d3_inputs_offline.py",
+      "werewolf/observer_dtrs/d3_protocol.py",
+      "werewolf/observer_dtrs/d3_runner.py"
+    ]
+  }
+}
