@@ -1,0 +1,419 @@
+{
+  "schema_version": "observer_dtrs_d4c2a_local_acceptance_v2",
+  "status": "P1_FIXED_LOCAL_ISOLATED_ACCEPTANCE_SERVER_EVIDENCE_PENDING",
+  "created_utc": "2026-10-17T15:40:33.322760+00:00",
+  "project_source_revision": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+  "project_branch": "three-way",
+  "source_uncommitted": true,
+  "five_file_paths": [
+    "scripts/audit_qwen3_final_provenance.py",
+    "werewolf/observer_dtrs/final_tom_audit.py",
+    "tests/observer_dtrs/test_final_tom_audit.py",
+    "docs/research/observer-dtrs-v1-d4c2a-final-tom-audit.md",
+    "docs/research/observer-dtrs-v1-d4c2a-acceptance.json"
+  ],
+  "new_files": {
+    "scripts/audit_qwen3_final_provenance.py": {
+      "sha256": "a117cd02c91ad5d1d5088eef1d854e3c54e9acbc70c867751cf1be12c13ab92d",
+      "bytes": 2253
+    },
+    "werewolf/observer_dtrs/final_tom_audit.py": {
+      "sha256": "8fcabd739302d5115a718897152720d085e4e49466b92a72a9dbe2ae9fc1134c",
+      "bytes": 22364
+    },
+    "tests/observer_dtrs/test_final_tom_audit.py": {
+      "sha256": "3b0f58e7cc2f335f15bebb2db9cd3817fbb27721807e2a7166db9cc8e9c27120",
+      "bytes": 29112
+    },
+    "docs/research/observer-dtrs-v1-d4c2a-final-tom-audit.md": {
+      "sha256": "a56f14a2fbb666b7acb77fce762a02abb755db4fbdbf65ad4fb2f202eb8d671b",
+      "bytes": 19786
+    }
+  },
+  "fix": {
+    "scope": "output writer and controlled tests/docs only; CLI and frozen dependencies unchanged",
+    "protected_roots": "strictly resolved known ancestors; lexical containment plus existing directory device/inode identity",
+    "failure_path_protection": "same writer for successful and failed reports; unresolvable protection roots refuse all writes",
+    "creation": "parent fd O_DIRECTORY/O_NOFOLLOW with identity recheck, file O_EXCL/O_NOFOLLOW mode0600, file+directory fsync",
+    "other_artifacts_and_source": "ancestor manifests and .git, including dangling markers, refuse writes",
+    "not_a_filesystem_snapshot": true
+  },
+  "tests": {
+    "interpreter": "/Users/name_yuxiao/anaconda3/envs/3wd/bin/python",
+    "options": "PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH='' python -B -m pytest -q -p no:cacheprovider",
+    "isolated_targeted": {
+      "path": "tests/observer_dtrs/test_final_tom_audit.py",
+      "passed": 90,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 27.13,
+      "log_sha256": "14ad4389970f74ed3d7a3a8cf60d43a4a74921050f725e0c35488b672a632724"
+    },
+    "isolated_regression": {
+      "paths": [
+        "tests/observer_dtrs/test_final_tom_audit.py",
+        "tests/artifact_io/test_canonical_artifacts.py",
+        "tests/tom/test_temporal.py",
+        "tests/canonical_collection/test_final_capacity.py",
+        "tests/tom/test_gameplay_ablation.py"
+      ],
+      "passed": 150,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 58.82,
+      "log_sha256": "e628913a1d56473fbdf38acd50aff448222445af343ef596294829a16a5c5d29",
+      "contains_targeted_90": true,
+      "contains_uncommitted_shadow_tests": false
+    },
+    "public_cli_protected_path_cases": 35,
+    "controlled_cli_scope": "CONTROLLED_FIXTURE; synthetic expected pins injected only in Python test seam, no new production CLI option",
+    "fsync_exclusive_permission_sha_overwrite_tests": "PASS",
+    "case_alias_on_actual_filesystem": "PASS_NOT_SKIPPED",
+    "python_ast": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "isolation": {
+    "closure_files": [
+      "scripts/__init__.py",
+      "scripts/audit_qwen3_final_provenance.py",
+      "tests/__init__.py",
+      "tests/observer_dtrs/__init__.py",
+      "tests/observer_dtrs/test_final_tom_audit.py",
+      "werewolf/__init__.py",
+      "werewolf/artifact_io/__init__.py",
+      "werewolf/artifact_io/canonical.py",
+      "werewolf/artifact_io/tensor_state.py",
+      "werewolf/canonical_collection/__init__.py",
+      "werewolf/canonical_collection/attempt_ledger.py",
+      "werewolf/canonical_collection/collector.py",
+      "werewolf/canonical_collection/failure_evidence.py",
+      "werewolf/canonical_collection/frozen_json.py",
+      "werewolf/canonical_collection/game_bundle.py",
+      "werewolf/canonical_collection/pre.py",
+      "werewolf/canonical_collection/public_history.py",
+      "werewolf/canonical_collection/speech.py",
+      "werewolf/canonical_collection/trajectory_evidence.py",
+      "werewolf/observer_dtrs/__init__.py",
+      "werewolf/observer_dtrs/final_tom_audit.py",
+      "werewolf/structured_history.py",
+      "werewolf/tom/__init__.py",
+      "werewolf/tom/final_capacity.py",
+      "werewolf/tom/temporal.py"
+    ],
+    "closure_count": 25,
+    "missing_dependencies": [],
+    "frozen_base_files": 433,
+    "frozen_base_files_match_git_blobs": true,
+    "only_five_files_added": true,
+    "no_other_d4_files": true
+  },
+  "controlled_modes": {
+    "metadata": {
+      "status": "PASS_WITH_EXPLICIT_SCOPE_LIMITS",
+      "scope": "CONTROLLED_FIXTURE",
+      "returncode": 0,
+      "evidence_digest": "ada40b67d5d3ddc9691adfaa3a4fb085a22bec6a2e773312b1f64bab8c9bc126",
+      "file_raw_sha256": "d5e4be13ee48d5e2ea4f324059a01cc957b8e3df26ad6c9f9044621a2e214949",
+      "full_semantic_recovery": "NOT_RUN"
+    },
+    "chain-files": {
+      "status": "PASS_WITH_EXPLICIT_SCOPE_LIMITS",
+      "scope": "CONTROLLED_FIXTURE",
+      "returncode": 0,
+      "evidence_digest": "6cb02ee4dd0778a121db38e78cb613dc81bcfc07dcd837ef271952a93d4dfa81",
+      "file_raw_sha256": "7f1f0161a769536d7d8a96b44bfba6a60bc45d43148c82219ee45bd80b4c4944",
+      "full_semantic_recovery": "NOT_RUN"
+    },
+    "protected_artificial_inputs_and_git_unchanged": true
+  },
+  "preservation": {
+    "original_project_files": 461,
+    "permitted_changed_files": [
+      "werewolf/observer_dtrs/final_tom_audit.py",
+      "tests/observer_dtrs/test_final_tom_audit.py",
+      "docs/research/observer-dtrs-v1-d4c2a-final-tom-audit.md",
+      "docs/research/observer-dtrs-v1-d4c2a-acceptance.json"
+    ],
+    "entrypoint_unchanged": true,
+    "all_other_project_files_expected_unchanged": true,
+    "real_research_data": "NOT_ACCESSED",
+    "originally_clean_artificial_checkouts_remained_clean": true,
+    "intentionally_invalid_artificial_sources_preserved": true,
+    "project_staged_empty": true,
+    "head_branch_stash_worktrees_unchanged": true
+  },
+  "history": {
+    "original_unfixed_acceptance": {
+      "scope": "historical full workspace; 138 is NOT the current isolated test count",
+      "raw_file_sha256": "09711d41fde73a5afdd2af3cc5dc9221948f5fd64e5c7a6af780a782fd41ce1f",
+      "reconstruct_raw": "json.dumps(record, ensure_ascii=False, indent=2) + newline",
+      "record": {
+        "schema_version": "observer_dtrs_d4c2a_local_acceptance_v1",
+        "status": "LOCAL_CONTROLLED_ACCEPTANCE_ONLY_SERVER_EVIDENCE_PENDING",
+        "created_utc": "2026-10-17T03:03:28.151294+00:00",
+        "project_source_revision": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+        "project_branch": "three-way",
+        "source_uncommitted": true,
+        "new_files": {
+          "werewolf/observer_dtrs/final_tom_audit.py": {
+            "sha256": "ce3851af5888d07150550a262f2124e60e71fbb3c46d0c9c1c69421fb817a1e2",
+            "bytes": 20620
+          },
+          "scripts/audit_qwen3_final_provenance.py": {
+            "sha256": "a117cd02c91ad5d1d5088eef1d854e3c54e9acbc70c867751cf1be12c13ab92d",
+            "bytes": 2253
+          },
+          "tests/observer_dtrs/test_final_tom_audit.py": {
+            "sha256": "df4984f81414631bf2bbd1fe4dd82600b12807371a203d3feb8446cb80b09030",
+            "bytes": 18822
+          },
+          "docs/research/observer-dtrs-v1-d4c2a-final-tom-audit.md": {
+            "sha256": "629ec2932532c561da92f5315ddb1200c7807d03ae3d0def23f4367427324c8e",
+            "bytes": 15582
+          }
+        },
+        "expected_final_pins": {
+          "revision": "f199a9e6c64168a412de91ff8ca04d0c795c57e2",
+          "fit": "87c2485acf48443034c59430d79f098a13151677852988bf691599ca2d2f8248",
+          "terminal": "b977ec24d6292ad329e664c931a1aae39dc4738b4b33685b19d92fd4fb1921af",
+          "seal": "fcbb81ee43050142ebdf01c0aee576156221d725598ff5ee2c02055049f72718",
+          "model_descriptor": "fdf858b5e21a1951da9ed2c2b9e988f8a1f1edcf99d2bb84f54faf055dc7e3e9"
+        },
+        "pin_evidence": "reviewed_existing_client_constants_not_original_final_artifacts",
+        "controlled_modes": {
+          "metadata": {
+            "status": "PASS_WITH_EXPLICIT_SCOPE_LIMITS",
+            "scope": "CONTROLLED_FIXTURE",
+            "evidence_digest": "905fd9e9e0418632b901ea11a424d9abc35f79dd20d1bcb579a4b3425285ff17",
+            "file_sha256": "0ea9ca5945bfa32b10c981b103aa75f353c42b1ca0857049369cda97a40531a5",
+            "full_semantic_recovery": "NOT_RUN"
+          },
+          "chain-files": {
+            "status": "PASS_WITH_EXPLICIT_SCOPE_LIMITS",
+            "scope": "CONTROLLED_FIXTURE",
+            "evidence_digest": "e3123ef378d3dca4a219439fa40d3d048fa3682245ae5548119cd932a2dd34b8",
+            "file_sha256": "57255231f16e0be4a4ec1f6a4b98c11e38341e828b8372293f0ee95706ea5c83",
+            "full_semantic_recovery": "NOT_RUN"
+          }
+        },
+        "tests": {
+          "interpreter": "/Users/name_yuxiao/anaconda3/envs/3wd/bin/python",
+          "options": "PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -q -p no:cacheprovider",
+          "targeted": {
+            "path": "tests/observer_dtrs/test_final_tom_audit.py",
+            "passed": 35,
+            "log_sha256": "2f6aae3ddc508a2fb7e8f332351d1fa4bafba6fe864aace0f69d094ebaacd440"
+          },
+          "regression": {
+            "paths": [
+              "tests/observer_dtrs/test_final_tom_audit.py",
+              "tests/artifact_io/test_canonical_artifacts.py",
+              "tests/tom/test_temporal.py",
+              "tests/canonical_collection/test_final_capacity.py",
+              "tests/tom/test_gameplay_ablation.py",
+              "tests/observer_dtrs/test_shadow_deployment.py",
+              "tests/observer_dtrs/test_shadow_worker.py"
+            ],
+            "passed": 138,
+            "seconds": 48.76,
+            "log_sha256": "3994359f8a73ef020ec02231282289ea5da3f713b375846c69fdb22ca5444690"
+          },
+          "cli_help": "PASS",
+          "new_python_ast": "PASS",
+          "git_diff_check": "PASS"
+        },
+        "preservation": {
+          "baseline_repo_files": 456,
+          "baseline_research_files": 4867,
+          "changed_baseline_files": [],
+          "changed_research_files": [],
+          "extra_research_files": [],
+          "git": {
+            "head": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+            "branch": "three-way",
+            "stash": "c75cb291ac6a12b1ad697537d78ee98e0513dbd0"
+          },
+          "staged_empty": true,
+          "head_branch_stash_unchanged": true
+        },
+        "proposal_canonical_sha256": "07666020a6a987ab7735b7e2f8f103f30b2b8723163e558f376f852b202747f1",
+        "server_evidence": {
+          "actual_original_fit": "NOT_RUN_NOT_PROVIDED",
+          "actual_terminal_and_seal": "NOT_RUN_NOT_PROVIDED",
+          "actual_model_bin_sha256": "NOT_RUN_NOT_PROVIDED",
+          "actual_temporal_day_bytes": "NOT_RUN_NOT_PROVIDED",
+          "actual_f199_checkout": "NOT_RUN_NOT_PROVIDED",
+          "actual_runtime": "NOT_RUN_NOT_PROVIDED",
+          "actual_recovery_file_chain": "NOT_RUN_NOT_PROVIDED",
+          "full_original_semantic_recovery": "NOT_RUN_NOT_PROVIDED",
+          "running_predictor_process_identity": "NOT_RUN_NOT_PROVIDED",
+          "deployment_qualification": "NOT_RUN_NOT_PROVIDED"
+        },
+        "boundaries": {
+          "server_access": false,
+          "real_tom_instantiated": false,
+          "model_forward": false,
+          "model_or_optimizer_restored": false,
+          "cal_test_started": false,
+          "project_commit_push": false,
+          "formal_guards_bypassed": false
+        }
+      }
+    },
+    "pre_sync_review": {
+      "scope": "historical unfixed five-file review, 95 passed but P1 blocked synchronization",
+      "raw_file_sha256": "358dabf871e2029e1a25d2790a282300aad2808d134124693417dde1af1ceaa5",
+      "record": {
+        "status": "BLOCKED_FOR_SAFE_SYNC_BY_OUTPUT_PATH_GUARD",
+        "base_revision": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+        "reviewed_five_files_unchanged": true,
+        "dependency_closure_count": 25,
+        "baseline_dependencies": 22,
+        "missing_dependencies": [],
+        "depends_on_uncommitted_d4_shadow_or_control_changes": false,
+        "isolated_tests": {
+          "passed": 95,
+          "seconds": 38.92,
+          "log_sha256": "e1c7ca683317475004b98e03f016372f0827d2588882df817d358e3aeb3d9603"
+        },
+        "controlled_acceptance": {
+          "static_closure_count": 25,
+          "static_closure_missing": [],
+          "executed_local_modules": [
+            "tests/__init__.py",
+            "tests/observer_dtrs/__init__.py",
+            "tests/observer_dtrs/test_final_tom_audit.py",
+            "werewolf/__init__.py",
+            "werewolf/artifact_io/__init__.py",
+            "werewolf/artifact_io/canonical.py",
+            "werewolf/artifact_io/tensor_state.py",
+            "werewolf/canonical_collection/__init__.py",
+            "werewolf/canonical_collection/attempt_ledger.py",
+            "werewolf/canonical_collection/collector.py",
+            "werewolf/canonical_collection/failure_evidence.py",
+            "werewolf/canonical_collection/frozen_json.py",
+            "werewolf/canonical_collection/game_bundle.py",
+            "werewolf/canonical_collection/pre.py",
+            "werewolf/canonical_collection/public_history.py",
+            "werewolf/canonical_collection/speech.py",
+            "werewolf/canonical_collection/trajectory_evidence.py",
+            "werewolf/observer_dtrs/__init__.py",
+            "werewolf/observer_dtrs/final_tom_audit.py",
+            "werewolf/structured_history.py",
+            "werewolf/tom/__init__.py",
+            "werewolf/tom/final_capacity.py",
+            "werewolf/tom/temporal.py"
+          ],
+          "modes": {
+            "metadata": {
+              "status": "PASS_WITH_EXPLICIT_SCOPE_LIMITS",
+              "scope": "CONTROLLED_FIXTURE",
+              "evidence_digest": "48896dec93d7116bb6717b36566379f95181a1d610640ec1a5a24d32c1d7f512",
+              "raw_sha256": "7ab7c4a1c2f0b41a8f332d8b6c6accd36a744ec70ceec357bd4637a2127721ab",
+              "full_semantic_recovery": "NOT_RUN"
+            },
+            "chain-files": {
+              "status": "PASS_WITH_EXPLICIT_SCOPE_LIMITS",
+              "scope": "CONTROLLED_FIXTURE",
+              "evidence_digest": "abe237e05f014312d134b45ac70ad84bbd262fad9bf63d878dd1d64766d72174",
+              "raw_sha256": "d1f8ccc1bb02bcd212d2787d7fe09e84fda6cdf15bc40df04ea680c6384a6779",
+              "full_semantic_recovery": "NOT_RUN"
+            }
+          },
+          "controlled_inputs_unchanged": true
+        },
+        "blocking_finding": {
+          "priority": "P1",
+          "file": "werewolf/observer_dtrs/final_tom_audit.py",
+          "line": 343,
+          "reason": "Output guard compares unresolved protected roots. After alias input rejection, failure evidence may still be created in the real predictor checkout.",
+          "reproduced_with_public_cli": {
+            "scope": "TEMPORARY_FIXTURE_NO_REAL_SOURCE_OR_MODEL",
+            "returncode": 2,
+            "stdout": {
+              "status": "FAILED",
+              "evidence_digest": "6c7a60dff71cd888c8e9c8b0647c23ed2796ec9942edfce47f7f7cfb4097dfb6",
+              "evidence_file_raw_sha256": "125c244f7f9131349fd604fc3fc5631be3e64a9d0d343971d5d6597115031003"
+            },
+            "created_file_in_real_predictor": true,
+            "new_file_mode": "0o600",
+            "source_worktree_polluted": true
+          },
+          "recommended_minimal_repair": "Resolve protected roots in the writer or reject noncanonical protected input before any write; add CLI failure-path alias and dot-dot tests; refresh stage acceptance fingerprints."
+        },
+        "preservation": {
+          "preserved_files": 461,
+          "changed_files": [],
+          "added_files": [],
+          "git": {
+            "branch": "three-way",
+            "head": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+            "stash": "c75cb291ac6a12b1ad697537d78ee98e0513dbd0"
+          },
+          "staged_empty": true,
+          "git_state_unchanged": true
+        },
+        "actual_staged_files": [],
+        "recommended_commit_files": [
+          "scripts/audit_qwen3_final_provenance.py",
+          "werewolf/observer_dtrs/final_tom_audit.py",
+          "tests/observer_dtrs/test_final_tom_audit.py",
+          "docs/research/observer-dtrs-v1-d4c2a-final-tom-audit.md",
+          "docs/research/observer-dtrs-v1-d4c2a-acceptance.json"
+        ],
+        "project_changes_commit_push_server_access": false
+      }
+    },
+    "red_before_fix": {
+      "test": "test_cli_rejected_paths_preserve_all_inputs[predictor-input_symlink]",
+      "outcome": "FAILED: public CLI created a new evidence file in protected checkout",
+      "audit_implementation_sha256": "ce3851af5888d07150550a262f2124e60e71fbb3c46d0c9c1c69421fb817a1e2",
+      "failed": 1,
+      "deselected": 82,
+      "log_sha256": "1c20bba5495a88919366ac37f10875a2f6798d6fda7d6b69f5f5f822e0f780b4"
+    },
+    "green_after_fix": {
+      "test": "test_cli_rejected_paths_preserve_all_inputs[predictor-input_symlink]",
+      "outcome": "PASSED: output refused and protected file/Git snapshots unchanged",
+      "passed": 1,
+      "deselected": 82,
+      "log_sha256": "425e299eab4be27ad49dd788ff8ea9c5f93cc3cde92c1b5055f20828308f40f7"
+    }
+  },
+  "expected_final_pins": {
+    "revision": "f199a9e6c64168a412de91ff8ca04d0c795c57e2",
+    "fit": "87c2485acf48443034c59430d79f098a13151677852988bf691599ca2d2f8248",
+    "terminal": "b977ec24d6292ad329e664c931a1aae39dc4738b4b33685b19d92fd4fb1921af",
+    "seal": "fcbb81ee43050142ebdf01c0aee576156221d725598ff5ee2c02055049f72718",
+    "model_descriptor": "fdf858b5e21a1951da9ed2c2b9e988f8a1f1edcf99d2bb84f54faf055dc7e3e9"
+  },
+  "server_evidence": {
+    "actual_original_fit": "NOT_RUN_NOT_PROVIDED",
+    "actual_terminal_and_seal": "NOT_RUN_NOT_PROVIDED",
+    "actual_model_bin_sha256": "NOT_RUN_NOT_PROVIDED",
+    "actual_temporal_day_bytes": "NOT_RUN_NOT_PROVIDED",
+    "actual_f199_checkout": "NOT_RUN_NOT_PROVIDED",
+    "actual_runtime": "NOT_RUN_NOT_PROVIDED",
+    "actual_recovery_file_chain": "NOT_RUN_NOT_PROVIDED",
+    "full_original_semantic_recovery": "NOT_RUN_NOT_PROVIDED",
+    "running_predictor_process_identity": "NOT_RUN_NOT_PROVIDED",
+    "deployment_qualification": "NOT_RUN_NOT_PROVIDED"
+  },
+  "boundaries": {
+    "server_access": false,
+    "real_tom_instantiated": false,
+    "model_forward": false,
+    "model_or_optimizer_restored": false,
+    "real_data_access": false,
+    "cal_test_started": false,
+    "project_commit_push": false,
+    "original_stash_operations": false,
+    "formal_guards_bypassed": false
+  },
+  "reported_server_structure": {
+    "status": "USER_REPORTED_PRECHECK_ONLY",
+    "recovery_checkpoints_present": 32,
+    "terminal_seal_model_bin_present": true,
+    "independently_audited_this_round": false
+  }
+}
