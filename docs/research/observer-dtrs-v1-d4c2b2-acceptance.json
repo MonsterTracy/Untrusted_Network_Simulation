@@ -1,0 +1,188 @@
+{
+  "schema_version": "observer_dtrs_d4c2b2_acceptance_v1",
+  "created_utc": "2026-10-18T00:05:32.946098+00:00",
+  "status": "PASS_CONTROLLED_CPU_ONLY_NOT_REAL_QUAL",
+  "branch": "three-way",
+  "head": "7b51f276b04b386ec1aa4ae44454c1d809a10897",
+  "files": [
+    "werewolf/observer_dtrs/final_tom_wire.py",
+    "werewolf/observer_dtrs/final_tom_service.py",
+    "werewolf/observer_dtrs/final_tom_client.py",
+    "werewolf/observer_dtrs/final_tom_service_audit.py",
+    "scripts/serve_final_tom_capsule.py",
+    "tests/observer_dtrs/resident_service_fixtures.py",
+    "tests/observer_dtrs/test_final_tom_service.py",
+    "docs/research/observer-dtrs-v1-d4c2b2-resident-service.md",
+    "docs/research/observer-dtrs-v1-d4c2b2-acceptance.json"
+  ],
+  "fingerprints_excluding_this_record": {
+    "werewolf/observer_dtrs/final_tom_wire.py": {
+      "sha256": "27e60c11f5c98a8edb529563c7e17c017de8272da5b9ed5cfe9946d920cdedc7",
+      "bytes": 6116
+    },
+    "werewolf/observer_dtrs/final_tom_service.py": {
+      "sha256": "cfbaf5e099ade11cb6a25006779552d0c47ea58f0349b64bbce5e677c82e3d63",
+      "bytes": 7961
+    },
+    "werewolf/observer_dtrs/final_tom_client.py": {
+      "sha256": "19ac3ea3c6793dff5ee566d6c49bd4a083008f9309f44bbdaf0a6befd9036cec",
+      "bytes": 26704
+    },
+    "werewolf/observer_dtrs/final_tom_service_audit.py": {
+      "sha256": "8cc278ff73f24ed51cf0dfea393724f33d03fbc786b7fe060a4aaf0cfd48fddb",
+      "bytes": 8649
+    },
+    "scripts/serve_final_tom_capsule.py": {
+      "sha256": "744fc1225b78ae6ac0bbf5dd30774ee380e0a09d99dfd5d9b66ee8b099ef5f80",
+      "bytes": 702
+    },
+    "tests/observer_dtrs/resident_service_fixtures.py": {
+      "sha256": "de98f830de3ed23ef236ef0cec901d881bf48380750ecfc0c182c0c6e9292358",
+      "bytes": 5558
+    },
+    "tests/observer_dtrs/test_final_tom_service.py": {
+      "sha256": "40f444d04741b690bf03eade2049e27e28486e49977a991bdf904225d4bd7c0f",
+      "bytes": 21654
+    },
+    "docs/research/observer-dtrs-v1-d4c2b2-resident-service.md": {
+      "sha256": "edba6c99d88e537ab1b46e33141622851daf53d923935016c0ebcaf907cbfefd",
+      "bytes": 13389
+    }
+  },
+  "service_source": {
+    "sha256": {
+      "werewolf/observer_dtrs/final_tom_wire.py": "27e60c11f5c98a8edb529563c7e17c017de8272da5b9ed5cfe9946d920cdedc7",
+      "werewolf/observer_dtrs/final_tom_service.py": "cfbaf5e099ade11cb6a25006779552d0c47ea58f0349b64bbce5e677c82e3d63",
+      "scripts/serve_final_tom_capsule.py": "744fc1225b78ae6ac0bbf5dd30774ee380e0a09d99dfd5d9b66ee8b099ef5f80"
+    },
+    "digest": "5151eea428d7df03037b0d03dc4cf4689eabf8c6905f0dcf3b4da8d59dd3e0cd"
+  },
+  "tests": {
+    "final_command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q -p no:cacheprovider --basetemp=/private/tmp/observer-resident-final-7b51 tests/observer_dtrs tests/artifact_io tests/tom/test_temporal.py tests/tom/test_state.py tests/tom/test_backbone_model.py tests/canonical_collection/test_pre_prefix.py tests/canonical_collection/test_structured_token_plan.py",
+    "passed": 730,
+    "failed": 0,
+    "skipped": 0,
+    "seconds": 224.13,
+    "new_service_tests_in_final_suite": 47,
+    "final_log": "/private/tmp/observer-resident-full-final.log",
+    "final_log_raw_sha256": "950b0ec9f02a3d1a903d80b2615694b2952c5a1b886d5f5347290cddf34c320a",
+    "earlier_targeted_run": {
+      "passed": 47,
+      "seconds": 85.94,
+      "log": "/private/tmp/observer-resident-targeted-final.log",
+      "scope": "BEFORE_LAST_STATIC_CONTRACT_PIN_AND_AUDIT_COUNTER_HARDENING_FINAL_SUITE_SUPERSEDES"
+    },
+    "history": [
+      {
+        "result": "33 passed in 69.16s",
+        "log": "/private/tmp/observer-resident-second.log"
+      },
+      {
+        "result": "44 passed, 2 failed",
+        "log": "/private/tmp/observer-resident-third.log",
+        "correction": "Test assertions used wrong exact-probability field and assumed ProtocolError instead of numerical validator ValueError; production rejection/math unchanged"
+      }
+    ]
+  },
+  "normal_controlled_artifact": {
+    "root": "/private/tmp/observer-resident-final-7b51/test_resident_multiple_request0/owner-0",
+    "audit_head_record_digest": "6a333407fbfb366028d943fb486f0ffbb4db29c14a77d7d653a0b5c321785e1f",
+    "counts": {
+      "submitted": 4,
+      "dispatched": 4,
+      "started": 4,
+      "terminal": 4,
+      "incomplete": [],
+      "outcome_counts": {
+        "SUCCEEDED": 4
+      },
+      "admission_rejections": {
+        "DUPLICATE": 4,
+        "DUPLICATE_PRE": 4
+      },
+      "execution_unconfirmed": []
+    },
+    "ready_epochs": 1,
+    "model_load_count_per_epoch": 1,
+    "scope": "CONTROLLED_FIXTURE",
+    "transport_scope": "CAPSULE_CPU_QUALIFICATION_ONLY",
+    "capsule_digest": "d330153c4f5f4f7219108b048ccf07669403c447c83b7bfac3fe66e3c9082524",
+    "loader_digest": "7bf4d1b00c06ef420a4440b4a510ccf8bd522c9066fac8c4a9f29528492d8478",
+    "runtime": {
+      "attention_backend": "eager",
+      "cuda_build": null,
+      "deterministic_algorithms": false,
+      "device": "cpu",
+      "dtype": "float32",
+      "packages": {
+        "numpy": "2.5.1",
+        "torch": "2.12.1",
+        "transformers": "5.13.0"
+      },
+      "platform": "macOS-26.5.2-arm64-arm-64bit",
+      "python": "3.12.13",
+      "torch_interop_threads": 10,
+      "torch_threads": 1
+    },
+    "qualification": "NOT_ESTABLISHED",
+    "exact_Q_cases": [
+      "discussion_two_alive_wolves",
+      "pk_two_alive_wolves",
+      "discussion_one_alive_wolf",
+      "pk_one_alive_wolf_with_dead_targets"
+    ]
+  },
+  "verified_contracts": [
+    "source/version/capsule/loader/runtime/entry/epoch/instance/request/token binding",
+    "same owned PID handles multiple PREs without model reload",
+    "4-byte canonical JSON frame, partial-frame age, frame/request/cumulative read-write caps",
+    "queue capacity includes active inference, concurrency one, request quota",
+    "normal cancellation confirmed only after thread end/join then next request",
+    "consumer/query/service timeouts distinct; late success is rejected",
+    "uncertain cancellation taints instance and terminates/kills exclusively owned Popen PID",
+    "failed cleanup with still-live process blocks submit/recover",
+    "explicit new epoch after verified old PID exit and no automatic request retry",
+    "separate durable admission/dispatch/start/outcome/rejection/cleanup counts",
+    "corrupt and rehashed PRE/Q/source audit failures rejected",
+    "owner fresh-process import blocks torch/training/Shadow/Agent dependencies",
+    "service import/open guards prohibit training/DEV/original lifecycle access",
+    "parent and controlled provider Python/NumPy/Torch RNG isolation",
+    "constant artificial capsule-bound p, both wolf states, all 45 costs and both D3 policies"
+  ],
+  "limitations": {
+    "real_weights": "NOT_READ",
+    "real_capsule_compilation": "NOT_RUN",
+    "real_numeric_equivalence": "NOT_RUN",
+    "full_original_semantic_recovery": "NOT_RUN",
+    "CPU_GRADE": "ARTIFICIAL_CAPSULE_ONLY",
+    "CUDA_GPU_RELEASE_AND_REMOTE_CANCEL": "NOT_IMPLEMENTED_OR_QUALIFIED",
+    "OS_ACL_SECURITY_SANDBOX": "NOT_ESTABLISHED_IMPORT_OPEN_TESTS_ONLY",
+    "full_process_tree_resource_release": "NOT_ESTABLISHED_OWNED_INFERENCE_PID_EXIT_IS_TESTED",
+    "hard_realtime_IO_guarantee": "NOT_ESTABLISHED_POPEN_SCHEDULER_FSYNC_LIMITATIONS",
+    "legacy_shadow_spawn_worker_adapter": "NOT_IMPLEMENTED_OWNER_NOT_PICKLEABLE",
+    "formal_CAL_probability_package": "NOT_IMPLEMENTED_LEGACY_OOF_NOT_COMPATIBLE",
+    "CAL_TEST": "PROPOSED_NOT_FROZEN_NOT_EXECUTABLE_UNCHANGED",
+    "new_formal_source_OID_and_guard": "NOT_ESTABLISHED_UNCOMMITTED_SOURCE"
+  },
+  "source_preservation": {
+    "baseline": "/private/var/folders/f7/6cw9x28j2fn26jcj94ms6lyw0000gn/T/observer-resident-qn4cbe_l/before.json",
+    "existing_files_unchanged": 468,
+    "changed_existing_files": [],
+    "head_unchanged": true,
+    "index_empty": true,
+    "stash_oids_unchanged": true,
+    "stash_oids": [
+      "c75cb291ac6a12b1ad697537d78ee98e0513dbd0"
+    ],
+    "preexisting_tracked_modifications": [
+      "run_random.py",
+      "werewolf/canonical_collection/runtime.py"
+    ],
+    "preexisting_untracked_count": 30,
+    "other_worktrees": "NOT_TOUCHED",
+    "server": "NOT_ACCESSED",
+    "commit_push": "NOT_RUN"
+  },
+  "next_stage": "READY_FOR_D4C2B3_PREPARATION_AND_SEPARATELY_AUTHORIZED_INDEPENDENT_REAL_CPU_SERVICE_QUAL_NOT_CAL_TEST",
+  "acceptance_digest": "4a6a430e3f4c11160777f80aa4c083eaa1d2f77a83aa4b5a7b093998641a6bdf"
+}

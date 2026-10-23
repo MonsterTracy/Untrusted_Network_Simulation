@@ -1,0 +1,271 @@
+{
+  "schema_version": "observer_dtrs_d4_cal_test_proposal_v1",
+  "protocol_id": "observer-dtrs-d4-final-cal-test-v1",
+  "status": "PROPOSED_NOT_FROZEN_NOT_EXECUTABLE",
+  "researcher_approved": false,
+  "executable": false,
+  "scope": "prospective_fixed_final_tom_and_calibrated_probability_shadow_no_game_intervention",
+  "parent_d3_protocol_digest": "0ebd6b97669c35e1d9201f88152da8919d87586864a751f3fd688edd3a11c4ab",
+  "invariants": {
+    "target": "1{effective_suspicion_set intersects living_wolves}",
+    "successful_empty": "all_six_nonself_players",
+    "failed_or_missing_report": "no_valid_label_formal_publication_error",
+    "Q": "seven_absolute_seats_probability_mass_no_live_column_renormalization",
+    "features": [
+      "s",
+      "m",
+      "r",
+      "dW",
+      "phase",
+      "nW"
+    ],
+    "loss_scenarios": 45,
+    "tie_policies": [
+      "TERMINAL_NEG_FIRST",
+      "DEFER_FIRST"
+    ],
+    "degenerate_diagnostic_policy": "TERMINAL_POS_FIRST",
+    "shadow_feedback_to_agent": false,
+    "training_support_in_decide": false,
+    "Y_in_online_input": false
+  },
+  "final_tom": {
+    "expected_code_pins": {
+      "source_revision": "f199a9e6c64168a412de91ff8ca04d0c795c57e2",
+      "fit_digest": "87c2485acf48443034c59430d79f098a13151677852988bf691599ca2d2f8248",
+      "seal_digest": "fcbb81ee43050142ebdf01c0aee576156221d725598ff5ee2c02055049f72718",
+      "terminal_digest": "b977ec24d6292ad329e664c931a1aae39dc4738b4b33685b19d92fd4fb1921af",
+      "model_digest": "fdf858b5e21a1951da9ed2c2b9e988f8a1f1edcf99d2bb84f54faf055dc7e3e9"
+    },
+    "evidence_level": "code_constants_and_historical_source_blobs_only",
+    "actual_fit_manifest_sha256": null,
+    "actual_training_source_attestation": null,
+    "actual_model_payload_sha256": null,
+    "model_digest_semantics": "SHA256(canonical_json(final_recovery.manifest.containers.model))_not_raw_payload_SHA",
+    "temporal_artifact_digest": null,
+    "day_table_sha256": null,
+    "phase_table_sha256": "27e974cdecc7927b04ccd2f5f2e4d13351a2edf382c88f12854633dd0be77490",
+    "family": "final_tom",
+    "tom_fold": null,
+    "temporal_condition": "explicit_day_phase",
+    "planner_version": "classic7_structured_token_planner_v1",
+    "max_seq_len": 1024,
+    "derived_day_capacity": 256,
+    "full_prefix_required": true,
+    "inference_capsule_manifest": null,
+    "provider_qualification_digest": null,
+    "actual_training_source_identity": null,
+    "new_loader_source_oid": null,
+    "new_provider_runtime_digest": null,
+    "formal_deployment_identity_digest": null,
+    "reference_lineage_and_runtime_identity_kept_distinct": true
+  },
+  "collection": {
+    "recommended_generator": "original_baseline_no_TOM_p_or_DTRS_prompt_injection",
+    "runtime_config_digest_to_freeze": null,
+    "language_backend_weight_and_runtime_pin": null,
+    "recommended_collection_ids": {
+      "QUAL": "observer-dtrs-d4-qual-v1",
+      "CAL": "observer-dtrs-d4-cal-v1",
+      "TEST": "observer-dtrs-d4-test-v1"
+    },
+    "selected_collection_ids": null,
+    "selected_success_targets": null,
+    "selected_candidate_pool_sizes": null,
+    "budget_options": [
+      {
+        "CAL": 300,
+        "TEST": 300
+      },
+      {
+        "CAL": 500,
+        "TEST": 500
+      },
+      {
+        "CAL": 500,
+        "TEST": 1000
+      }
+    ],
+    "recommended_budget": {
+      "CAL": 500,
+      "TEST": 500
+    },
+    "recommended_candidate_pool_multiplier": 2,
+    "seed_rule": "classic7-canonical-collection-v1:sha256-first8-big-endian-low63:ordinal0",
+    "seed_pool_manifests": null,
+    "historical_planned_pool_exclusion_manifest": null,
+    "stop_rule_recommended": "fixed_canonical_success_target_or_fixed_candidate_pool_or_resource_limit_not_Shadow_success",
+    "automatic_pool_extension": false,
+    "label_or_winner_based_stopping": false
+  },
+  "calibration": {
+    "recommended_source": "canonical_public_PRE_replay_with_frozen_final_TOM_then_separate_offline_labels",
+    "selected_model_plan": null,
+    "recommended_families": [
+      "OBS-EQ0",
+      "OBS-EQ1",
+      "OBS-LR-r"
+    ],
+    "recommended_family_role": {
+      "primary_mechanism": "OBS-EQ1",
+      "main_control": "OBS-EQ0",
+      "accuracy_control": "OBS-LR-r"
+    },
+    "alternative_not_selected": "choose_model_family_by_preregistered_CAL_CV_Brier_before_TEST",
+    "selected_weightings": null,
+    "recommended_weightings": [
+      "game_equal",
+      "record_equal"
+    ],
+    "selected_cv_folds": null,
+    "recommended_cv_folds": 5,
+    "selected_split_seed": null,
+    "recommended_split_seed": 20261018,
+    "split_rule_recommended": {
+      "domain": "observer-dtrs-d4-cal-fold-v1",
+      "hash_inputs": [
+        "domain",
+        "fixed_protocol_seed",
+        "collection_id",
+        "planned_ordinal"
+      ],
+      "assignment": "sha256_rank_then_ordinal_mod_K",
+      "label_stratification": false,
+      "preassign_all_planned_ordinals": true,
+      "keep_assignment_after_canonical_failures": true,
+      "publication_or_target_digest_in_numeric_control": false
+    },
+    "recommended_grid": {
+      "eq_bins": [
+        1,
+        3,
+        5
+      ],
+      "lambda": [
+        0.25,
+        1,
+        4
+      ],
+      "lr_tau": [
+        0.001,
+        0.01,
+        0.1,
+        1
+      ],
+      "score_tolerance": 1e-08
+    },
+    "recommended_support": {
+      "min_distinct_games": 10,
+      "min_kish_game_mass_effective_support": 5
+    },
+    "recommended_selection": "pooled_whole_heldout_game_Brier_not_unweighted_mean_of_fold_means",
+    "recommended_ties": {
+      "EQ1": [
+        "fewer_bins",
+        "larger_lambda"
+      ],
+      "EQ0": [
+        "larger_lambda"
+      ],
+      "LR-r": [
+        "larger_tau"
+      ]
+    },
+    "bin_and_standardization_fit_scope": "current_training_games_only",
+    "final_refit_scope": "all_CAL_after_selection",
+    "D2_formal_training_partition_reused": false,
+    "real_CAL_disguised_as_controlled_fixture": false,
+    "required_new_formal_source_schema": true,
+    "model_selection_using_D3_best_cost": false,
+    "selected_CAL_dataset": null,
+    "selected_fit_audit": null,
+    "final_deployment_manifests": null
+  },
+  "test": {
+    "selected_evaluation_tracks": null,
+    "recommended_evaluation_tracks": [
+      "live_operational_audit",
+      "separate_sealed_PRE_replay_for_full_population_scoring"
+    ],
+    "replay_never_rewrites_live_status": true,
+    "targets_open_only_after_models_and_all_predictions_sealed": true,
+    "n_g_definition": "all_original_eligible_observer_rows_of_complete_game_not_only_successful_predictions",
+    "zero_sample_games": "retain_coverage_no_fake_zero_Brier",
+    "incomplete_predictions": "no_complete_population_comparison_by_silent_deletion",
+    "recommended_metrics": [
+      "game_equal_Brier",
+      "game_equal_LogLoss",
+      "calibration",
+      "six_loss_risk_all_45",
+      "coverage_and_technical_failures"
+    ],
+    "recommended_comparisons": [
+      "EQ1_minus_EQ0",
+      "LR-r_minus_EQ1"
+    ],
+    "recommended_logloss_epsilon": 1e-12,
+    "recommended_bootstrap": {
+      "replicates": 2000,
+      "cluster": "whole_game",
+      "pair_all_models_costs_weights": true,
+      "strata": "predeclared_acquisition_batch_if_any_else_none_not_old_TOM_folds",
+      "seed": null,
+      "recommended_seed": 20261019,
+      "interval": "95_percentile_linear",
+      "scope": "fixed_TOM_and_fitted_CAL_models_no_retraining_or_reselection_variance"
+    },
+    "old_D2_bootstrap_indices_reused": false,
+    "support_or_region_used_for_selection": false
+  },
+  "resource_qualification": {
+    "selected_device": null,
+    "selected_cpu_threads": null,
+    "selected_gpu_memory_budget": null,
+    "selected_RSS_budget": null,
+    "selected_disk_budget": null,
+    "selected_max_pending": null,
+    "recommended_max_pending": 2,
+    "selected_query_concurrency": null,
+    "recommended_query_concurrency": 1,
+    "ready_timeout_seconds": null,
+    "write_timeout_seconds": null,
+    "query_hard_timeout_seconds": null,
+    "cancel_timeout_seconds": null,
+    "close_timeout_seconds": null,
+    "max_request_bytes": null,
+    "max_response_bytes": null,
+    "failure_burst_limit": null,
+    "qualified_server_cancel_ack": null,
+    "qualified_GPU_release": null,
+    "qualification_must_not_touch_existing_vllm_or_collector": true
+  },
+  "freeze": {
+    "F1_before_CAL": {
+      "status": "BLOCKED_PENDING_DECISIONS_EVIDENCE_IMPLEMENTATION",
+      "requires": [
+        "researcher_choices",
+        "final_provenance_packet",
+        "new_readonly_provider_and_CAL_source_schema",
+        "independent_QUAL",
+        "full_historical_exclusion_pools",
+        "new_committed_D4_source_and_guard"
+      ]
+    },
+    "F2_after_CAL_before_TEST": {
+      "status": "NOT_STARTED",
+      "requires": [
+        "sealed_CAL",
+        "fixed_selection_and_refit",
+        "read_only_deployment_equivalence",
+        "TEST_contract_before_target_opening"
+      ]
+    },
+    "formal_execution_source_oid": null
+  },
+  "research_limits": [
+    "historical_OOF_RNG_full_publication_digest_dependency",
+    "DEV_and_D3_used_for_development_not_new_independent_test",
+    "fixed_prediction_intervals_exclude_upstream_retraining_and_CAL_reselection",
+    "no_speech_action_mapping_or_winrate_claim"
+  ]
+}

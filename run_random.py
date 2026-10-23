@@ -53,7 +53,7 @@ def _act_at_boundary(
 
 def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
          planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
-         wolf_speech_tom=None, online_pilot=None):
+         wolf_speech_tom=None, online_pilot=None, observer_shadow=None):
     """Execute one game exclusively through canonical evidence construction.
 
     An explicit online_pilot handles the collected speech PRE before baseline
@@ -62,6 +62,10 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
     """
     if canonical_recorder is None or call_audit is None:
         raise TypeError("canonical recorder and call audit are required")
+    if observer_shadow is not None:
+        from werewolf.observer_dtrs.shadow_hook import ShadowPREHook
+        if type(observer_shadow) is not ShadowPREHook:
+            raise TypeError("observer Shadow requires an explicit isolated PRE hook")
     if planning_mode not in ('original', 'constrained'):
         raise ValueError("unsupported planning mode")
     if wolf_speech_tom is not None and (not callable(wolf_speech_tom) or planning_mode != 'original'):
@@ -93,6 +97,17 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                 speech_kind=env.phase if is_speech else None)
             if is_speech and handoff is None:
                 raise TypeError("public speech requires the collected Speaker PRE Belief Handoff")
+            if observer_shadow is not None and is_speech:
+                try:
+                    # Only the frozen public PRE and this actor's delivered view cross
+                    # the trusted capture boundary. Nothing returns to gameplay.
+                    observer_shadow.capture(
+                        canonical_recorder.public_pre_for_handoff(handoff), observation,
+                        canonical_attempt_id=canonical_recorder.claim.attempt_id)
+                except Exception:
+                    observer_shadow.capture_error(
+                        boundary_id=handoff.boundary_id, prefix_digest=handoff.prefix_digest,
+                        actor=handoff.observer_id)
             if online_pilot is not None and is_speech:
                 committed = online_pilot.handle_pre(
                     env=env, recorder=canonical_recorder, call_audit=call_audit,

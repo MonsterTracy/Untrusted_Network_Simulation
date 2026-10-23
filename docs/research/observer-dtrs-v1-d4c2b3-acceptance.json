@@ -1,0 +1,249 @@
+{
+  "D4_protocol_digest_unchanged": "07666020a6a987ab7735b7e2f8f103f30b2b8723163e558f376f852b202747f1",
+  "acceptance_digest": "c4f4ac248d06d62940bf7353e44ea1b8b601cbd80a2fd194d3ea97ab10972358",
+  "baseline_preservation": {
+    "baseline": "/private/tmp/observer-qual-r1ce3lcs/before.json",
+    "baseline_inventory_digest": "6c1b441e7deba0c8572a56688e6ba8d260bc926edb4fb642fc51659e0a83c6ee",
+    "changed_original_files": [],
+    "commit_push": "NOT_RUN",
+    "head_unchanged": true,
+    "index_empty": true,
+    "original_files": 477,
+    "other_worktrees": "NOT_TOUCHED",
+    "preexisting_tracked_modifications": [
+      "run_random.py",
+      "werewolf/canonical_collection/runtime.py"
+    ],
+    "preexisting_untracked_files": 39,
+    "server": "NOT_ACCESSED",
+    "stash_oids": [
+      "c75cb291ac6a12b1ad697537d78ee98e0513dbd0"
+    ],
+    "stash_unchanged": true
+  },
+  "branch": "three-way",
+  "broker_verified": [
+    "spawn transfer carries socket+lease only, not owner/Popen/thread",
+    "two PREs same owned service PID and exact artificial Q",
+    "no torch/training/Agent in spawned client",
+    "dead client triggers owner cancellation; actual thread stop required before IDLE",
+    "unconfirmed cancel kills only owned service; unhealthy blocks old lease; explicit new epoch",
+    "wrong token/PRE/deadline/extra fields rejected before owner admission",
+    "lease active bound, lifetime quota, cumulative channel bounds and duplicate no replay"
+  ],
+  "controlled_pipeline": {
+    "case_count": 3,
+    "comparison": {
+      "atol": 0,
+      "reference_kind": "PINNED_ORIGINAL_GRAPH_CPU_SAME_CAPSULE_NOT_SEALED_LIFECYCLE",
+      "reference_runtime": {
+        "attention_backend": "eager",
+        "device": "cpu",
+        "dtype": "float32",
+        "packages": {
+          "numpy": "2.5.1",
+          "torch": "2.12.1",
+          "transformers": "5.13.0"
+        },
+        "python": "3.12.13",
+        "torch_interop_threads": 1,
+        "torch_threads": 1
+      },
+      "rtol": 0
+    },
+    "manifest_digest": "d2f01862c0389abf7602e9f1e75ae121fb392ddbe8499dc1bd7b60e88d871909",
+    "path": "/private/tmp/observer-qual-r1ce3lcs/full-sealed/test_isolated_original_graph_s0/run/complete",
+    "reference": "separate temporary synthetic Git checkout, not real f199; original graph CPU same artificial weights",
+    "report_raw_sha256": "2e8bb43447d87f01c200033d211b50cf085246921e828a3417aa9149804fc209",
+    "resident": {
+      "cold_ready_seconds": 1.5350303323939443,
+      "exit_confirmed": true,
+      "journal_head": "2fa2aa0eb8365e3c73bcf7f8084bae7101d26c46dead148ee68f3d4f235fdefb",
+      "limits": {
+        "cancel_s": 1.0,
+        "close_s": 2.0,
+        "cold_start_s": 10.0,
+        "frame_s": 1.0,
+        "kill_s": 1.0,
+        "max_frame_bytes": 4194304,
+        "max_pending": 2,
+        "max_read_bytes": 67108864,
+        "max_request_bytes": 2097152,
+        "max_requests": 1024,
+        "max_write_bytes": 67108864,
+        "query_s": 10.0,
+        "ready_s": 15.0,
+        "service_s": 8.0,
+        "terminate_s": 0.5,
+        "write_s": 1.0
+      },
+      "one_load_one_PID": true,
+      "query_seconds": [
+        0.24507645796984434,
+        0.22698908299207687,
+        0.2915199166163802
+      ],
+      "submitted": 3,
+      "terminal": 3
+    },
+    "scope": "CONTROLLED_FIXTURE",
+    "status": "QUAL_PREPARATION_ONLY",
+    "timing_scope": "query_seconds includes direct Loader numerical comparison after service result; not pure RPC/service latency; artificial CPU only",
+    "token_counts": [
+      5,
+      15,
+      1024
+    ],
+    "wall_seconds": 6.174923041835427
+  },
+  "created_utc": "2026-10-22T00:52:55.740860+00:00",
+  "expected_final_identity_only_not_reverified": {
+    "fit": "87c2485acf48443034c59430d79f098a13151677852988bf691599ca2d2f8248",
+    "model_descriptor": "fdf858b5e21a1951da9ed2c2b9e988f8a1f1edcf99d2bb84f54faf055dc7e3e9",
+    "revision": "f199a9e6c64168a412de91ff8ca04d0c795c57e2",
+    "seal": "fcbb81ee43050142ebdf01c0aee576156221d725598ff5ee2c02055049f72718",
+    "terminal": "b977ec24d6292ad329e664c931a1aae39dc4738b4b33685b19d92fd4fb1921af"
+  },
+  "file_fingerprints_excluding_this_record": {
+    "docs/research/observer-dtrs-v1-d4c2b3-qual.md": {
+      "bytes": 20143,
+      "sha256": "ad89fa861c3fe73b6e7cba96c2147d764fbd094c50f6b3c36ea438dbb9a8b719"
+    },
+    "scripts/export_final_tom_qual_reference.py": {
+      "bytes": 6568,
+      "sha256": "6c7c0cbe9665ee09f5084f09af764ae15e2664aba599b0ad6dd0df11a9f15c33"
+    },
+    "scripts/qualify_final_tom_capsule.py": {
+      "bytes": 2951,
+      "sha256": "65ae76a34e46305475094830aaaf620d935a82d0a9d5e77a1a538914c90a5d74"
+    },
+    "tests/observer_dtrs/qual_broker_fixtures.py": {
+      "bytes": 1203,
+      "sha256": "a6a9840bee08c2b19a460fc6f27d1623b0db4ccc601337f439581e2707839fde"
+    },
+    "tests/observer_dtrs/test_final_tom_broker.py": {
+      "bytes": 5433,
+      "sha256": "06d72856bbf56beeb63dffff7e71873eef72db5ddc392d27fd7fc5fa6880a3be"
+    },
+    "tests/observer_dtrs/test_final_tom_qualification.py": {
+      "bytes": 12053,
+      "sha256": "95b6820fd0801e4bd0ca75edfa21e73fdfbd5d63835bfa0a2ae1c535430c1319"
+    },
+    "werewolf/observer_dtrs/final_tom_broker.py": {
+      "bytes": 9036,
+      "sha256": "e92a261d1aa3108a3f0cc0cfa19dc8c63b55097eefefc03ebcc3ef03bc86ab87"
+    },
+    "werewolf/observer_dtrs/final_tom_qualification.py": {
+      "bytes": 16059,
+      "sha256": "cd6e8bcb00904567723b9baca23b9d08b49c7eac5d12912453fcc8b80eb49e69"
+    },
+    "werewolf/observer_dtrs/qual_sources.py": {
+      "bytes": 5113,
+      "sha256": "d654f660ff6e0086ae1dca34026a0716a90cf90702731cf3e934e53444731b75"
+    }
+  },
+  "final_tests": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q -p no:cacheprovider --basetemp=/private/tmp/observer-qual-r1ce3lcs/full-sealed tests/observer_dtrs tests/artifact_io tests/tom/test_temporal.py tests/tom/test_state.py tests/tom/test_backbone_model.py tests/canonical_collection/test_pre_prefix.py tests/canonical_collection/test_structured_token_plan.py",
+    "failed": 0,
+    "log": "/private/tmp/observer-qual-r1ce3lcs/full-sealed.log",
+    "log_raw_sha256": "2ec628222ba21ef0d9137058f748d567f885901a5e6d674b1ee0f6538282ff71",
+    "new_stage_tests": 38,
+    "passed": 768,
+    "scope": "ARTIFICIAL_WEIGHTS_AND_CONTROLLED_FIXTURES_ONLY",
+    "seconds": 265.65,
+    "skipped": 0
+  },
+  "head": "7b51f276b04b386ec1aa4ae44454c1d809a10897",
+  "history": [
+    {
+      "correction": "fixture put output inside protected PRE parent; another fixture used nonexistent input while expecting later scope rejection; production path protection not weakened",
+      "log": "/private/tmp/observer-qual-r1ce3lcs/targeted-1.log",
+      "raw_sha256": "cd3e35727408f19e97a367d75d1c1ad61edf9ec6d1dc688bdc2e8ae787c4f06c",
+      "result": "29 passed, 2 failed in 31.44s"
+    },
+    {
+      "log": "/private/tmp/observer-qual-r1ce3lcs/targeted-2.log",
+      "raw_sha256": "35bde586240c5cd44a8229701611f3f4948ce9b8b5d16b1ea37bc6e474e116e1",
+      "result": "31 passed in 34.90s"
+    },
+    {
+      "log": "/private/tmp/observer-qual-r1ce3lcs/targeted-3.log",
+      "raw_sha256": "412a77f6af951b2627c3f2792916a6a3a50e73e4e684a2657fcce68a993d40c1",
+      "result": "36 passed in 39.04s"
+    },
+    {
+      "log": "/private/tmp/observer-qual-r1ce3lcs/targeted-final.log",
+      "raw_sha256": "6b243bae747ec07fd8c75064f21569611714b142165d05e405c5c6c656dc8506",
+      "result": "37 passed in 38.93s",
+      "scope": "before last additional broker lease-quota test; full768 supersedes"
+    },
+    {
+      "historical_acceptance_raw_sha256": "aa107a95e3473a460307c5dd22cffdf815b448381af2379d216d6210c1557a31",
+      "log": "/private/tmp/observer-qual-r1ce3lcs/full-final.log",
+      "raw_sha256": "d328f07b390203c0540a317d0262625c6265bef9ec6522a277d62adb13336781",
+      "result": "768 passed in 264.86s",
+      "scope": "BEFORE_REFERENCE_RUNTIME_AND_FAILURE_CODE_EVIDENCE_HARDENING",
+      "source_snapshot_manifest": "8374efb95c91395897cab7edaabc66e52d1b0880676e36d8f6f6923ef2060723"
+    }
+  ],
+  "limitations": {
+    "CAL_TEST": "PROPOSED_NOT_FROZEN_NOT_EXECUTABLE_UNCHANGED",
+    "D4_source_commit_guard": "NOT_ESTABLISHED_WORKING_BYTE_SNAPSHOT_ONLY",
+    "OS_ACL_sandbox": "NOT_ESTABLISHED_PYTHON_GUARDS_ARE_NOT_OS_SECURITY",
+    "actual_resource_latency_RSS_VRAM_budget": "NOT_RUN_ARTIFICIAL_TIMINGS_ONLY",
+    "formal_final_probability_CAL_package": "NOT_IMPLEMENTED_OOF_TRANSFER_PROHIBITED",
+    "full_process_tree_or_GPU_release": "NOT_ESTABLISHED_OWNED_PID_EXIT_ONLY",
+    "old_Shadow_worker_or_hook_broker_connection": "NOT_IMPLEMENTED_NO_SCOPE_WIDENING",
+    "original_full_predictor_or_recovery_replay": "NOT_RUN_ORIGINAL_GRAPH_REFERENCE_ONLY"
+  },
+  "new_files": [
+    "werewolf/observer_dtrs/qual_sources.py",
+    "werewolf/observer_dtrs/final_tom_qualification.py",
+    "werewolf/observer_dtrs/final_tom_broker.py",
+    "scripts/qualify_final_tom_capsule.py",
+    "scripts/export_final_tom_qual_reference.py",
+    "tests/observer_dtrs/test_final_tom_qualification.py",
+    "tests/observer_dtrs/test_final_tom_broker.py",
+    "tests/observer_dtrs/qual_broker_fixtures.py",
+    "docs/research/observer-dtrs-v1-d4c2b3-qual.md",
+    "docs/research/observer-dtrs-v1-d4c2b3-acceptance.json"
+  ],
+  "next_step": "USER_MANUAL_READONLY_LOCATE_AND_EXTERNAL_DIGEST_HANDOFF_THEN_REVIEW_AND_AUTHORIZE_REAL_QUAL",
+  "real_evidence": {
+    "blocking_inputs": [
+      "original fit/terminal/seal/recovery manifests",
+      "raw last model.bin and Temporal bytes",
+      "Metadata/Chain-files JSON and independent SHA",
+      "clean pinned f199 checkout",
+      "reviewed public PRE packet and SHA"
+    ],
+    "full_semantic_recovery": "NOT_RUN",
+    "historical_server_audit": "USER_REPORTED_PASS_NOT_REOPENED",
+    "local_Metadata_Chain_files": "NOT_FOUND_IN_SCOPED_SEARCH",
+    "local_final_fit": "NOT_FOUND_IN_SCOPED_SEARCH",
+    "local_model_bin": "NOT_FOUND_IN_SCOPED_SEARCH",
+    "model_bin_raw_sha256": null,
+    "original_sealed_predictor_initialization": "NOT_RUN",
+    "real_capsule_compile": "NOT_RUN",
+    "real_numeric_equivalence": "NOT_RUN",
+    "real_resident_inference": "NOT_RUN",
+    "search_limits": "scoped/pruned to depth5 Documents and depth7 Downloads/Desktop; not exhaustive whole Mac",
+    "search_roots": [
+      "/Users/name_yuxiao/Documents",
+      "/Users/name_yuxiao/Downloads",
+      "/Users/name_yuxiao/Desktop"
+    ]
+  },
+  "schema_version": "observer_dtrs_d4c2b3_local_acceptance_v1",
+  "source_snapshot": {
+    "durability": "EXTERNAL_TEMP_DIRECTORY_REQUIRES_LONG_TERM_ARCHIVE",
+    "formal_source_oid": null,
+    "inventory_digest": "2ca6569401315518e131c6a73bcc17286a8ef991cce9898224fe1c776eaaa064",
+    "manifest_digest": "b47e87ff47fc143a608c8fad5da28023e346dc8e01bf70ffda5ccdf7c08c549a",
+    "path": "/private/tmp/observer-qual-r1ce3lcs/reviewed-sources-final",
+    "runtime_files": 152,
+    "scope": "REVIEWABLE_WORKING_BYTES_NOT_FORMAL_SOURCE_AUTHORIZATION",
+    "verified": true
+  },
+  "status": "QUAL_PREPARATION_ONLY"
+}

@@ -1,0 +1,3002 @@
+{
+  "D2_inputs": {
+    "D1c_digest": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+    "D2_bootstrap_sha256": "33e94ab2b2875ff7f47de212062a628de613de37e4b8f3ff0b887eb479f0a3da",
+    "D2_complete_digest": "870e75455572f4ce51dc3a0fc6d6ac050f658363d21ad130ba6616480bc831d1",
+    "D2_source_revision": "3ff578f97b9d4c3620a15a67357ddabd848d10fc",
+    "D2_split_digest": "32e30246cbadec8240f47291422a791b4419482e1386b4d8b570344a2e45acc5",
+    "games": 1500,
+    "independent_D1c_crosscheck_required": true,
+    "outer_audit_required": true,
+    "outer_blocks": 25,
+    "samples": 22685
+  },
+  "D2_outer_audit": {
+    "EQ_structural_validation": 100,
+    "fitted_models": 200,
+    "games_by_pipeline": {
+      "game_equal/OBS-EF": 1500,
+      "game_equal/OBS-EQ0": 1500,
+      "game_equal/OBS-EQ1": 1500,
+      "game_equal/OBS-LR-r": 1500,
+      "record_equal/OBS-EF": 1500,
+      "record_equal/OBS-EQ0": 1500,
+      "record_equal/OBS-EQ1": 1500,
+      "record_equal/OBS-LR-r": 1500
+    },
+    "held_out_games_per_block": 60,
+    "level": "artifact_bytes_model_schema_and_declared_source_partitions_not_full_run_replay",
+    "outer_prediction_units": 50,
+    "prediction_rows_by_pipeline": {
+      "game_equal/OBS-EF": 22685,
+      "game_equal/OBS-EQ0": 22685,
+      "game_equal/OBS-EQ1": 22685,
+      "game_equal/OBS-LR-r": 22685,
+      "record_equal/OBS-EF": 22685,
+      "record_equal/OBS-EQ0": 22685,
+      "record_equal/OBS-EQ1": 22685,
+      "record_equal/OBS-LR-r": 22685
+    },
+    "training_games_per_outer_model": 240,
+    "units": [
+      {
+        "manifest_digest": "2f8289c4094aa8f598ff9b8d8429c2ccb4e11034596fca1afc686aee00a8f7a8",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "af931bcc47f56d51262285208a6edd5d7e33fb716409e3900cf2ad429e1815e2",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "f1d58b3c5f724834e6b4b394fc6fc75ec9f58cf1d11813942e5a14170f464c3a",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "bc1565bcd366dcfd9d61c04efa922666051a344b2e6a0ef891f5b3b06b72793f",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "523f210b5d44ab08b64fa17d0a8e5ae456cd881005a95313a2a91aece8db3864",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "7e23c86c5c80eb0b64da1154de2d9b40a87ff91658627dfb2370dc962e8026e6",
+        "relative_path": "blocks/0-0/game_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "ba5e2b92f915a86fb20b93113f17b4d2b038dac65f2087205ec4d0973bd1c336",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "d1cac533a4aa187a08fdd6c8c996bc49b698a9451648ec2ef43507aeb0b564e4",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "bc4a24bd089c895b315decb154bb60bf9dd105430e8a9e0006b855f819b6f311",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "6151c89fd9607c9045aa7e35183a30ce13473902e9d0563316bf184dc8052022",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "061f5298070139b31abba10b6d7738ec6b805eff502c7adc51eae94e93892f90",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 869,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "ae279063654a12ddea01dd58624f50d2e47daab03489f4d9b21c4d37208c9f83",
+        "relative_path": "blocks/0-0/record_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "ca76f3f1a460a6c0609f71492a0931696a1d3b266d75a63b86fdb97a5c848434",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "c0c74d3099253d021a3e6f4f5412fe7dd1d7f99809e9a55fd3e44866b0facd99",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "47df179d959516c0a2b5fbd3f00d4214c8bccaea1c7bd5ce5d15c9c741e7e4d0",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "6f52928fc17a8e18e03aa82304147cc6c37ef1fb7845463396688829d142a742",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "4d05ea9dc7aa26f591520e0beb0f19d0bca087209583e9cbdb49c6cecc70d098",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "a0ae3f13e1f975f2dc0831ae351eae684753a14966ba3b919188f374abb9e340",
+        "relative_path": "blocks/0-1/game_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "1666008cdee5e589e5499c7a8994669d7e5267c1e95db83fb6ec6b4459060246",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "70512c23d1cbbd85c35ae1966f69f10caf741adc588b9760c4724a488c886df4",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "3e166f13104b036d08e4be026d9a66c0e4b6f2c7d224ec78c328a2b820ab90ab",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "de8dc6f1d82004c39052b1d8e0cee8bf4b7e18dbb654d3f7bed630c850f6c615",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "10ff019b9a95da0c0ad045e92c6e38a8bf76568a71e5e7b9001c9f228c8ee316",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 895,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "f90a5c2181199da279a771067315edd80c523a3c5fb88a879714d63f6d2357d1",
+        "relative_path": "blocks/0-1/record_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "e36ba9abc7df88cf38f9ce49b7476a10010eb168fc59a4399e5f1482e2c00eb4",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "60605ef1d013a9ebeaec31f79f278ab9f9a2c7666ce0f351c20aa3c9e13c3d09",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "6e2c48b4b9087ab370193b5d98e264229e4e03c41b5c2623c9b5696a55b02365",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "0838f7d9d0ae3265f80859ac3b35170d2042035763589360dad616e7c959bec3",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "3675603ce014dd1183da950923b460ca9b060506e10bff1959c16b70c5e0b1a5",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "4ac3cdb3cf1d7fb572f3a14c6029f3cf2115033928a5a322af5c5c2e820ca061",
+        "relative_path": "blocks/0-2/game_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "a11c61718b0888c61ea2c3976871eb62b3610a7a36428e3fdfa586460a9d5a26",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "0b2600edc57fe28a14211df06e11a5cf8b3d07eb90de16a64a2080661840eb9c",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "87ee9794bd5697a4f47647bdc14812663544e56c123a439349d723dd31ec621b",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "a2bdd706af746b1e1ece3c9caf773c619f557529fd7ed9cdb809b3f2ee8ef764",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "d531f3bacd1bb3228f6967fde1c55a46986e922652e3517525bf5bb888d85375",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 902,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "52ec3450b9d33ae5b80bdc23fcc46ce05e63541c9e9d8edb471a2b7d14df9197",
+        "relative_path": "blocks/0-2/record_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "8ceb670327253a2e3a49bc0a5c48eccb49862bb4d05cb91995a5db4b8b0d813f",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "01ee0a71f3c372a429195192711ec98f464115b25c4a9502e902f2d66ac4ad46",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "ccb9409ad7f2848e586da967e0d7218d87bb2db79b22cc0f36833886ade29288",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "5774f868fb0adb4e57cbe868820a3433f0574bbff6d8b119fc0f051932c1c82a",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "88145052ddd2e998554e4cf874fab4b8e19e04a02fe784563531363fceb675aa",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "742d931e3c0ccbccb34bdd3d097cd23b6ce87340d5717a59c3d86860039c37e4",
+        "relative_path": "blocks/0-3/game_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "aab0a0910f9f9b279fec63632d1dc9bb9122369a1bbfa497e2ae3ed6d22fca03",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "ec3ef5093d87bd0c29dad142c8130fc2c84ed5cc47954bc9b56ecd3b40bf27b1",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "57306cf12f7120cf06df474157e86bba2a32a469b03fe3758953e603713c692b",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "78c9b64df1193d9037bfd7937136e52549ab42d0441fa27f6c8338840a4003c5",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "e000015ce18564a9e0c6406089ab44f34be4d0f1c44c3176b2da28af27a8cbc1",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 963,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "d507b7844c77103b0aaccfaf52672666809dea92237a7ab16640589d92c82845",
+        "relative_path": "blocks/0-3/record_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "d07b16a8e9ba587522c1417fd88428641eda0f48cda1370136579d75d22f118b",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "4df13cc7c084dacc86d572df1d0f9b2c4c15eb9322c6c35b9770d813fd3d2013",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "f79ce19cbf1aeca27fba923fe71fa7b2bd19562b0334528b7391d5be3dc45257",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "d93deb23630f1776c4894271ab16525f1617d55c01c3baa21ed1f9f9d0f43cd2",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "035792ee87b34f7f4645d84e672d060e93ef165277fa0854bdff5447f6f09fc1",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "c497c8c4e668d7e92bf0eed2400c30a5c4a358c3147a1b8fcc1316776e40efa4",
+        "relative_path": "blocks/0-4/game_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "d53f5ed025f71ca3a0feeecc0ace3e79c422625f8ef805a7c8efefbeec5dcf81",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "b33eaab09cbe63f139cc8107d4ddd5a7fb4523074b489716f92b4bbf24a745e4",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "14aed351c5904563b1e329bd9a0708e5fe32b16ac18fee658c40be3c88a72437",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "09efc8f4702c8c855c50e1fc4655128881a126972648d5964682f15c47a8076f",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "74e3cd0c20d620adc54b2cda48bb2eb359462ca4ea4ce8573b7a3cc33df742f5",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 913,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "078c29cf0d3115f2c4aa283df3b5431a1b9822b1a3361cad6a0ad0e4859b0c4f",
+        "relative_path": "blocks/0-4/record_equal/outer_predictions",
+        "tom_fold": 0,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "b9cc4df108f3d8ab379e61fdee75f394c5d23fc0cee1ea58b4b0a235193bbc2a",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "8a7e94698395e7c15684cdac24b9809355b721e31421a23bc96d6f9b5248e568",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "481842fec7370e0949798a43f2624c7f4cb5c1133aab6f51fe4dfc10fb179d45",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "efeb9b6a28319c2a1e4dc955c8ade03b55d429bfd2705efeb3e0e71be4b951f4",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "438bed00b89fa9f747d1fbe9b05f1cab78976db7eebf09af1771d440ee2e78db",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "625ea604aa872f135616e68fab7fc46daa018889520160dd0847fe1fd38787a6",
+        "relative_path": "blocks/1-0/game_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "9cad6e0f4c706dfb0b3efe77693cb4766e7085d73bc14fcb455a75ae45afaca6",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "37d0466fd40535e07262d11d88f1c18f596d183606e4c62df0f83c1c1ff0b929",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "64f7a91584fc3b4405a005b01811f43b32cd727f2bbe8900e275187180e35da7",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "d658d0cfacadd4416aba717f4af02f2b147ac60a2b7b99dd5a18775967ae1a26",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "a16b2260239980dee456abc273eead5db80af79e1741bb6ff775d3ca3a831ee1",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 878,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "2b0a5c03e67f0d4a995c3c8d869145eb0437af16f883de1b485384f64454b8ea",
+        "relative_path": "blocks/1-0/record_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "9288dab99e6f28e332bff4f93a284af12af56e36ae3fdaa43d162de87bb8e9cc",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "7e798c1d1b343ef13ddf6e77b23260101349c85be90acb9f3a6aed53896ad159",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "f207d144d02978625a900de760a20ff06a380379b1c186f9105226819acf1016",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "741a97ffd27689a8926937a0850036d5f0557dd5713259127f6282cf8fd0ebd2",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "c8041f2ea5a686b82c7a2c57918ba959cffb82584ff5ffc55a7e1555d6a3143e",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "d3a64fc970cb832e3909cac2bebcb740c8011b28bf0247e459c742b756307a99",
+        "relative_path": "blocks/1-1/game_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "895eadf78c8619c16effefe8260275d7aa099f9bfae5131c5cb94445048b35ce",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "97867c3ad81265790f6eab9a362d5a1fcc539ceafcf85b2b4661b0153576ac61",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "42013814d14ad21c31b00c8703ed6e26e8cbd4cd5b22ce926937596076b63737",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "fc5dc30821b14ff964b84e21def8a311ebc38eb2927fbe06cc99779d9004c563",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "b05da97e6176f1220619eeb1e09e74e9d5deb8f27d4a38c401142448dbf97d26",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 862,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "df9d3c374225e40f9bf7c6cbf17bb18cd2694aae2ea9ddd4c3fd76cf8e5fd51d",
+        "relative_path": "blocks/1-1/record_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "d81928e83ce89690b7fc19156e64ceb20e856dd4e9f3c12896889c0dc0ca513e",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "7746077991427b610ac668ef1044579c03bbf778aedb140f3bbea96c99ab92b1",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "370dff952381fb60175e2b22065a9a895393eac930c00de0d4ceeceb93227d80",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "3660d5607621c173143e8a01ad2478999951d299d3c4202fe2716f638d1ffb89",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "3c4851964cbe49cad53ccfab8bbde7e612576d9e47914ff86fff6c79f8f04932",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "5d70cf31b5fe2ca53301bb441200be82fa266e7c915de72570fe586968ace634",
+        "relative_path": "blocks/1-2/game_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "e9d9950189900503ac217be04cdeddec0ba2af7c37eedd834e70ac68f36cf4ea",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "8c3daa9311ff08389422572a9f8c1f7f362a79570a03d537ba4ab21d4a82be36",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "2721f250acb851cff45da453cde65c7ca78dceb8d8ee8882f8d29992e479e90b",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "aa9ff15301329f54638a75f95c0ed8140f27a522419004c374e6433aa0649ba5",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "acafed0fec290d49efa639bd92980213b5bc4128db551604fafb91babbe3c8c4",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 951,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "2548b8ea0fdc753b59f7c49c6104d3fc3959952b87c09258f1bdf6868f360086",
+        "relative_path": "blocks/1-2/record_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "36a9786e871e620acc74a0ae0b795c5a8559089cedb06b0e7f4c1ca352be0156",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "54657b58f4bf638c4e7059a61c05317024c2789775f901f2336c66ef8bf5c5f4",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "f49898f55381b78411685513efa2503f597580b1e2d9e73cca64fa64817ad8f7",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "2ee747de059a02a22e8312a95cb0e08397138b376393e8891e736334ba65ffa6",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "870ea8735c35c905aadd51976b9a07944db246cea0b5f7e43bc941388f7adce5",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "596471db64db1496de4c51367c2a79bcc6e7ed30fd165522f7b422f9db78529f",
+        "relative_path": "blocks/1-3/game_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "b79687f191d663ec809a7c050d1c81658ee0ce9ea2ad8c1d7e23ebc86b4c8adf",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "4a4c7bb8ea5ccec6cbb25937b52a3de68309919fe2dbb9993116625ed3647b40",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "5097f4c09da783b901c7a0bbf92ebd5fab702808e82251e77a919e4c4033567d",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "bb54249457ebe6bbca5e6b8fd28ee5431b54b11824452ee171cc03c824ceb2df",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "d600be6d9d72e2ede4f63bf5350c757eb936e05130817355f0f3e3846e1c4feb",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 903,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "45382c54cf791343ff335a20c47eff5a6af11cc4dcb7a26d49f6e4d0f5833291",
+        "relative_path": "blocks/1-3/record_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "5a68665bbad9d4814977ac8e7dda3a5d113dd5e6c0363bcfb0c2908b5ed7eca1",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "c12ae3eef5f5cacc96576cedbd7755e0a017a7072ec0121cf232ece89d7b0e80",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "eb1b2540d6ddbe2677bbec0e269246bba48d80e02a1948eca63e5b4b988c358e",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "ea0882914b1d2f1453e7ffa14d6147874051806c2c2d3fcc5976632814f08590",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "0d17bb3e2fb294d86ac10bb2bfe352dcef7558ce61acce695be1aa774bd148cc",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "dfa9fb693152f5b73f20ffa54a9e5bbe215e89f0442bf920fb1515f68258156b",
+        "relative_path": "blocks/1-4/game_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "11832e5447633f9de67ce475129ed70acdd1834571e99a3057dcd3e310ee1c10",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "dead61c504d9c98dba5602af82e71396d328fd2d27687261d32198b256456470",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "57781137bccf94c800298ba8410d5b9974adb9828c8d720abe59c1a92af2103e",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "81781b9db970706b18cf88b5be4c1c7c6cf30950ee4b9ce81d2e1bf2cce4c096",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "1da5cbfa2e3b2220e354975260795cf5973228dc551e1e9b9e07ae04f3d18adb",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 908,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "33ce4fe09201cc3d3d45db7aa88edf52e052b8caccc1330e8699f83f019250bd",
+        "relative_path": "blocks/1-4/record_equal/outer_predictions",
+        "tom_fold": 1,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "49cbd47c728c9c04d5281109960e7bd64a438868f6d6788e8200da585fface9e",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "9e111c5b868806278d68539d961142f45b797bd08ab50a4b5f874cc2e21bf90e",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "7d33bc8231a9c7bf5e4ba5dd2d74954086656391080e31cc66741153e68dae0c",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "caed7391ce7c692e629a140de352492a9d82ebc9c7cd59c426aa6cb3f358aa9f",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "74c8dd3d9ecb5fbf2849b6150bffdc9aab66f09016bbd60c0556541cfc746974",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "9beaab8cde1b43e87c5e332080e980e94f8e745745edab3ff2dbd69d914e0771",
+        "relative_path": "blocks/2-0/game_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "88b2b6af1a4035a625bdad4ccf6b82792d032058a766bc752fec2329e8a960d6",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "6882df4fafdee32d278a74030483462d40011cf2626170b36fde5ec99e7006bc",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "20cefa84266cc86fb183babd036176b7d5aa96c5ded7c0628a40e2673c2f2578",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "20040d4541769544b8618be723d6934d23cb1cfeb1149b28296ce9ad554fbed3",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "ac22c4b201ca1320dc5011654a5bf1274c29b7b14343cfbf5b9eacb73834d084",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 918,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "240f2f534ce21f8b4fd5f3ea2e386543d83faef927e274c94cdab5bd133916c1",
+        "relative_path": "blocks/2-0/record_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "e4b48990e0f0cf6741a4b6a8329fd9d6f2532297594855a8e9aab8b466b5234f",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "6aaf3ca37c5f71514c77ffa8f942eca463928f8e2f8794d22f8288825e48020b",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "18fe9b205bced42ee07bb8a42f4911a3bbd1f554ed034b3595cd5fd13d20cbef",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "2ef766eef7c1fbaa731a5d06312c2aec4758e77135d34cbe90c8d453e7d33721",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "63e9f12721741d2d978cf5409e86c5b8e065952d5aee0eb6e53fea615efa66c4",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "d5dbf663d86d22ed3732058d7f9e34fd9ef8e93471f65f1fcf2ca40901c1ef1b",
+        "relative_path": "blocks/2-1/game_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "eeb68a2a43b69c87094e1fc133234a3ad8a87012043f3b341a049c4e2b110d2c",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "159a150a1e0f9b7c13426a72f20b01c68a25538ee687eba02565bf48b39d08dc",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "d3a85ce2de3ccb93a8c1a20745a13431d8a315975432c7eb4f917c966754cb6e",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "cd6600d10a348164ec005fa7e690c0367331d14f93fd83907273233ad1babeba",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "1ce3b3028338ab97f7360cd655a6fdfc7ba8f344ec63fa426cf1967bb85237e0",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 945,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "a5b994085b07703e09e400ad13e2cd4364f1be73844450ba181290f6e77e586b",
+        "relative_path": "blocks/2-1/record_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "8378ee5e1e6a303b210a9dc692347d764cdc2ef7fddba3e34242e4c6c4547755",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "45e71a41ef7ffce664069e950de1769c912e6fbbe9bf07074c42363f7dcf6afa",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "71908d63fe237409b72e786af1e7324a58315d8c5f03652c893a50f62a21ae45",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "11cc2179c74f79cdc8ceb41c2ebf16a7e83ab8ea7a7019f4bc73356f9ec56f8e",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "49b9e803e5728ee4ad7c06aaa028e7ebb0832b8c1f77df89804bcb942d65ddb9",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "e8d6db435e91233437c13e908d6f66d3eb4fdf80dc5becbb4ed27a84c06e97c3",
+        "relative_path": "blocks/2-2/game_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "86991bece1384b3c9c83da0df57de6bdbd3ae62c7c900fe59d9e98f58ef183a0",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "e4d358179937490b34c6072866413436bf7afdf25d4a1b71357517d1313a78ca",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "984a763b396eaf664a11d4f8ac0e278f5ee2e9d6c6b3c534613dec6fbc77446b",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "258c0923429863e33ed03df9b87ecc07ca37ff9fae8d2a9654d0fbaccd846553",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "6e4fc597a84c725b03d6a2a3e9b6f8a52963ddfd4cb3d4c316ce8e53a80ad50a",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 836,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "b16cef59b0832e4674e77160e3c3636a0d0481420ae1c50059bbf8fdeb959d90",
+        "relative_path": "blocks/2-2/record_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "3e2aac17258699c545a6273e3ddd0b0c7fe5bb514bd4743cb9271adca03fde0c",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "b8df0459650d96d4dc3f514f96a7041489663c2b4cf258d8bc8768956da97a12",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "5115aa4cf134c3d877dc7d645adaf231d30862d291c75dc43196a3a023d48335",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "561f03a51f90a35e4c2bd9015d51dc3041b620963666abbe9a94b84e766b6f7b",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "5310281b15df2b911666d7200756b982d02655981ccf89002446c52fe4f463a9",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "9641089674d794301511e65146d1efff37287216dd3901a7612fe91aacecb369",
+        "relative_path": "blocks/2-3/game_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "8a3700c680e0586b82c65031bb122c99f0a326a9dca7be1a4b08ffe996993aa5",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "d2033f38cda37cbaf9cafaadd2309d6b22f3d9df260d69b9fff715318b6e1aaa",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "a306483eea5728cdb2518113d73c568b61dc0adc002e54c3e59a79dca8922778",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "30d59d46ccc11c56c482241e655e184723d7fdfb58df4443f6d5456b23efed00",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "00a15462d1f505e0af82156db2f011f4755cdf3945760cda3fead922c7b0742b",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 957,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "3200fc147f98ec825d3fed60c74275336cf718292c490e95db26c73092f15614",
+        "relative_path": "blocks/2-3/record_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "046306f3da3d1c64c711e8b1b58f1e75f0a01f4df776a4034a0d4e3b9b995eba",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "15601687e607db66a2e801ac300f282737d172c138f9add6a4c7d6e69e6479d9",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "da5c6731b3a48260db99b8d4f6fa386cb4f09dbd76ef34028b4ae927acf6f654",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "b45696e54530c8f07cd462510b9ae455a26e05c2e884ec4405a3b9801c1dda90",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "d4441f1e6171dc2b09eb14fb3388f965e41bf671e3657da82ed57a470ffb194c",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "8e6dd55d69e88014e20fc760d5b344bfacefceec061c63cc8ec68496dc0d3e98",
+        "relative_path": "blocks/2-4/game_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "26c7b7d933a5df3baeecac1258b3b02c453dc94a5246d33f0b18bc1a2ed598eb",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "7c73636693c9820303b251d5ef46d6e5c12d1d730b6bc996518455365e2bfa78",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "ea90e2fb2b42ace06136b41cb2ae2ca43beb55af22435ee22f3bdefc7e0fc39b",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "78dd457ba573fc5a5d4011699c40f8935d037b6d555aa0e6046c32d96bae0913",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "464651e4a44f81fcd9a7002faca99504e90a22c873f0fd79ecc2cd692809429c",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 947,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "c9363c0ad0f8a665613b407e9b7bab5bbc20d3221eb4c9b4b790f9d51a72bf64",
+        "relative_path": "blocks/2-4/record_equal/outer_predictions",
+        "tom_fold": 2,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "853fe77378fb477d7a01eeb8eb023f735a6d0fb2f5e5c4356d9895e09d808af0",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "5e4336edf7e4691391757c817be3fa5ae9377687c3df3c24de56ba5e307538a2",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "e2a064ccdef0f8cf94d090cf66466d97f040b73d4a8c3de7a1e2496f54643053",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "85ade673e53de41963d400037044a913f7eedaa95cfef7685aff9eddd2c81920",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "3d9bbbb27fc50a0ec50ada5efa02d5737cb10da176418f617947ba1cdda283d7",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "ce7d4f337a6b983a5bef141c9b4d549eedb3f71566cc8a34513865eb5070ca5c",
+        "relative_path": "blocks/3-0/game_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "bf439ee6849e2006506d2dff35178a27523ac45a91fa12cb34b286c444341159",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "e70d8f640c765cd58daefa636f40c38894505022bc339a5159685f29992ff049",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "d8b35ad25f8d888f8edbb5d93ddd21009122bbc829335d67b1c6e629192f16f2",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "c4f1750d24ff8a5410ec0f19e7fde02e74d2ccf2d65bfecd4223a75c101b548c",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "674d2dde6c51dfd4ffe5303cc08c93d7b79f3ef99c68f9a774332c9aa649d198",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 863,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "c426d207375edc33ce7a15ad8bdb680d8efe35819e9416f27367dc1e37473438",
+        "relative_path": "blocks/3-0/record_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "7a4e29a6b6fe65eafe2506dd89af65dbaf95acbf7b96f0b816cc86b580c6d98c",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "48df9ee78283f46081284d701e9a36283ecc704c446e06280d748f4f073b0bc5",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "0b6e0b7bf13fbfb352db39ecb3c04be1fcb041ef476c7243aed954c5c2815500",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "f517ab74192e0ddc6308ef1131ea05d087567d911ae5e9e0b5fb20d558147bd7",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "4a789f1af047d03cbc4e22a83227056f937cc3d1b8b69976553efe9c43f5dfc7",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "abf60c103344d5d2b9b5876dc9dfdb6aa4d63dfc12a3e0533133694ecdf712ed",
+        "relative_path": "blocks/3-1/game_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "9da93fa8aa8b53703e17d114f03d17b714058a15a31ff21bf874da6f58c3cbbf",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "1126cfa1284fc4c2cf00e8fde59fa664e4d3a7ca1d9705e5416808132cddf6a3",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "5f78b6f43730aa012fc61cc90cced4a89df03eb8cd93dafaa806ac3c26bfa18a",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "45d098e254bd8594f16bff59fb575f55b085326f0cc5ac11c2f271d82c73904f",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "53305ac95408d5e75a70477807b9d36d5d2703c4035fb1c3b16ada51d9a18c0b",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 890,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "970f0587d4ec40d1ef0b14a5c894278cbb78065c186e3a99d4aaff24f917b6f8",
+        "relative_path": "blocks/3-1/record_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "0bb5bc5955018508632642c46dabcf67e39864902bb99c8330d56e996168046a",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "cb6485e27fee9c6ba9ad3b4a354a64b0810e86de3254d1fa9f40b8dc7c8c8389",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "0d7bf35e74514245570463a1d2570dfa49e701264c53a88e6e1e066b58f2cd96",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "78d0521029f60f757fc77e16337fb7b7e0a8f72b564f9533da7b173c580660b7",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "6ee6c04bfad2e8bfaf1d07b0822687c487f7c3df9f2d2938012a034d6b86fc73",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "24be8058b36948616325648f5271c6f3db6065a6a328886cd8b536e43601fb3a",
+        "relative_path": "blocks/3-2/game_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "750e20498c80cbd252c962f9f3f3f8a566e1866931df9d742024510f077a6422",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "79dff9137945c50480e7b18893a3545c045bcd7de21ce951013b39e445c54a98",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "5b3dc5fb201b8f8a69cfd4385115f4cc470ebdd802d45994109a1777ed4b8694",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "9f58164c1494eaea22e6d0a1242a535c706f2d1b57a6a2edfab01bb050c0b7b1",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "3e4d8b1fdca81720863712ca528c61205ebe57c9d1df666e9502f5350fe40b80",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 877,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "dd5eb2db3f2a6277faa7802633d5245b390bc2e216c837f7630b1572635de64e",
+        "relative_path": "blocks/3-2/record_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "d3426d84b34f614f656e536f5feccbd45cf86bfd563fb226b3204343389c4940",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "1027427118e78d3a371518eea9c0b47aa39be493c75bd93cd4c3108b2066c0ea",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "a05e584da86517e3d5880e0c395162a00256bca3ce9a8fc07a9bb0d1bfd9e236",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "57f68b0d9867fad520a5dd81f3f4fc03fadf578b8de03b89372421182e30ea19",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "ecb8f149909a7c80c54215ef5c174d3c6e3296efb3c4bf6c8628193ebc0945a4",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "a7e9f75c3458c5864131b909c0ebf45c9409900787b3c7dcff43ce2b77411b52",
+        "relative_path": "blocks/3-3/game_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "184346dbe739fae19fdba35b614ab5a0028efb0d7aeeb622edef5790ce2984c1",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "efa869ac521a7c619217b1df04265ca3d2714a9854c2defa98ebcb8ba744b843",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "a142cac2fbc6899b59077fc5e580a8e91d376a0cdcccd78a6bfa30bdd5fc4a03",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "ed0245eeef0c7c59b1eee2c9dc5df9c0bcf8208ffefbb416c54f3157aef0e2c4",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "576c72a15846383742ffabc82f4fa5f5532cfc6f65cdfd11566519b6c62743c2",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 936,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "e27293435eb89838d7224027cd0c23146a9d0ac000c09aab92cb873e5ba409f1",
+        "relative_path": "blocks/3-3/record_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "8dc726e33feb7e4f7dbc351f327a9840486cb413234721f6dde493a3b37ca091",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "f6ca8f8fe145f7769d9cea9e66647fb20ebec53ffe027ae25bc2db5959fe8b5d",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "1065f33235988e805a8ad238c58a0abb89174c9c57a306865041fc48331cb72b",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "f909489a1fc802b7f7159729b6bc233e03e0e122f68d020968333ba8d61635db",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "b6918fb8360bc7653f28a7dbce68c450ca61b2c0dc7f563f7e51d5a465f26dbd",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "ba76546a1bea157d31a39087e673916e0d7536931cb0d56fa02f9b641f4a8e9a",
+        "relative_path": "blocks/3-4/game_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "1e5e46bd2e89f4f47909335484ed54ac54d54ea7e7d7e684d7aed690acfbbe8d",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "91df33bbaff2d8b92f1fc94fad345abd6aeea477e21062113e8a7d5695a90d42",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "c625fc32701b7c07030be8322fd7ddf3393d6c062e068251afd5eda549c8115c",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "9113b2706c4ea932e04c216760d375a5870753e6d35ec44bd56b069371dca6aa",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "75de29756fb854c347e555ff8229f26a478dafe9c48f12ab24d633b2ab2993aa",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 868,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "1c02c0c79e191819274dc36d9ee900352f94234bd502cfccce524691990746a0",
+        "relative_path": "blocks/3-4/record_equal/outer_predictions",
+        "tom_fold": 3,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "f8a7e4e52a445112464355482872ca69c533f9c3747ba5f2a27eec964a4a7c2b",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "9e57a993c22ad9017d2afa9269b0277a7efee8a8bb22dad4cbeac5d4989520d1",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "07783ea64c37ca735905d304f7ad32e0aa2bfe021c5ff74159aee51bc76fe6dc",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "7e12dfb858ef220281feeef1b44e6c613c19ba1ded93cbf04ec8ba5d4dd1139d",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "365d1279736fd0c83a5f1c8858c1537e3e5a5d8ed0d281f48f190791811d8102",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "22ae8cd8b835e2ca9ec0aebca662097cf78a205aac2305c59218e2d225d64202",
+        "relative_path": "blocks/4-0/game_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "f8f47355df6632fdc220fd2cd9396ea80c2dc4398ab8df4e5478357e030482b4",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "9e9eeaab99b6f3e78bc467aa1cf92f1d81bc96b3b62958f72fbef9701e8061a3",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "a5b14bdf727db0a1f7869d4ee5c7bcd92c4908d88b77331e70c24f8bc3316d66",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "b72b6d952e3bf781b07eab4af64d62ea9b20140532a758fdbaabf23de58cc3a9",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "114b811cbcb58fa9884db9bf3ee8dbea30ee70165da82c748bd4926f61775e6a",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 958,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 0,
+        "record_sha256": "923be27a2a359604f65837467cd79e4e188fa4414d36b562e9f6067f833243a4",
+        "relative_path": "blocks/4-0/record_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "0132e18d6f121de27319a23403faa16e5b2315d143c034694cad956089cc7441",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "5796dd34ce757811de52d0f01ac04c71d8d644a502fcf1089bdb7fbd80eda6b1",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "20f330f3dff1f02426a4171425ab282d23844e827ea96c3725e0687dc5e92f85",
+            "parameters": {
+              "lambda": 4,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "69c3a082f1a463b1c249b7776437b88eac94ef6e9401030eaab1228fc51b28e7",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "7aebb4952a4e4dc1a47c68f1a11598f2a76acd404506d1173036997f1dfaf017",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "a6f0854e09d8c9bbbcb2c63767d410fb8b09c453243a96388301cb4500bb541b",
+        "relative_path": "blocks/4-1/game_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "3a86a76a2644643b1fdabd7a871dd8fa08420c1d8950e2e50e549a6b1adf2e5e",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "0247d6a9b185db36c272d3d311fe539e449eafd512f9b574dbe327534c3d5d9f",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "26163453adec0d6d5013741fea8003d8fe8e71b7e10b474258b7d59bfa2742f9",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "8662ea0fc75df6ef784733ef9eac55c41514f6dec7248c4ee8e4f9b362a5ef91",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "af8515fcce369651e2c61ebe6762ca8b39edcadb68780cddcb7cca54a12d10f1",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 898,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 1,
+        "record_sha256": "8d964e5575fea30e09269781fa1db154832a97504a26b419329d01f62fce33de",
+        "relative_path": "blocks/4-1/record_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "c9587131b0bdc06065e96a97a208ec70e9587d675fae6e4347ac14df041becd6",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "a93f9aecac8136a4b97135639ab4ffa8659704ff2d67b1338b368b1882ceb769",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "73495e0594a5790a5a0e404bbf813a07313ba327cffce3dc136d2de3e51a0b57",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "f1a6aabe1bf59de215791fc0dae0eb31f9028d4e060e81140a5ee3b9a43b57f0",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "a6d14f25fcbaa88cb395c62855b64740f4b003cc0a47bd25762b8799fe31eaf5",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "672b46ec624c0b271819fe1e9ffe853bf8b60f55f92804013d2835c282f9f19f",
+        "relative_path": "blocks/4-2/game_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "fa70c0fdd3e1afcdf1c5d1680b88ff2fb88e72f8f45c31d08142fa367190e067",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "d19b51630056c2db21563b3f9daa7f2d4bcfdd9aa36b3e80f40fe165e7cd145a",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "87ab16b083adfea70dbdd5e1f3d145cdecc356f8a4d87efce3deee5e5281acc8",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "e3dbf4f35b5414bd0aa83ed549929e3227f81e3cd3276eaf1d06cef5a9b97a6e",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "8b24ba38abd7f496fdcfcb8ec396fdfc48825a760cb485bf47d2d1177b5da6e5",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 926,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 2,
+        "record_sha256": "02b05ee6fa932be422ef4bba62f99481a3910b2781649dd44048c7e3cb615d65",
+        "relative_path": "blocks/4-2/record_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "bc20266c55661922de263dddef23490d2de8da7246e2bc26afa81ff1162d2692",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "fde0f06e8dea21b420303a93bf02101157331480dbd7fb218c2c8b4e3734d50d",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "52d95507b717362af946161db960e06437ef163af850646181b2744092db2eaa",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "73a88758079dbff854d89b6033e1a58acdcddea9593f4bc5d2342543147630b6",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "a6022d27a31618422f61123f1417e0058b787f0056812877115b03ffc84067ad",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "a82dcb9098de9bac7e72f6e56aad5037fca5b91110f32b15ccd18b939c2a6cc0",
+        "relative_path": "blocks/4-3/game_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "936ee144f697bb4371fd7d481fae4444f19d6dcefbaa552d56f3fb9ad4b43fce",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "e1141d86838393a667f3fc1cb349f9e5c9e315ab48bbee7fae90ec33721cc265",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "bb1410e197e559cfb88b923f65c6116883807d099d199920857197577a14d4ce",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "18d29f6e4d7d1709633cb25548cf823ceca49ecce9695d19c84a4a86a2501cca",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "b4768126a70ce05f8d4adfb737b128b3273ae6e64b5a26c6cb4a39c41ffd73b7",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 899,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 3,
+        "record_sha256": "098800052914dd21dcb325011a3e56d9b60e6bcb6a25a5ca0f9039181bc66be6",
+        "relative_path": "blocks/4-3/record_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "record_equal"
+      },
+      {
+        "manifest_digest": "ebf843e78bf994824d523ba13c0098c45052dd6a1d7ffdcc20ba9d58e61536be",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "3689fd6336a2f244e652bc7942ea11c16ceca75a83267dcc47f69e73c8ba9ca3",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "3a6b4a50bdd33d08d973426b074822634af3d78140a4ac720e4e677ad464dfe1",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 1,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "9f247b6597a934ad42d42d237a502a4fa36d76df3cbe10f310db3323636875bc",
+            "parameters": {
+              "lambda": 1,
+              "requested_bins": 5,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "1a98779f868f5a999acca6d2c0d31a33c1960b6a40d7d8655e24f5625c55e13b",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "game_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "d33651908771ca36f5d8e71f4e37081f4323f781ff6b3354d6ef4b9cb9f19255",
+        "relative_path": "blocks/4-4/game_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "game_equal"
+      },
+      {
+        "manifest_digest": "ecd5f72dd0e4eac0449bc0c388d1f9aa1c7ece7e71e2f4bb6010874a917376d4",
+        "models": {
+          "OBS-EF": {
+            "model_digest": "4bb83a6b8062fe55e909187ade919627264967474bc0537aa8ea28e7fa8f1097",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ0": {
+            "model_digest": "30adcb93f611d9684d74d8218d4d2e45745d55a4d591e72c22cdd501c21f4d80",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 1,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-EQ1": {
+            "model_digest": "b79b197cf64786d98e6be987582215878ef6727614e1d5d124c903d991c9f95a",
+            "parameters": {
+              "lambda": 0.25,
+              "requested_bins": 5,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          },
+          "OBS-LR-r": {
+            "model_digest": "9eab9769c67daa3abb96576991833a8fba08de1af563ed0593d0597dc49afa27",
+            "parameters": {
+              "tau": 0.001,
+              "weighting": "record_equal"
+            },
+            "prediction_rows": 923,
+            "test_games": 60,
+            "training_games": 240
+          }
+        },
+        "outer_fold": 4,
+        "record_sha256": "b7ca928b6a549101d28c835be4170a5ddc62cfd24ae941bbe0638597fe83d768",
+        "relative_path": "blocks/4-4/record_equal/outer_predictions",
+        "tom_fold": 4,
+        "weighting": "record_equal"
+      }
+    ]
+  },
+  "D3_local_evidence": {
+    "directory": "/Users/name_yuxiao/Documents/Untrusted_Network_Simulation-results/d3-v1-run1-summary",
+    "files": {
+      "d3-model-contrasts.csv": {
+        "bytes": 30989,
+        "sha256": "588eab8b045d47cc6c0389ac6064047ce7fcbcbc96a4d933272b38d0fa836248"
+      },
+      "d3-model-risks.csv": {
+        "bytes": 97701,
+        "sha256": "f7e2ee8d0b62583ccf41d5cd393b1b5da1f56419cfd2cd92c1389cd101040f3c"
+      }
+    },
+    "full_D3_complete_or_contract_available_here": false,
+    "level": "user_attested_complete_formal_run_local_summary_only_not_independently_reverified",
+    "results_used_to_choose_cost": false
+  },
+  "branch": "three-way",
+  "date_Asia_Shanghai": "2026-10-17",
+  "example_not_a_deployment_selection": {
+    "compatible_ToM": {
+      "architecture": "qwen3",
+      "checkpoint_digest": "3e89f066dd1778ffbe3a515365b5fb2ae9074098103ea16acec7073b2f81adbd",
+      "evaluation_revision": "46b0cb24421a2f98e063d67aedaedb8e31875403",
+      "evaluation_seal_digest": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+      "temporal_condition": "explicit_day_phase",
+      "terminal_digest": "41a242399c45924f3d7f1f320f3176681731da11a660db9add5f755b6ed10ca1",
+      "training_execution_digest": "0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+      "training_revision": "ebf98b7e3249f78d3f1fa1fd46c20affe0486913",
+      "training_seal_digest": "10f37a27dc951ab89021653dc433e510f844350c82f71b0d7711dfff957a8f86"
+    },
+    "model_digest": "bc1565bcd366dcfd9d61c04efa922666051a344b2e6a0ef891f5b3b06b72793f",
+    "outer_fold": 0,
+    "outer_unit_manifest_digest": "2f8289c4094aa8f598ff9b8d8429c2ccb4e11034596fca1afc686aee00a8f7a8",
+    "parameters": {
+      "lambda": 0.25,
+      "requested_bins": 5,
+      "weighting": "game_equal"
+    },
+    "prediction_rows": 869,
+    "test_games": 60,
+    "tom_fold": 0,
+    "training_games": 240
+  },
+  "final_preservation_check": {
+    "D3_existing_committed_source_guard": {
+      "files": 127,
+      "revision": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+      "status": "exact_match"
+    },
+    "HEAD_unchanged": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+    "all_tracked_source_files_unchanged": 433,
+    "downloaded_input_files_unchanged": 4866,
+    "index_empty": true,
+    "new_D4_production_source_or_guard_claim": false,
+    "new_files": [
+      "docs/research/observer-dtrs-v1-d4a-shadow-design.md",
+      "docs/research/observer-dtrs-v1-d4a-source-review.json"
+    ],
+    "stash_unchanged": true,
+    "tracked_diff_empty": true
+  },
+  "fold_ToM_identities": {
+    "0": {
+      "architecture": "qwen3",
+      "checkpoint_digest": "3e89f066dd1778ffbe3a515365b5fb2ae9074098103ea16acec7073b2f81adbd",
+      "evaluation_revision": "46b0cb24421a2f98e063d67aedaedb8e31875403",
+      "evaluation_seal_digest": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+      "temporal_condition": "explicit_day_phase",
+      "terminal_digest": "41a242399c45924f3d7f1f320f3176681731da11a660db9add5f755b6ed10ca1",
+      "training_execution_digest": "0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+      "training_revision": "ebf98b7e3249f78d3f1fa1fd46c20affe0486913",
+      "training_seal_digest": "10f37a27dc951ab89021653dc433e510f844350c82f71b0d7711dfff957a8f86"
+    },
+    "1": {
+      "architecture": "qwen3",
+      "checkpoint_digest": "d6533b6eee7d15c90e24d9e7bc4e25e4b12923767fb38c8e856ee3febcd071bb",
+      "evaluation_revision": "46b0cb24421a2f98e063d67aedaedb8e31875403",
+      "evaluation_seal_digest": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+      "temporal_condition": "explicit_day_phase",
+      "terminal_digest": "ddf161671c4a0fe95ab183ffcb345a3d17c92b9a48aa034af4d6940f3ebf214a",
+      "training_execution_digest": "0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+      "training_revision": "ebf98b7e3249f78d3f1fa1fd46c20affe0486913",
+      "training_seal_digest": "10f37a27dc951ab89021653dc433e510f844350c82f71b0d7711dfff957a8f86"
+    },
+    "2": {
+      "architecture": "qwen3",
+      "checkpoint_digest": "258fe3bdf57acd93bb8ddf69c801294174ca11c5d68ef50e02104a75b16d235f",
+      "evaluation_revision": "46b0cb24421a2f98e063d67aedaedb8e31875403",
+      "evaluation_seal_digest": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+      "temporal_condition": "explicit_day_phase",
+      "terminal_digest": "96c532294044c5d2fbabd5b9d9b6c335c39b7a2c7d65bebfba0f5a50081e88d8",
+      "training_execution_digest": "0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+      "training_revision": "ebf98b7e3249f78d3f1fa1fd46c20affe0486913",
+      "training_seal_digest": "10f37a27dc951ab89021653dc433e510f844350c82f71b0d7711dfff957a8f86"
+    },
+    "3": {
+      "architecture": "qwen3",
+      "checkpoint_digest": "514f02a4ad5c47209ed87ed9490602cc8b1b014069571395f14140ca5c0f097c",
+      "evaluation_revision": "46b0cb24421a2f98e063d67aedaedb8e31875403",
+      "evaluation_seal_digest": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+      "temporal_condition": "explicit_day_phase",
+      "terminal_digest": "d685a2eaae7562a0e0e3fcafc4988f6898f40201ff17182c8152d7377e3e1100",
+      "training_execution_digest": "0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+      "training_revision": "ebf98b7e3249f78d3f1fa1fd46c20affe0486913",
+      "training_seal_digest": "10f37a27dc951ab89021653dc433e510f844350c82f71b0d7711dfff957a8f86"
+    },
+    "4": {
+      "architecture": "qwen3",
+      "checkpoint_digest": "2eabf7a61a94e2e077161b5c81d583b87aacae9ec4ae6ef81f83d9dfbc14b34f",
+      "evaluation_revision": "46b0cb24421a2f98e063d67aedaedb8e31875403",
+      "evaluation_seal_digest": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+      "temporal_condition": "explicit_day_phase",
+      "terminal_digest": "e76bdd71efddd9a99171f8984ec7d25c609d228af2a9ce4596ca1fb48190a823",
+      "training_execution_digest": "0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+      "training_revision": "ebf98b7e3249f78d3f1fa1fd46c20affe0486913",
+      "training_seal_digest": "10f37a27dc951ab89021653dc433e510f844350c82f71b0d7711dfff957a8f86"
+    }
+  },
+  "frozen_D3_protocol_digest": "0ebd6b97669c35e1d9201f88152da8919d87586864a751f3fd688edd3a11c4ab",
+  "gameplay_final_ToM": {
+    "fit_digest": "87c2485acf48443034c59430d79f098a13151677852988bf691599ca2d2f8248",
+    "local_predictor_started": false,
+    "model_digest": "fdf858b5e21a1951da9ed2c2b9e988f8a1f1edcf99d2bb84f54faf055dc7e3e9",
+    "seal_digest": "fcbb81ee43050142ebdf01c0aee576156221d725598ff5ee2c02055049f72718",
+    "source_of_identity": "reviewed_client_constants_and_qwen3_final_source_not_loaded_weights",
+    "source_revision": "f199a9e6c64168a412de91ff8ca04d0c795c57e2",
+    "terminal_digest": "b977ec24d6292ad329e664c931a1aae39dc4738b4b33685b19d92fd4fb1921af"
+  },
+  "not_executed": [
+    "Shadow implementation",
+    "new_games",
+    "real_ToM_prediction",
+    "new_probability_model_fit",
+    "formal_D3_regions_or_risks",
+    "server_access",
+    "commit",
+    "push"
+  ],
+  "reviewed_source_files": {
+    "run_random.py": {
+      "locations_reviewed": [
+        24,
+        53,
+        90,
+        96,
+        124,
+        132,
+        138
+      ],
+      "sha256": "9a048252641eeeb226e7c835b03008a2fa847fd50c58f2af4d61453f4f5248d0"
+    },
+    "scripts/qwen3_gameplay_predictor.py": {
+      "locations_reviewed": [
+        13,
+        56,
+        93,
+        133
+      ],
+      "sha256": "02af5a02fb75dd4812feaf4c9a420934451fabaa5bf1cd8bde2c6be249bc4e62"
+    },
+    "scripts/tom_gameplay_ablation.py": {
+      "locations_reviewed": [
+        9,
+        33,
+        53
+      ],
+      "sha256": "b5a354bc31540d406298de8086296ed69251fc45de8980888672db473c8d37a3"
+    },
+    "werewolf/canonical_collection/runtime.py": {
+      "locations_reviewed": [
+        228,
+        259,
+        262,
+        272,
+        280
+      ],
+      "sha256": "05b31f17b28da30637a4a80e403651b94f95ec177da38365622d9137294559af"
+    },
+    "werewolf/envs/werewolf_text_env_v0.py": {
+      "locations_reviewed": [
+        863,
+        917,
+        963,
+        1024
+      ],
+      "sha256": "54a56373770dc3f2d628b3e6259f33def3a23fc51ed22a92b71f36bfc13ddd8f"
+    },
+    "werewolf/observer_dtrs/baselines.py": {
+      "locations_reviewed": [
+        119
+      ],
+      "sha256": "3bef272ae9fb42c09cdf036d14f8d6ad1248999de4b2b83624a1a763a034ac6f"
+    },
+    "werewolf/observer_dtrs/context.py": {
+      "locations_reviewed": [
+        25,
+        70
+      ],
+      "sha256": "6faaae0de0360e0d93061c50907ccd0e9496fe7eee1b95fa54146aee90e0aab0"
+    },
+    "werewolf/observer_dtrs/d3_protocol.py": {
+      "locations_reviewed": [
+        81
+      ],
+      "sha256": "a910a3ca1d799f5059df896972eaff8cd6ce53c690db15b317ce945b3fab1710"
+    },
+    "werewolf/observer_dtrs/dataset.py": {
+      "locations_reviewed": [
+        50
+      ],
+      "sha256": "1c01fe5ec89286411cbefff47c9f00acd065388c7f0378faf161620980eadaa1"
+    },
+    "werewolf/observer_dtrs/decision.py": {
+      "locations_reviewed": [
+        158,
+        184
+      ],
+      "sha256": "bdbb89647dd1d226c98ebc9e130750c052426e7fa47d5277a6da80c90bba287b"
+    },
+    "werewolf/observer_dtrs/decision_offline.py": {
+      "locations_reviewed": [
+        20
+      ],
+      "sha256": "5bec627d7089e9c0e25ec71bf728c50fed6458930e05394cba02a3c7d7a9fa55"
+    },
+    "werewolf/observer_dtrs/estimation.py": {
+      "locations_reviewed": [
+        130,
+        142,
+        161,
+        210
+      ],
+      "sha256": "cc666fe3f66968a9c07e026c92f991f1f2f0b0e797b65e7de2880fc7b7d98f29"
+    },
+    "werewolf/observer_dtrs/estimation_offline.py": {
+      "locations_reviewed": [
+        47
+      ],
+      "sha256": "23c921b20508f3beb25c6d72bdef6f5fc283d07b89dcceeb00ba3c5dfcb3683c"
+    },
+    "werewolf/observer_dtrs/features.py": {
+      "locations_reviewed": [
+        29
+      ],
+      "sha256": "d5e227b87237c86ea605e81b911b11f003bc117252143a9703ce00d7a1e7a028"
+    },
+    "werewolf/observer_dtrs/nested_validation.py": {
+      "locations_reviewed": [
+        98,
+        145
+      ],
+      "sha256": "628516ca2fabcbcd50e60d65f9e5a3c2cbb9773c030492b4fba7bb61a527eb89"
+    },
+    "werewolf/observer_dtrs/probabilities.py": {
+      "locations_reviewed": [
+        51
+      ],
+      "sha256": "f9b2cbd96b9e495afbb379b39e215b4e4bda6ab53646f869b388accc5581f8b7"
+    },
+    "werewolf/observer_dtrs/training_audit_offline.py": {
+      "locations_reviewed": [
+        16
+      ],
+      "sha256": "f19a31e0822fc452e645ec2874420e303fe82545deb2f593510ac84cc8532725"
+    },
+    "werewolf/observer_dtrs/validation_artifacts.py": {
+      "locations_reviewed": [
+        23
+      ],
+      "sha256": "ae39cf74272ebb83a1e7c6165f67d8f7b90c49bac9dc33dc2e7b11f06049f1fd"
+    },
+    "werewolf/tom/dataset.py": {
+      "locations_reviewed": [
+        73
+      ],
+      "sha256": "b6ad36d1b26492e78c95da850d60fd7260e63c47c2255c21fc4a3c9c929d3583"
+    },
+    "werewolf/tom/final_capacity.py": {
+      "locations_reviewed": [
+        24
+      ],
+      "sha256": "8b050157c4d531c5ab5c96b9b43869f035817be93a5d82543f5d6510c7282e99"
+    },
+    "werewolf/tom/qwen3_final.py": {
+      "locations_reviewed": [
+        132,
+        155,
+        468,
+        484,
+        499
+      ],
+      "sha256": "b670c700169b374f26b1cfd63ac5c8d2b5926cee8d5d9a26b4e84f028325a11c"
+    }
+  },
+  "schema_version": "observer_dtrs_D4a_source_review_v1",
+  "source_revision": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+  "status": "DESIGN_REVIEW_READY_NOT_IMPLEMENTED_NOT_FROZEN",
+  "tests": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q tests/observer_dtrs/test_features.py tests/observer_dtrs/test_estimation.py tests/observer_dtrs/test_decision.py -p no:cacheprovider --maxfail=2",
+    "passed": 90,
+    "scope": "existing controlled unit tests_not_Shadow_integration_or_real_inference",
+    "seconds": 6.53
+  },
+  "verification_limits": [
+    "Model source partitions are read and linked within sealed outer units; original raw canonical trajectories not reconstructed.",
+    "This audit does not replay all nested selection or fit candidates.",
+    "Final ToM versus OOF compatibility is not assumed."
+  ]
+}

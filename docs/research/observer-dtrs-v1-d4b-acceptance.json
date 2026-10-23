@@ -1,0 +1,184 @@
+{
+  "branch": "three-way",
+  "controlled_cli": {
+    "ToM_calls": 4,
+    "cognitive_decisions": 1620,
+    "directory": "/private/tmp/observer-dtrs-d4b-20261017-1c2w4n8q/cli-controlled",
+    "inspection": {
+      "ToM_calls": 0,
+      "inspection": {
+        "claims": 4,
+        "engine_digest": "7dfc91171ae454af0f55cbe6b77b1b99fe371e0cabec87b0afa54a5b9c499e67",
+        "external_result_anchors_verified": true,
+        "failures": 0,
+        "pending": 0,
+        "request_digests": [
+          "19cc4899fe980bfb774dfeb9479f17a4933f8ccd6d019df00d431b8e717df438",
+          "37e1210f0f8612774cf592251932125ec78435f88591ae3f0c422d2bd627b6bd",
+          "d13b69e1d41eb71abf5d60c77c4198fd00fad9410c347300198b8f348fe79938",
+          "d206f2c86aff74a73b178676ff14b7cfa76d9406b4d1857f4f35ea5c9a72c26a"
+        ],
+        "result_digests": {
+          "19cc4899fe980bfb774dfeb9479f17a4933f8ccd6d019df00d431b8e717df438": "34856a35b4f91d74eebddea00afe7947797d4de164c2afa5b6f64d099a6f6f35",
+          "37e1210f0f8612774cf592251932125ec78435f88591ae3f0c422d2bd627b6bd": "85fc2a1addf52480c5d7fa4bfac8df09edd13c9db4e742afd03e1058eb254acc",
+          "d13b69e1d41eb71abf5d60c77c4198fd00fad9410c347300198b8f348fe79938": "7e15d217a65ecf1a942ebcf7333823b97326bfa89d80171150075dbee2869943",
+          "d206f2c86aff74a73b178676ff14b7cfa76d9406b4d1857f4f35ea5c9a72c26a": "8ff291176d2d06dff99d0b6952c0e786671746edd290baffe29fda31fef77de5"
+        },
+        "results": 4,
+        "scope": "controlled_shadow_not_formal_deployment",
+        "verified_failures": 0,
+        "verified_results": 4
+      },
+      "status": "CONTROLLED_SHADOW_VERIFIED",
+      "summary_sha256": "a36f6fffe2c187a5fc6f6e0b71b3105c6f4e6ee9cbeab3551df9de56572a29b8"
+    },
+    "observer_rows": 18,
+    "requests": 4,
+    "restart_ToM_calls": 0,
+    "result_digests": {
+      "19cc4899fe980bfb774dfeb9479f17a4933f8ccd6d019df00d431b8e717df438": "34856a35b4f91d74eebddea00afe7947797d4de164c2afa5b6f64d099a6f6f35",
+      "37e1210f0f8612774cf592251932125ec78435f88591ae3f0c422d2bd627b6bd": "85fc2a1addf52480c5d7fa4bfac8df09edd13c9db4e742afd03e1058eb254acc",
+      "d13b69e1d41eb71abf5d60c77c4198fd00fad9410c347300198b8f348fe79938": "7e15d217a65ecf1a942ebcf7333823b97326bfa89d80171150075dbee2869943",
+      "d206f2c86aff74a73b178676ff14b7cfa76d9406b4d1857f4f35ea5c9a72c26a": "8ff291176d2d06dff99d0b6952c0e786671746edd290baffe29fda31fef77de5"
+    },
+    "summary_sha256": "a36f6fffe2c187a5fc6f6e0b71b3105c6f4e6ee9cbeab3551df9de56572a29b8"
+  },
+  "date_Asia_Shanghai": "2026-10-17",
+  "failure_and_recovery": {
+    "cooperative_and_late_return_timeout_tests_passed": true,
+    "durable_submission_coverage_ledger": false,
+    "external_result_anchor_supported": true,
+    "failure_has_no_cognitive_rows": true,
+    "fully_rehashed_Q_self_consistency_is_not_authentication_without_external_anchor": true,
+    "hard_preemption_supported": false,
+    "interrupted_claim_policy": "INTERRUPTED_NO_RESULT_no_automatic_reexecution",
+    "persistent_claim_before_provider": true,
+    "queue": "bounded_submit_manual_external_worker_pump_no_actual_background_service",
+    "success_repeat_provider_calls": 0
+  },
+  "information_isolation": {
+    "actual_game_hook_noninterference_verified": false,
+    "counterfactual_unknown_supervision_ignored": true,
+    "no_environment_agent_or_game_loop_dependencies": true,
+    "observations_fake_state_and_Python_NumPy_RNG_unchanged_in_controlled_test": true,
+    "online_import_closure_excludes_restricted_readers": true,
+    "training_support_in_inference_payload_or_decide": false
+  },
+  "new_file_sha256_excluding_this_record": {
+    "docs/research/observer-dtrs-v1-d4b.md": "b54ce82f46962fa2ee7d3cb4eebf5c402fb8343edf3a26affcc72477ad9d6404",
+    "scripts/check_observer_dtrs_shadow.py": "e567da1ffa44214529a65fa977c67b8a57eb7b4f961b13f9cbea6d4d33bf4afb",
+    "tests/observer_dtrs/test_shadow.py": "61ae66bdd5b93a9e7c113b1771bdc50a0dfde64e5bf826ccd1a61bc9beec476c",
+    "tests/observer_dtrs/test_shadow_deployment.py": "2f53ad2a10bffe248ccc81adc72ceca33105862acb57109ffd7084844d0084b3",
+    "werewolf/observer_dtrs/deployment_offline.py": "1612a83498e2d092c22bc64e1b7b934393cae1615135d474e5c0b203acc13673",
+    "werewolf/observer_dtrs/online_context.py": "8953503e3d5611459574686b39692ba6d04c41dd6092832e1f602805f2edff0b",
+    "werewolf/observer_dtrs/online_model.py": "c92878912ae9172d2e0bd3848e60028d3d1539401650a41165a87b7c666e170b",
+    "werewolf/observer_dtrs/shadow.py": "c56345c62f1724161754f9c38e463a29a8ca1a66e52e01b5117fa74987ee8bbc",
+    "werewolf/observer_dtrs/shadow_artifacts.py": "d8586c49411bbcc5379bc421681013a681a0de902b8b308a925a336ff946b487"
+  },
+  "new_files": [
+    "docs/research/observer-dtrs-v1-d4b-acceptance.json",
+    "docs/research/observer-dtrs-v1-d4b.md",
+    "scripts/check_observer_dtrs_shadow.py",
+    "tests/observer_dtrs/test_shadow.py",
+    "tests/observer_dtrs/test_shadow_deployment.py",
+    "werewolf/observer_dtrs/deployment_offline.py",
+    "werewolf/observer_dtrs/online_context.py",
+    "werewolf/observer_dtrs/online_model.py",
+    "werewolf/observer_dtrs/shadow.py",
+    "werewolf/observer_dtrs/shadow_artifacts.py"
+  ],
+  "numerical_equivalence": {
+    "DTRS_reference": "unchanged decision.decide; all 45 matrices and both registered TiePolicies",
+    "conditions": [
+      "r endpoints",
+      "saved edges",
+      "nextafter around edges",
+      "fixed synthetic random features",
+      "discussion and pk_discussion",
+      "one or two living wolves",
+      "saved parent fallback"
+    ],
+    "fixture_EQ1_nonempty_edge_example": {
+      "discussion/2": [
+        0.3
+      ]
+    },
+    "models": [
+      "OBS-EQ0",
+      "OBS-EQ1",
+      "OBS-EF",
+      "OBS-LR-r"
+    ],
+    "same_runtime_exact_float_equality": true
+  },
+  "preservation": {
+    "D3_protocol_digest": "0ebd6b97669c35e1d9201f88152da8919d87586864a751f3fd688edd3a11c4ab",
+    "D4a_docs_unchanged": 2,
+    "formal_guard": {
+      "message": "formal experiment requires committed, unchanged production sources; no automatic commit",
+      "status": "EXPECTED_REJECTION_UNCOMMITTED_D4_SOURCES"
+    },
+    "historical_tracked_files_unchanged": 433,
+    "index_empty": true,
+    "research_input_files_unchanged": 4866,
+    "stash_unchanged": true,
+    "tracked_diff_empty": true
+  },
+  "regression_issue_resolved": {
+    "initial_failure": "old production import closure test found five new modules unreachable",
+    "initial_regression_log": "/private/tmp/observer-dtrs-d4b-20261017-1c2w4n8q/regression.log",
+    "resolution": "new substantive artificial-only executable acceptance/anchored-inspect entry point; frozen CLI/test/game files unchanged",
+    "test_rule_modified": false
+  },
+  "related_regression": {
+    "deselected": 1,
+    "log": "/private/tmp/observer-dtrs-d4b-20261017-1c2w4n8q/regression-final.log",
+    "log_sha256": "0084e011e13f3e022f2a78bfc7845a3ffd950f4e9d9e0f832c3949406843982b",
+    "passed": 577,
+    "seconds": 120.79
+  },
+  "remaining_before_live_shadow": [
+    "actual pinned ToM provider and capacity/runtime attestation",
+    "probability bundle selection or independent CAL protocol and matching ToM identity",
+    "CAL/TEST whole-game pools, target opening and technical failure/stopping rules",
+    "process isolation and hard timeout",
+    "durable submission and backpressure receipts",
+    "D4 source commit and formal guard qualification",
+    "minimal opt-in PRE hook noninterference integration acceptance"
+  ],
+  "schema_version": "observer_dtrs_D4b_controlled_acceptance_v1",
+  "scope_limit": "engineering fixtures only; no online calibration, policy utility, or win-rate evidence",
+  "server_access_commit_push_or_new_game": false,
+  "source_and_export": {
+    "compiled_four_model_fixture_and_full_old_artificial_outer_audit_export_passed": true,
+    "final_ToM_or_implicit_transfer_enabled": false,
+    "real_D2_model_exported": false,
+    "real_ToM_loaded": false,
+    "real_supervision_opened_for_this_stage": false,
+    "scopes_enabled": [
+      "controlled_fixture",
+      "verified_d2_fixture"
+    ]
+  },
+  "source_base_revision": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+  "source_state": "uncommitted_D4_sources_not_a_production_revision",
+  "status": "CONTROLLED_ACCEPTANCE_PASSED_NO_GAME_INTEGRATION_NO_FORMAL_DEPLOYMENT",
+  "targeted_final_current_tree": {
+    "log": "/private/tmp/observer-dtrs-d4b-20261017-1c2w4n8q/targeted-last.log",
+    "log_sha256": "a5ae73294094411114fca08959ac25d1339cad0cd7a7cfea6371fd541bca2494",
+    "note": "After related regression, only a queue docstring wording was clarified; current-tree targeted tests rerun.",
+    "passed": 58,
+    "seconds": 7.69
+  },
+  "targeted_with_old_boundary_regression": {
+    "deselected": 0,
+    "log": "/private/tmp/observer-dtrs-d4b-20261017-1c2w4n8q/targeted-release.log",
+    "log_sha256": "19816bbd1bb051d1f8f14d659af0ddd2c8f00d99d85bceeb0d22ed1c9be2eacd",
+    "passed": 58,
+    "seconds": 7.76
+  },
+  "test_commands": {
+    "related": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q tests/observer_dtrs tests/canonical_collection tests/development_publication tests/tom/test_dataset.py tests/tom/test_boundaries.py -k \"not off_diagonal_readout_can_memorize_controlled_public_fixture\" -p no:cacheprovider --maxfail=3",
+    "targeted": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q tests/observer_dtrs/test_shadow.py tests/observer_dtrs/test_shadow_deployment.py tests/tom/test_boundaries.py::test_all_production_modules_belong_to_current_cli_import_closure -p no:cacheprovider --maxfail=3"
+  }
+}

@@ -1,0 +1,526 @@
+{
+  "schema_version": "observer_dtrs_d4c1_acceptance_v1",
+  "created_utc": "2026-10-17T02:17:23.717590+00:00",
+  "scope": "artificial_only_no_real_game_service_weights_or_research_statistics",
+  "status": "CONTROLLED_ACCEPTANCE_COMPLETE_NOT_FORMAL_DEPLOYMENT",
+  "source_head": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+  "branch": "three-way",
+  "project_commit_or_push": false,
+  "source_files": {
+    "docs/research/observer-dtrs-v1-d4c1.md": {
+      "sha256": "66f24fed6a12f48a41cf3b26054c192395a58801aef64a315a2a29b985931c5e",
+      "bytes": 12087,
+      "mode": "0o644"
+    },
+    "run_random.py": {
+      "sha256": "7a94b595fe429a585f286054e81f8c1e54a76de1387cbceb0f20c01133e243a7",
+      "bytes": 16121,
+      "mode": "0o644"
+    },
+    "tests/observer_dtrs/shadow_worker_fixtures.py": {
+      "sha256": "b814053d8f74905a27ab44b048e0226c438e058110fe59469c74f834cf36d968",
+      "bytes": 2078,
+      "mode": "0o644"
+    },
+    "tests/observer_dtrs/test_shadow_hook.py": {
+      "sha256": "c91b37990c6599a510051506936c7d3e46900432ca728ceb2d19659ccd79c374",
+      "bytes": 12068,
+      "mode": "0o644"
+    },
+    "tests/observer_dtrs/test_shadow_worker.py": {
+      "sha256": "ca4fff8dabd9d7c9550911f657988ab9db729b49b6f9764dc52fee01f53e392f",
+      "bytes": 11692,
+      "mode": "0o644"
+    },
+    "werewolf/canonical_collection/runtime.py": {
+      "sha256": "96702ac4823a74793ef91b90603b121d3d0232fd16392744407fdfad87cebbb4",
+      "bytes": 23710,
+      "mode": "0o644"
+    },
+    "werewolf/observer_dtrs/shadow_hook.py": {
+      "sha256": "7755be61ff060b02de0312b604c74f81b3d70dbbe94d6f627eadca25a8202af3",
+      "bytes": 3668,
+      "mode": "0o644"
+    },
+    "werewolf/observer_dtrs/shadow_receipts.py": {
+      "sha256": "a97009683ce23470023ea479e5fa171e4d4896f2902f8b87259b924f540a7f07",
+      "bytes": 8029,
+      "mode": "0o644"
+    },
+    "werewolf/observer_dtrs/shadow_worker.py": {
+      "sha256": "d9cb83d51c440efb361e6828df82fb15a61c08ee6ed51e66fbc578c5aaa7d94c",
+      "bytes": 14012,
+      "mode": "0o644"
+    }
+  },
+  "stage_files": {
+    "modified": [
+      "run_random.py",
+      "werewolf/canonical_collection/runtime.py"
+    ],
+    "new": [
+      "werewolf/observer_dtrs/shadow_hook.py",
+      "werewolf/observer_dtrs/shadow_worker.py",
+      "werewolf/observer_dtrs/shadow_receipts.py",
+      "tests/observer_dtrs/shadow_worker_fixtures.py",
+      "tests/observer_dtrs/test_shadow_hook.py",
+      "tests/observer_dtrs/test_shadow_worker.py",
+      "docs/research/observer-dtrs-v1-d4c1.md",
+      "docs/research/observer-dtrs-v1-d4c1-acceptance.json"
+    ]
+  },
+  "primary_tests": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q tests/observer_dtrs tests/canonical_collection tests/development_publication tests/tom/test_dataset.py tests/tom/test_boundaries.py tests/tom/test_gameplay_ablation.py tests/tom/test_constrained_speech.py tests/agents/test_agent_backend.py -k \"not off_diagonal_readout_can_memorize_controlled_public_fixture\" --basetemp=/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures -p no:cacheprovider --maxfail=2",
+    "result": "720 passed, 1 deselected, 68 subtests passed in 138.39s (0:02:18)",
+    "log": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-tests.log",
+    "log_sha256": "2c09bded21b6c1681849e4cf70bd13fe1bd7fa235ba759f0a73e89abbe3b0f66",
+    "excluded_test": "test_off_diagonal_readout_can_memorize_controlled_public_fixture; unchanged historical CPU regression scope"
+  },
+  "additional_regression_unavailable": {
+    "tests": [
+      "tests/phase2/test_online_pilot.py",
+      "tests/phase2/test_online_runner_integration.py"
+    ],
+    "status": "COLLECTION_FAILED_NOT_EXECUTED",
+    "reason": "ModuleNotFoundError: sklearn in local 3wd environment",
+    "log": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/regression-tests.log",
+    "log_sha256": "d30b3f3f9996fcd7331c401d6af2a729a417fe1d96d295e7a0dcf9f036ecebde"
+  },
+  "historical_test_logs": [
+    {
+      "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/targeted-tests.log",
+      "sha256": "c2b194350c98c489346761cb757f0fe3bf60fbbbd32e3b00733643496f2c3635",
+      "current_source_acceptance": false
+    },
+    {
+      "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/final-targeted-tests.log",
+      "sha256": "fddb855003be991aba5da3cb432bf2a349d8a3247fcbaedcb1ce5411ce695c82",
+      "current_source_acceptance": false
+    },
+    {
+      "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/final-regression-tests.log",
+      "sha256": "059e351ee728c427317a324e968b608707b8f9a122b74f00f7d8439b53022029",
+      "current_source_acceptance": false
+    },
+    {
+      "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/release-regression-tests.log",
+      "sha256": "54a2354bc621d952a3b6e98c6f2da72a409853f144d2c0808944f6c7fe4a2102",
+      "current_source_acceptance": false
+    }
+  ],
+  "controlled_on_off_pairs": {
+    "fake_backend": 20,
+    "canonical_recorder": 2,
+    "fake_dimensions": "discussion/PK x one/two living wolves x ok/hang/crash/corrupt/backpressure",
+    "exact_equal": [
+      "actor_observation",
+      "PRE_handoff",
+      "cognition_realization_vote_prompts",
+      "speech",
+      "vote",
+      "fixture_events",
+      "winner",
+      "canonical_evidence_all_fields_and_frozen_bytes",
+      "report_and_backend_call_budget",
+      "Python_RNG",
+      "NumPy_RNG"
+    ],
+    "child_deliberately_consumes_both_RNGs": true,
+    "no_real_service_text_equivalence_claim": true
+  },
+  "fake_game_receipt_chain_checks": {
+    "readable_workers": 16,
+    "deliberately_corrupt_workers": 4,
+    "durable_capture_statuses": {
+      "SUBMITTED": 16,
+      "SKIPPED_BACKPRESSURE": 4
+    },
+    "durable_outcome_statuses": {
+      "SUCCEEDED": 4,
+      "FAILED_CRASH": 4,
+      "FAILED_TIMEOUT": 8
+    },
+    "pending": 0,
+    "audit_anchors": [
+      {
+        "fixture": "test_fake_backend_on_off_exact0",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact0/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "SUCCEEDED": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "c0d6f897834880ad0185c2e4256a60ae1decb8b5ab73c4e997547a0f10a58a09"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact1",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact1/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "SUCCEEDED": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "562d493b61752f4bc2dc63d0c15978cd3f577a7de25d52d6d45f752e09a9a247"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact10",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact10/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_CRASH": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "36160dd26a5e980ccb8c95f4ac24bc42a6456493b4b04e2772e8b62d6d115adc"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact11",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact11/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_CRASH": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "d2e53200aaea0a333696e9c95e173ff383f0dc305e24f4430d7b801b293341b1"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact16",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact16/worker",
+        "summary": {
+          "capture_attempts": 2,
+          "eligible_captures": 2,
+          "unique_eligible_PREs": 2,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1,
+            "SKIPPED_BACKPRESSURE": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "a7f5581ed71b8481ebe9ba7e83000244a4fc8c30e58f83bfa82f215905ebf10e"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact17",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact17/worker",
+        "summary": {
+          "capture_attempts": 2,
+          "eligible_captures": 2,
+          "unique_eligible_PREs": 2,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1,
+            "SKIPPED_BACKPRESSURE": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "35200a2f7a0d5b007862d3ae2a801815f331534d69493902473fb16f39a88631"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact18",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact18/worker",
+        "summary": {
+          "capture_attempts": 2,
+          "eligible_captures": 2,
+          "unique_eligible_PREs": 2,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1,
+            "SKIPPED_BACKPRESSURE": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "d3d38a03d93dca9d2173b3c11495d50e7dcc47ee4e5caa657c0ef4cfffa035d7"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact19",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact19/worker",
+        "summary": {
+          "capture_attempts": 2,
+          "eligible_captures": 2,
+          "unique_eligible_PREs": 2,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1,
+            "SKIPPED_BACKPRESSURE": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "0e4be82be8e79874032b0142bc42bcae93f269c0eae276a5913f84f04674dd14"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact2",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact2/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "SUCCEEDED": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "f4900f39e34eae9f5086d5ad8fb2a414631b897192c29339182840bb830332e2"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact3",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact3/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "SUCCEEDED": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "3902acb876600dafb05feeda00a79937b82e2708803ff4c3c0a2981d3f11d4b1"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact4",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact4/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "87af515eb6ad847e64ec01ae1c272f4638e3c9f93f762d192a398f89a2e13727"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact5",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact5/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "f5de8cb410014e14d96b25cc5f5839ff014f748539029d5a357fdee8dde01622"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact6",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact6/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "819ee01278d3647e58979f6ed76e6634b6c6b51bfff84ffcbb8b71ac3d419b9e"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact7",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact7/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_TIMEOUT": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "154539cb5df25e1c98c6af2e41b550dd9e82e36534a693f2f1065fe6881cb657"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact8",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact8/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_CRASH": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "d3a20f660d7154171267cb10cdf5a6704c5a6fc005d0f5b3473593ef090dea58"
+        }
+      },
+      {
+        "fixture": "test_fake_backend_on_off_exact9",
+        "path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact9/worker",
+        "summary": {
+          "capture_attempts": 1,
+          "eligible_captures": 1,
+          "unique_eligible_PREs": 1,
+          "eligibility_unknown": 0,
+          "capture_statuses": {
+            "SUBMITTED": 1
+          },
+          "outcome_statuses": {
+            "FAILED_CRASH": 1
+          },
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "head_digest": "f850edc270822588bd92c5b8fc91b2ff1ab5884e5b5e352daae7b36f6af5f9b7"
+        }
+      }
+    ],
+    "backpressure_cases_include_one_artificial_prefill_request_each": true,
+    "corrupt_negative_fixture_paths": [
+      "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact12/worker",
+      "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact13/worker",
+      "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact14/worker",
+      "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/accepted-regression-fixtures/test_fake_backend_on_off_exact15/worker"
+    ],
+    "limitation": "four deliberately broken logs cannot be read as complete; fail-open gameplay and audit_error/unrecorded count are asserted in tests"
+  },
+  "protection_check": {
+    "head": "e513fd8b69404d07d69cd308023b673554f5bbf0",
+    "tracked_baseline_files": 433,
+    "prior_D4_untracked_files": 12,
+    "allowed_changed_control_files": [
+      "run_random.py",
+      "werewolf/canonical_collection/runtime.py"
+    ],
+    "all_other_baseline_files_unchanged": true,
+    "protected_research_files": 4867,
+    "protected_research_files_unchanged": true,
+    "stash_unchanged": true,
+    "index_empty": true,
+    "frozen_D3_protocol_digest": "0ebd6b97669c35e1d9201f88152da8919d87586864a751f3fd688edd3a11c4ab",
+    "formal_guards": {
+      "D2": {
+        "status": "EXPECTED_REJECTION_UNCOMMITTED_SOURCE",
+        "reason": "formal experiment requires committed, unchanged production sources; no automatic commit"
+      },
+      "D3": {
+        "status": "EXPECTED_REJECTION_UNCOMMITTED_SOURCE",
+        "reason": "formal experiment requires committed, unchanged production sources; no automatic commit"
+      }
+    }
+  },
+  "baseline_path": "/private/tmp/observer-dtrs-d4c1-5v4qbq_x/baseline.json",
+  "baseline_sha256": "20b5033a4ef9def30571d9bffe4ef50e1684423c4ed79e188a4af6244b278881",
+  "remaining_qualifications": [
+    "real final ToM source/capacity/provider cancellation and resource budget",
+    "independent CAL/TEST whole-game pools and supervision opening rules",
+    "ToM-matched probability deployment publication",
+    "D4 reviewed committed source OID and formal guard qualification",
+    "legacy optional Phase2 Pilot regressions require sklearn"
+  ],
+  "research_semantics_unchanged": {
+    "loss_scenarios": 45,
+    "tie_policies": "explicit original D3 policies",
+    "training_support_not_in_decide": true,
+    "Y_or_reports_not_in_online_request": true
+  },
+  "io_and_recovery_limits": [
+    "submission never waits for capacity/inference but synchronous fsync can block",
+    "complete storage failure cannot guarantee durable failure receipt; completeness is explicitly false",
+    "admission recovery is at-most-once with no automatic replay",
+    "receipt full-history verification is intended for per-attempt short logs",
+    "external population/result/head anchors are required for full coverage/authenticity claims"
+  ]
+}
