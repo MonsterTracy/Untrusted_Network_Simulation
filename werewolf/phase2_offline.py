@@ -16,6 +16,7 @@ from pathlib import Path
 from werewolf.artifact_io import verify_artifact
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.development_publication import open_publication, open_role_sidecar
+from werewolf.phase2_q_representation import transform_q
 
 
 PUBLICATION_DIGEST = "396ea0fa3f3f03dd1dfce8b25c0162ca489b992321d0c9e6f772eb2b0c4a2acd"
@@ -70,6 +71,7 @@ class CandidateRow:
     theta_ac: bool
     z: R2Input
     resolved_outcome: ResolvedOutcome  # Evaluation-only; never part of z.
+    evidence_identity_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -523,26 +525,34 @@ def candidate_opportunities(games, role_maps: dict[str, dict[str, str]],
 
 
 def load_oof_probabilities(publication, evaluation_root: Path | str,
-                           opportunities: tuple[_Opportunity, ...]) -> dict[tuple[str, str, str], tuple[float, ...]]:
+                           opportunities: tuple[_Opportunity, ...], *, oof=None) -> dict[tuple[str, str, str], tuple[float, ...]]:
     """Read only sealed held-out Q probabilities needed by eligible PREs."""
     root = Path(evaluation_root)
+    paired = oof is not None and oof.paired_experiment_digest is not None
+    temporal = oof.temporal_condition if paired else "explicit_day_phase"
+    if paired:
+        from werewolf.tom import backbone_evaluation as evaluation
     contract = verify_artifact(root / "contract",
         expected_artifact_type="backbone_oof_evaluation_contract",
-        expected_schema_version="classic7_backbone_oof_evaluation_v1")
+        expected_schema_version=evaluation.PAIRED_VERSION if paired else "classic7_backbone_oof_evaluation_v1")
     seal = verify_artifact(root / "seal",
         expected_artifact_type="backbone_oof_evaluation_report",
-        expected_schema_version="classic7_backbone_oof_report_v1")
-    if (seal.manifest_digest != OOF_SEAL_DIGEST
+        expected_schema_version=evaluation.PAIRED_REPORT_VERSION if paired else "classic7_backbone_oof_report_v1")
+    if (seal.manifest_digest != (oof.evaluation_seal_digest if paired else OOF_SEAL_DIGEST)
             or seal.manifest["evaluation_digest"] != contract.manifest_digest):
         raise Phase2DataError("Qwen3 OOF evaluation seal mismatch")
     descriptors = {(row["architecture"], row["fold"]): row
-                   for row in seal.manifest["predictions"]}
-    if len(descriptors) != len(seal.manifest["predictions"]):
+                   for row in seal.manifest["predictions"]
+                   if not paired or row["temporal_condition"] == temporal}
+    if len(descriptors) != (5 if paired else len(seal.manifest["predictions"])):
         raise Phase2DataError("duplicate OOF prediction descriptor")
+    if paired and (seal.manifest["paired_experiment_digest"] != oof.paired_experiment_digest
+                   or contract.manifest_digest != oof.evaluation_contract_digest):
+        raise Phase2DataError("paired OOF identity mismatch")
     fold_of_game = fold_assignment(publication.public_view.fold_manifest)
     needed = {}
     for opportunity in opportunities:
-        for observer in set(opportunity.alive) - opportunity.wolves:
+        for observer in (PLAYER_IDS if paired else set(opportunity.alive) - opportunity.wolves):
             key = (opportunity.game_id, opportunity.boundary_id, observer)
             expected = (opportunity.prefix_digest, opportunity.fold)
             if key in needed and needed[key] != expected:
@@ -551,16 +561,18 @@ def load_oof_probabilities(publication, evaluation_root: Path | str,
     found = {}
     for fold in range(5):
         descriptor = descriptors.get(("qwen3", fold))
-        if descriptor is None:
+        if descriptor is None or (paired and descriptor["prediction_digest"] != oof.prediction_digest_by_fold[fold]):
             raise Phase2DataError("sealed Qwen3 fold descriptor missing")
-        artifact = verify_artifact(root / "folds" / "qwen3" / str(fold),
+        path = (evaluation.prediction_path(root, "qwen3", fold, temporal, paired=True)
+                if paired else root / "folds" / "qwen3" / str(fold))
+        artifact = verify_artifact(path,
             expected_artifact_type="backbone_oof_fold_predictions",
-            expected_schema_version="classic7_backbone_oof_predictions_v1")
+            expected_schema_version=evaluation.PAIRED_PREDICTION_VERSION if paired else "classic7_backbone_oof_predictions_v1")
         manifest = artifact.manifest
         if (artifact.manifest_digest != descriptor["prediction_digest"]
                 or manifest["evaluation_digest"] != contract.manifest_digest
                 or manifest["architecture"] != "qwen3" or manifest["fold"] != fold
-                or manifest["temporal_condition"] != "explicit_day_phase"
+                or manifest["temporal_condition"] != temporal
                 or manifest["training_seal_digest"] != seal.manifest["training_seal_digest"]):
             raise Phase2DataError("Qwen3 OOF fold lineage mismatch")
         count = 0
@@ -572,7 +584,7 @@ def load_oof_probabilities(publication, evaluation_root: Path | str,
                 observer_index = row["observer"]
                 if (type(observer_index) is not int or not 0 <= observer_index < 7
                         or fold_of_game.get(game_id) != fold
-                        or row["temporal_condition"] != "explicit_day_phase"
+                        or row["temporal_condition"] != temporal
                         or row["checkpoint_digest"] != manifest["checkpoint_digest"]):
                     raise Phase2DataError("OOF prediction row lineage mismatch")
                 observer = PLAYER_IDS[observer_index]
@@ -591,7 +603,15 @@ def load_oof_probabilities(publication, evaluation_root: Path | str,
 
 def build_candidate_rows(opportunities: tuple[_Opportunity, ...],
                          probabilities: dict[tuple[str, str, str], tuple[float, ...]],
-                         post_days: tuple[PostDayState, ...]) -> tuple[CandidateRow, ...]:
+                         post_days: tuple[PostDayState, ...], *, q_representation="continuous",
+                         evidence_identity_digest=None) -> tuple[CandidateRow, ...]:
+    if q_representation != "continuous" and evidence_identity_digest is None:
+        raise Phase2DataError("Q representation requires explicit evidence identity")
+    if evidence_identity_digest is not None and (
+            not isinstance(evidence_identity_digest, str)
+            or len(evidence_identity_digest) != 64
+            or any(c not in "0123456789abcdef" for c in evidence_identity_digest)):
+        raise Phase2DataError("invalid evidence identity digest")
     final = {(s.game_id, s.resolved_day): s for s in post_days}
     if len(final) != len(post_days):
         raise Phase2DataError("duplicate post-day state")
@@ -604,8 +624,14 @@ def build_candidate_rows(opportunities: tuple[_Opportunity, ...],
         n_w_pre = len(set(opportunity.alive) & opportunity.wolves)
         s_pre = _counts((n_w_pre, len(opportunity.alive) - n_w_pre))
         observers = set(opportunity.alive) - opportunity.wolves
-        q = {i: probabilities[(opportunity.game_id, opportunity.boundary_id, i)]
-             for i in observers}
+        if evidence_identity_digest is not None or q_representation != "continuous":
+            matrix = transform_q([probabilities[(opportunity.game_id, opportunity.boundary_id, i)]
+                                  for i in PLAYER_IDS], opportunity.competition,
+                                 representation=q_representation)
+            q = {i: tuple(matrix[PLAYER_IDS.index(i)].tolist()) for i in observers}
+        else:
+            q = {i: probabilities[(opportunity.game_id, opportunity.boundary_id, i)]
+                 for i in observers}
         for candidate in opportunity.candidates:
             identity = (opportunity.game_id, opportunity.boundary_id,
                         opportunity.acting_wolf, opportunity.phase, candidate)
@@ -624,7 +650,7 @@ def build_candidate_rows(opportunities: tuple[_Opportunity, ...],
                          opportunity.supports, candidate),
                 r2_input(opportunity.alive, opportunity.wolves, opportunity.competition,
                          candidate, q, phase=opportunity.phase, remaining=opportunity.remaining),
-                outcome))
+                outcome, evidence_identity_digest))
     return tuple(rows)
 
 
@@ -667,7 +693,7 @@ def _reference_outcome_loss(s_pre: tuple[int, int], outcome: ResolvedOutcome,
 
 
 def build_development_layer(publication_path: Path | str,
-                            evaluation_root: Path | str) -> OfflinePhase2:
+                            evaluation_root: Path | str, *, oof=None) -> OfflinePhase2:
     """Verify fixed evidence and build the in-memory Phase-2 offline layer."""
     publication = open_publication(publication_path)
     if (publication.manifest_digest != PUBLICATION_DIGEST
@@ -699,8 +725,11 @@ def build_development_layer(publication_path: Path | str,
     states = post_day_states(games, role_maps, fold_of_game)
     if len(states) != EXPECTED_POST_DAYS:
         raise Phase2DataError(f"post-day state population mismatch: {len(states)}")
-    probabilities = load_oof_probabilities(publication, evaluation_root, opportunities)
-    rows = build_candidate_rows(opportunities, probabilities, states)
+    probabilities = load_oof_probabilities(publication, evaluation_root, opportunities, oof=oof)
+    paired = oof is not None and oof.paired_experiment_digest is not None
+    rows = build_candidate_rows(opportunities, probabilities, states,
+        q_representation=oof.q_representation if paired else "continuous",
+        evidence_identity_digest=oof.identity_digest if paired else None)
     if len(rows) != EXPECTED_CANDIDATES:
         raise Phase2DataError("built candidate-row population mismatch")
     values = build_value_tables(states, fold_of_game)

@@ -1,5 +1,6 @@
 """Immutable backbone-study preparation and opening, without a training lifecycle."""
 
+from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
@@ -19,6 +20,9 @@ from werewolf.tom.temporal import publish_temporal, TemporalCodeProvider
 
 STUDY_VERSION = "classic7_backbone_study_v1"
 INITIAL_VERSION = "classic7_backbone_initial_v1"
+PAIRED_STUDY_VERSION = "classic7_qwen3_paired_temporal_study_v2"
+PAIRED_INITIAL_VERSION = "classic7_qwen3_paired_initial_v1"
+PAIRED_CONDITIONS = ("explicit_day_phase", "implicit")
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs/paper/tom-backbone-study-v1.json"
 
 
@@ -34,6 +38,33 @@ def _frozen_design():
             or design["reference_protocol"]["max_seq_len"] != 1024):
         raise ValueError("invalid frozen backbone design")
     return design
+
+
+def _paired_design():
+    design = deepcopy(_frozen_design())
+    design.update(schema_version=PAIRED_STUDY_VERSION,
+                  temporal_conditions=list(PAIRED_CONDITIONS), terminal_lineages=10,
+                  architectures={"qwen3": design["architectures"]["qwen3"]})
+    design["initialization"] = {"temporal_pairing": "exact_shared_fold_tensors",
+                               "training_rng": "selection_blind_paired_v2"}
+    return design
+
+
+def _design(schema):
+    if schema == STUDY_VERSION:
+        return _frozen_design()
+    if schema == PAIRED_STUDY_VERSION:
+        return _paired_design()
+    raise ValueError("unknown backbone study schema")
+
+
+def _architectures(design):
+    return ("qwen3",) if design["schema_version"] == PAIRED_STUDY_VERSION else ARCHITECTURES
+
+
+def initialization_lineages(design):
+    temporal = "shared" if design["schema_version"] == PAIRED_STUDY_VERSION else "explicit_day_phase"
+    return [(a, f, temporal) for a in _architectures(design) for f in range(5)]
 
 
 def _inputs(design, publication, source):
@@ -54,7 +85,7 @@ def _inputs(design, publication, source):
         "development_game_set_digest": view.development_game_set_digest,
         "primary_identity": primary.metadata, "primary_digest": _digest(population),
         "bootstrap_version": BOOTSTRAP_VERSION,
-        "graphs": [graph_identity(a) for a in ARCHITECTURES],
+        "graphs": [graph_identity(a) for a in _architectures(design)],
     }, population
 
 
@@ -82,21 +113,21 @@ def _state_digests(container):
     }
 
 
-def _initial_binding(model, study_digest, study_seed, fold):
+def _initial_binding(model, study_digest, study_seed, fold, *, paired=False):
     return {"study_digest": study_digest, "graph": model.graph, "fold": fold,
-        "temporal_condition": "explicit_day_phase",
+        "temporal_condition": "shared" if paired else "explicit_day_phase",
         "seeds": initialization_seeds(study_seed, fold, model.graph["architecture"])}
 
 
-def load_initial_state(path, model, *, study_digest, study_seed, fold, expected_digest):
+def load_initial_state(path, model, *, study_digest, study_seed, fold, expected_digest, paired=False):
     """Only the frozen initial artifact type, graph, fold, seed and exact FP32 graph."""
     state = verify_tensor_state(path, expected_artifact_type="backbone_initial_state",
-                                expected_schema_version=INITIAL_VERSION)
+                                expected_schema_version=PAIRED_INITIAL_VERSION if paired else INITIAL_VERSION)
     m = state.artifact.manifest
     if (set(m) != {"artifact_type", "schema_version", "binding", "initialization", "tensor_container",
                    "file_table", "manifest_digest"}
             or state.artifact.manifest_digest != expected_digest
-            or _digest(m["binding"]) != _digest(_initial_binding(model, study_digest, study_seed, fold))
+            or _digest(m["binding"]) != _digest(_initial_binding(model, study_digest, study_seed, fold, paired=paired))
             or _digest(model.graph) != _digest(graph_identity(model.graph["architecture"]))
             or m["initialization"] != _state_digests(m["tensor_container"])
             or set(m["file_table"]) != {"tensors.bin"}):
@@ -105,10 +136,14 @@ def load_initial_state(path, model, *, study_digest, study_seed, fold, expected_
     return state
 
 
-def prepare_study(config_path, publication_path, destination):
+def prepare_study(config_path, publication_path, destination, *, paired_temporal=False):
     design = json.loads(Path(config_path).read_bytes())
     if canonical_json_bytes(design) != canonical_json_bytes(_frozen_design()):
         raise ValueError("backbone study differs from frozen design")
+    if type(paired_temporal) is not bool:
+        raise ValueError("paired temporal mode must be boolean")
+    if paired_temporal:
+        design = _paired_design()
     source = attest_source()
     publication = open_publication(publication_path)
     inputs, population = _inputs(design, publication, source)
@@ -129,20 +164,20 @@ def prepare_study(config_path, publication_path, destination):
         root = Path(directory).resolve()
         temporal = publish_temporal(root / "temporal", publication.public_view.max_observed_day, study_digest)
         provider = TemporalCodeProvider.explicit(root / "temporal", study_digest)
-        for architecture in ARCHITECTURES:
+        for architecture in _architectures(design):
             for fold in range(5):
                 model = BackboneToM(architecture, provider, study_seed=config.initialization_seed, fold=fold)
                 tensors = model_tensor_values(model)
                 container, _ = encode_tensor_container(tensors, payload_path="tensors.bin")
                 state = publish_tensor_state(root / "initial" / architecture / str(fold), manifest_fields={
-                    "artifact_type": "backbone_initial_state", "schema_version": INITIAL_VERSION,
-                    "binding": _initial_binding(model, study_digest, config.initialization_seed, fold),
+                    "artifact_type": "backbone_initial_state", "schema_version": PAIRED_INITIAL_VERSION if paired_temporal else INITIAL_VERSION,
+                    "binding": _initial_binding(model, study_digest, config.initialization_seed, fold, paired=paired_temporal),
                     "initialization": _state_digests(container)}, tensors=tensors)
                 initializations.append({"architecture": architecture, "fold": fold,
-                    "temporal_condition": "explicit_day_phase", "graph_digest": model.graph["graph_digest"],
+                    "temporal_condition": "shared" if paired_temporal else "explicit_day_phase", "graph_digest": model.graph["graph_digest"],
                     "state_digest": state.artifact.manifest_digest, **_state_digests(container)})
         files.update({p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()})
-        fields = {"artifact_type": "backbone_tom_study", "schema_version": STUDY_VERSION,
+        fields = {"artifact_type": "backbone_tom_study", "schema_version": design["schema_version"],
             "protocol_inputs": inputs, "study_digest": study_digest,
             "publication_path": str(publication.path.resolve()), "runtime": runtime,
             "temporal_artifact_digest": temporal.manifest_digest,
@@ -152,14 +187,21 @@ def prepare_study(config_path, publication_path, destination):
         return publish_artifact(destination, manifest_fields=fields, files=files)
 
 
+def verify_study_artifact(path):
+    schema = json.loads((Path(path) / "manifest.json").read_bytes())["schema_version"]
+    _design(schema)  # Only the frozen historical and paired study contracts.
+    return verify_artifact(path, expected_artifact_type="backbone_tom_study",
+                           expected_schema_version=schema)
+
+
 def open_study(path):
-    artifact = verify_artifact(path, expected_artifact_type="backbone_tom_study",
-                               expected_schema_version=STUDY_VERSION)
+    artifact = verify_study_artifact(path)
     m = artifact.manifest
     if set(m) != {"artifact_type", "schema_version", "protocol_inputs", "study_digest", "publication_path",
                   "runtime", "temporal_artifact_digest", "folds", "initializations", "file_table", "manifest_digest"}:
         raise ValueError("backbone study schema mismatch")
-    design = _frozen_design()
+    design = _design(m["schema_version"])
+    paired_temporal = design["schema_version"] == PAIRED_STUDY_VERSION
     source = attest_source()
     publication = open_publication(m["publication_path"])
     inputs, population = _inputs(design, publication, source)
@@ -185,7 +227,7 @@ def open_study(path):
         "phase_codebook.manifest.json", "phase_codebook.bin",
         "canonical_day_code_table.manifest.json", "canonical_day_code_table.bin")}
     expected_rows, shells = [], {}
-    for architecture in ARCHITECTURES:
+    for architecture in _architectures(design):
         for fold in range(5):
             base = f"initial/{architecture}/{fold}"
             expected_names.update(f"{base}/{name}" for name in ("manifest.json", "tensors.bin"))
@@ -193,9 +235,9 @@ def open_study(path):
             container, _ = encode_tensor_container(model_tensor_values(model), payload_path="tensors.bin")
             digests = _state_digests(container)
             state = verify_tensor_state(artifact.path / base, expected_artifact_type="backbone_initial_state",
-                                        expected_schema_version=INITIAL_VERSION)
+                                        expected_schema_version=PAIRED_INITIAL_VERSION if paired_temporal else INITIAL_VERSION)
             load_initial_state(artifact.path / base, model, study_digest=m["study_digest"],
-                study_seed=config.initialization_seed, fold=fold, expected_digest=state.artifact.manifest_digest)
+                study_seed=config.initialization_seed, fold=fold, expected_digest=state.artifact.manifest_digest, paired=paired_temporal)
             if state.artifact.manifest["initialization"] != digests:
                 raise ValueError("backbone study seeded initialization mismatch")
             shell = digests["shell_initialization_digest"]
@@ -203,7 +245,7 @@ def open_study(path):
                 raise ValueError("backbone study shell pairing mismatch")
             shells[fold] = shell
             expected_rows.append({"architecture": architecture, "fold": fold,
-                "temporal_condition": "explicit_day_phase", "graph_digest": model.graph["graph_digest"],
+                "temporal_condition": "shared" if paired_temporal else "explicit_day_phase", "graph_digest": model.graph["graph_digest"],
                 "state_digest": state.artifact.manifest_digest, **digests})
     if _digest(m["initializations"]) != _digest(expected_rows) or set(m["file_table"]) != expected_names:
         raise ValueError("backbone study lineage/file coverage mismatch")
