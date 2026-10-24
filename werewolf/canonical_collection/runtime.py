@@ -289,6 +289,20 @@ class CanonicalGameRecorder:
         self._pending.handoff = handoff
         return handoff
 
+    def public_pre_for_handoff(self, handoff: SpeakerPREBeliefHandoff) -> AuthoritativePREPrefix:
+        """Read the frozen public PRE before its matching action is submitted.
+
+        No belief payload, mutable pending slot or environment is exposed.
+        """
+        pending = self._pending
+        if (pending is None or pending.raw_action is not None or pending.prefix is None
+                or pending.handoff is not handoff
+                or pending.prefix.boundary_id != handoff.boundary_id
+                or pending.prefix.prefix_digest != handoff.prefix_digest
+                or pending.prefix.current_speaker != handoff.observer_id):
+            raise ValueError("no matching unconsumed canonical PRE/handoff")
+        return pending.prefix
+
     def after_agent_act(self, action) -> None:
         if self._pending is None or self._pending.raw_action is not None:
             raise RuntimeError("runtime action has no unique pending slot")

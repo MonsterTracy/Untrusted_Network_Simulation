@@ -1,0 +1,178 @@
+{
+  "schema_version": "observer_dtrs_d4c2b1_acceptance_v1",
+  "created_utc": "2026-10-17T17:58:29.448234+00:00",
+  "status": "PASS_CONTROLLED_NOT_FORMAL_QUALIFICATION",
+  "branch": "three-way",
+  "head": "7b51f276b04b386ec1aa4ae44454c1d809a10897",
+  "new_files": [
+    "scripts/build_final_tom_capsule.py",
+    "werewolf/observer_dtrs/final_tom_graph.py",
+    "werewolf/observer_dtrs/final_tom_capsule.py",
+    "werewolf/observer_dtrs/final_tom_capsule_build.py",
+    "tests/observer_dtrs/test_final_tom_capsule.py",
+    "docs/research/observer-dtrs-v1-d4c2b1-capsule.md",
+    "docs/research/observer-dtrs-v1-d4c2b1-acceptance.json"
+  ],
+  "file_fingerprints_excluding_this_record": {
+    "scripts/build_final_tom_capsule.py": {
+      "sha256": "de91f0a15e7ffe6e444852758923bbd80bad4df16bf94a5f19d0cb7c50d4635a",
+      "bytes": 1459
+    },
+    "werewolf/observer_dtrs/final_tom_graph.py": {
+      "sha256": "14936c376a7d285af646f9c58422ff274cbb1600e7cb65ad2f8117cdfc88f912",
+      "bytes": 8578
+    },
+    "werewolf/observer_dtrs/final_tom_capsule.py": {
+      "sha256": "851dbce80142b99b477cfab5454131a23aa1ddcceb436c996725fbba34f2b0c5",
+      "bytes": 13600
+    },
+    "werewolf/observer_dtrs/final_tom_capsule_build.py": {
+      "sha256": "3d58ed4631c7547f866a9963977adbd354a0034e8a04c1d5f27b73eccb533076",
+      "bytes": 10481
+    },
+    "tests/observer_dtrs/test_final_tom_capsule.py": {
+      "sha256": "b2d3c93abf5081656c7147048717f05cb9bdb065899a69dfae20f01043e718a8",
+      "bytes": 26955
+    },
+    "docs/research/observer-dtrs-v1-d4c2b1-capsule.md": {
+      "sha256": "4f87f0e0b393c2c61932f56c7889b731cf42b5cc6e0a8eb65021430a05ab332a",
+      "bytes": 12547
+    }
+  },
+  "tests": {
+    "final_command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q -p no:cacheprovider --basetemp=/private/tmp/observer-capsule-final-tests-7b51 tests/observer_dtrs tests/artifact_io tests/tom/test_temporal.py tests/tom/test_state.py tests/tom/test_backbone_model.py tests/canonical_collection/test_pre_prefix.py tests/canonical_collection/test_structured_token_plan.py",
+    "passed": 683,
+    "failed": 0,
+    "skipped": 0,
+    "seconds": 138.99,
+    "new_capsule_tests_in_final_suite": 49,
+    "log": "/private/tmp/observer-capsule-7b51-final-regression.log",
+    "log_raw_sha256": "ec64f5974ffb0b549a9b856e9a8806f32fd406662fda7f68f6254e6175a950f9",
+    "earlier_targeted_result": {
+      "passed": 47,
+      "seconds": 10.37,
+      "scope": "EARLIER_CODE_BEFORE_FINAL_SOURCE_ORIGIN_AND_ACTION_TESTS",
+      "log": "/private/tmp/observer-capsule-7b51-targeted.log"
+    },
+    "earlier_broad_result": {
+      "passed": 681,
+      "seconds": 147.35,
+      "scope": "INTERMEDIATE_NOT_FINAL_FIXED_SNAPSHOT",
+      "log": "/private/tmp/observer-capsule-7b51-regression.log"
+    },
+    "initial_fixture_test_correction": "Used existing game_bundle._prefix_from_record instead of nonexistent AuthoritativePREPrefix.from_record; no production PRE semantics changed"
+  },
+  "controlled_capsule": {
+    "scope": "CONTROLLED_FIXTURE",
+    "path": "/private/tmp/observer-capsule-final-tests-7b51/artificial-final-capsule0/capsule",
+    "manifest_digest": "58981659de1a480b51f833fd1655c8fd50ebfc6be0d4060e06999848b4ee38d1",
+    "inference_digest": "2161f688a7c0f7cde31db8d15dcf6fdc83bf6a5469eddac6fe7720ec2c5b362f",
+    "model_bin_raw_sha256": "f22663b67f25b6925b101806bffab9f4c67d86925cc053e6c336fc9fbc2f4a87",
+    "model_container_descriptor_sha256": "ec362f10ca3204d08d1566e2c881cbbd0711dc3b514fb512cbb995327384199d",
+    "payload_files": [
+      "inference.json",
+      "model.bin",
+      "temporal/canonical_day_code_table.bin",
+      "temporal/canonical_day_code_table.manifest.json",
+      "temporal/phase_codebook.bin",
+      "temporal/phase_codebook.manifest.json"
+    ],
+    "model_bytes": 13723676,
+    "model_parameter_count": 3430919,
+    "parameter_tensors": 61,
+    "loader_source": {
+      "file_sha256": {
+        "werewolf/__init__.py": "f988acb7052f7fc750de928e207ebf89a7685bdbc1bb5280c5f6df946ead374a",
+        "werewolf/artifact_io/__init__.py": "fa955273153456c0937dac9c2a356a6c0d04bdb371a11a409fe42806c738dc9f",
+        "werewolf/artifact_io/canonical.py": "5063a6f47906fa7beb3183abc8d85faaa277d42173402e472d05d879b9a0f3f6",
+        "werewolf/artifact_io/tensor_state.py": "87bfea1de56e859b269424daa121565c00455c7807713aca6a6a4f9adf3e2958",
+        "werewolf/canonical_collection/__init__.py": "6a0e7c42ed3d58c8474818f5d680dccefe765929ab759ebd1e7eb14e0dbda76b",
+        "werewolf/canonical_collection/attempt_ledger.py": "f24516384bfb389b23fd846b82986380807e64a526cd32b30941097ecced4bf7",
+        "werewolf/canonical_collection/collector.py": "e28df6de7992f6c4076c4cf293acf012b84352dca59ff42ea4c150a57cb13f50",
+        "werewolf/canonical_collection/failure_evidence.py": "727be52ee015f883cff7ed5f24531474938bb697981fd1c2412cc7f9e3311326",
+        "werewolf/canonical_collection/frozen_json.py": "c6a484183beb2e0af3337e0714c5ec6181ffdc30437d299632bb2416fa916368",
+        "werewolf/canonical_collection/game_bundle.py": "d4ac8c26cf14612a0b2d97357e86c77efed7142f28f2849b293924fe243dbe57",
+        "werewolf/canonical_collection/pre.py": "36c9e0330a6507acea9149af15eb09627720e63ac863af6d19dee48338446812",
+        "werewolf/canonical_collection/public_history.py": "77dafb7133cc30b63f44d662b6e592902e49ac139f2e6906a8872c6afe6df617",
+        "werewolf/canonical_collection/speech.py": "f8672f86dae4c996ed38177aa92b5218552fffb1c289c468b4f7b629ee7d86e0",
+        "werewolf/canonical_collection/trajectory_evidence.py": "074051ff291ffec714cd88df260f20d8ca2e90fbc113553c5dac09fb1e4b155c",
+        "werewolf/observer_dtrs/__init__.py": "94e8e35c3781c5064eaea8628894be897b111eb0ea00b9f6bb1db3796f7bb79e",
+        "werewolf/observer_dtrs/final_tom_capsule.py": "851dbce80142b99b477cfab5454131a23aa1ddcceb436c996725fbba34f2b0c5",
+        "werewolf/observer_dtrs/final_tom_graph.py": "14936c376a7d285af646f9c58422ff274cbb1600e7cb65ad2f8117cdfc88f912",
+        "werewolf/structured_history.py": "6c102b1834eac70d649f6bc55a5749c724ad433b98153afd4e777d677cba5777",
+        "werewolf/tom/__init__.py": "3da10810876588d1f5bfbb1ff189fa2878823c00b668e2656c5ea077db51e611",
+        "werewolf/tom/final_capacity.py": "8b050157c4d531c5ab5c96b9b43869f035817be93a5d82543f5d6510c7282e99",
+        "werewolf/tom/state.py": "2d06789d33dd4d1bbcb2555bfa3b56115dbff03dcaac69bbc302d66ee6733893",
+        "werewolf/tom/temporal.py": "5b30d7f96df945b20ae29fe4961ebbfb0a7ee73809528f9fbe02b438c25c346d"
+      },
+      "implementation_digest": "7bf4d1b00c06ef420a4440b4a510ccf8bd522c9066fac8c4a9f29528492d8478"
+    },
+    "full_original_semantic_recovery": "NOT_RUN",
+    "note": "Artificial full-graph last model; preceding recovery nodes have tiny synthetic codec payloads, not a trained trajectory"
+  },
+  "numerical_equivalence": {
+    "status": "PASS_ARTIFICIAL_CPU_ONLY",
+    "cases": [
+      "discussion/all_alive",
+      "discussion/dead_targets",
+      "PK/all_alive",
+      "PK/dead_targets",
+      "public_speech_actions_votes_exile_day2"
+    ],
+    "assertions": [
+      "all restored parameter tensors torch.equal",
+      "original temporal arrays np.array_equal",
+      "original public tensors and plan exactly equal",
+      "discussion/PK paired cases: exact log-Q and Q equality; speech/action case: exact Q equality",
+      "dead target mass retained; seven absolute columns; self zero",
+      "caller Python/NumPy/Torch RNG unchanged by loader and predict"
+    ],
+    "capacity_checks": {
+      "genuine_1024_token_PRE": "PASS_INFERENCE_CAPACITY_ONLY",
+      "genuine_1028_token_PRE": "REFUSED_BEFORE_FORWARD",
+      "isolated_day_257_guard": "PASS_CONTROLLED_PLAN_TEST"
+    }
+  },
+  "isolation": {
+    "fresh_process_runtime_module_count": 22,
+    "blocked_training_publication_audit_compiler_shadow_phase2_env_agent_imports": "PASS",
+    "restricted_payload_open_guard": "PASS",
+    "loader_original_lifecycle_open_guard": "PASS",
+    "supervision_counterfactual": "PASS",
+    "input_and_output_artifacts_unchanged_by_loading_and_inference": "PASS"
+  },
+  "source_preservation": {
+    "baseline_manifest": "/var/folders/f7/6cw9x28j2fn26jcj94ms6lyw0000gn/T/observer-capsule-ydw0g2q9/before.json",
+    "existing_file_count": 461,
+    "changed_existing_files": [],
+    "head_unchanged": true,
+    "stage_empty": true,
+    "stash_oids_unchanged": true,
+    "stash_oids": [
+      "c75cb291ac6a12b1ad697537d78ee98e0513dbd0"
+    ],
+    "preexisting_tracked_modifications": [
+      "run_random.py",
+      "werewolf/canonical_collection/runtime.py"
+    ],
+    "preexisting_untracked_count": 23
+  },
+  "real_evidence": {
+    "metadata_and_chain_files": "USER_REPORTED_PASS_NOT_REOPENED_THIS_STAGE",
+    "real_weight_reads": "NOT_RUN",
+    "real_capsule_compilation": "NOT_RUN",
+    "real_numeric_equivalence": "NOT_RUN",
+    "full_semantic_recovery": "NOT_RUN",
+    "runtime_service_QUAL": "NOT_RUN"
+  },
+  "formal_authorization": {
+    "protocol": "PROPOSED_NOT_FROZEN_NOT_EXECUTABLE_UNCHANGED",
+    "new_source_commit": "NOT_RUN",
+    "new_formal_source_guard": "NOT_ESTABLISHED",
+    "shadow_final_identity_adapter": "NOT_IMPLEMENTED_EXISTING_FIXTURE_GATES_UNCHANGED",
+    "D2_OOF_to_final_probability_migration": "PROHIBITED",
+    "CAL_TEST": "NOT_AUTHORIZED"
+  },
+  "next_stage": "READY_FOR_CONTROLLED_D4C2B2_SERVICE_AND_BOUNDED_CLIENT_IMPLEMENTATION_ONLY",
+  "acceptance_digest": "34f3ffc84df3b8b3aba06c8741ad9e26a46e508db3984ee3755ef2ae57894b86"
+}
