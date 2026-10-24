@@ -1,0 +1,3058 @@
+{
+  "schema_version": "observer_dtrs_d2_local_complete_archive_v1",
+  "status": "LOCAL_COMPLETE_BYTES_AND_SUMMARY_CONSISTENCY_VERIFIED_NOT_FULL_RUN_REPLAYED",
+  "archive_date_Asia_Shanghai": "2026-10-15",
+  "formal_result": {
+    "local_directory": "/Users/name_yuxiao/Documents/Untrusted_Network_Simulation-results/d2-v1-run1",
+    "complete_manifest_digest": "870e75455572f4ce51dc3a0fc6d6ac050f658363d21ad130ba6616480bc831d1",
+    "record_sha256": "e764a57cef7cfff9bb6f41a340197b785e87da57202fff4d0370e623c88bf435",
+    "record_byte_size": 157416,
+    "bootstrap_indices_sha256": "33e94ab2b2875ff7f47de212062a628de613de37e4b8f3ff0b887eb479f0a3da",
+    "bootstrap_byte_size": 24000000,
+    "bootstrap_shape": [
+      2000,
+      1500
+    ],
+    "artifact_type": "observer_dtrs_validation_complete",
+    "schema_version": "observer_dtrs_nested_validation_v1",
+    "all_complete_payloads_verified": true,
+    "identity_digest": "a2b2c6c0734e2cd0f89d5c08381bc9120ce29de5d0854bf0add36c928483dc74",
+    "contract_digest_reference": "abbd3206f85ff12303639f18a501531257570baaa8d2c3aabdc6b0046addf754"
+  },
+  "verification": {
+    "canonical_manifest_and_record": true,
+    "identity_digest_and_25_block_references_match": true,
+    "1500_unique_game_order_ids": true,
+    "summary_rows": 22685,
+    "group_counts_and_weighted_scores_conserved": true,
+    "calibration_mass_bias_and_ECE_reconstructed": true,
+    "game_equal_fold_scores_and_reported_point_contrasts_consistent": true,
+    "bootstrap_indices_reproduced_exactly": true,
+    "index_reproduction_scope": "published_game_order_25_contiguous_60_game_positions_not_independent_fold_membership_verification",
+    "local_numpy": "2.5.1",
+    "recorded_numpy": "2.2.6",
+    "full_contract_and_block_lineage_replayed": false,
+    "scores_or_intervals_recomputed_from_outer_predictions": false,
+    "formal_fitting_or_D3_classification_run": false,
+    "server_access": false
+  },
+  "source_anchors": {
+    "expected_source_revision_user_supplied": "3ff578f97b9d4c3620a15a67357ddabd848d10fc",
+    "source_revision_verified_from_run_contract": false,
+    "verified_protocol_payload_digest": "c76940b446ffaa3dc9e873620fe775a3b64db8544d0c5190a49778a2e48a6c20",
+    "dataset_manifest_expected_from_prior_release": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+    "protocol_manifest_expected_from_prior_release": "f6d12824a5b74b45faf00fe3efea3b8f21db9a78ad06c158c8dc1a355f2fc5eb",
+    "split_manifest_expected_from_prior_release": "32e30246cbadec8240f47291422a791b4419482e1386b4d8b570344a2e45acc5",
+    "dataset_split_and_source_snapshot_rechecked_from_run_contract": false
+  },
+  "historical_user_reported_summary": {
+    "reported_coverage": {
+      "games": 1500,
+      "observer_samples": 22685,
+      "complete_outer_blocks": 25
+    },
+    "reported_game_equal": {
+      "OBS-EQ0": {
+        "brier": 0.1330845764,
+        "log_loss": 0.4358008222
+      },
+      "OBS-EQ1": {
+        "brier": 0.0958662878,
+        "log_loss": 0.3137922783
+      },
+      "OBS-LR-r": {
+        "brier": 0.0904103094,
+        "log_loss": null
+      },
+      "OBS-EF": {
+        "brier": 0.0959116306,
+        "log_loss": null
+      }
+    },
+    "reported_primary_comparison": {
+      "contrast": "OBS-EQ1_minus_OBS-EQ0",
+      "weighting": "game_equal",
+      "brier_delta": -0.0372182886,
+      "brier_fixed_prediction_percentile_95_interval": [
+        -0.0410252565,
+        -0.0335408745
+      ]
+    },
+    "derived_from_rounded_reported_points": {
+      "relative_brier_reduction_percent": 27.96589177106176,
+      "EQ1_minus_EQ0_log_loss": -0.1220085439,
+      "LR_minus_EQ1_brier": -0.0054559784,
+      "EF_minus_EQ1_brier": 4.53428e-05
+    }
+  },
+  "verified_complete_record_summary_without_game_ids": {
+    "bootstrap": {
+      "cluster": "whole_game",
+      "draw_call": "rng.integers(0,60,size=60,dtype=int64)_shared_across_models_and_metrics",
+      "draw_order": "replicate_major_then_lexicographic_tom_fold_outer_fold_then_game_id_sorted",
+      "game_order_digest": "4ed3d16167334165901147aefd3b7295c468ceb9fbad0ad4027f0cb1e93d501a",
+      "generator": "numpy_PCG64",
+      "indices_sha256": "33e94ab2b2875ff7f47de212062a628de613de37e4b8f3ff0b887eb479f0a3da",
+      "interval": "percentile_95_linear_quantile",
+      "paired_resampling": true,
+      "record_equal_sensitivity": "same_paired_game_draws; recompute_record_weighted_ratio_with_replicated_game_sizes_not_row_bootstrap",
+      "replicates": 2000,
+      "scope": "approximate_fixed_prediction_case_composition_stability_not_full_training_variance",
+      "seed": 20261014,
+      "strata": [
+        "tom_fold",
+        "downstream_outer_fold"
+      ]
+    },
+    "comparisons": {
+      "game_equal": {
+        "OBS-EF_minus_OBS-EQ0": {
+          "intervals": {
+            "bias": [
+              -0.004737842545192658,
+              0.006398788097108638
+            ],
+            "brier": [
+              -0.04105437236439035,
+              -0.03346601059829228
+            ],
+            "log_loss": [
+              -0.12298607067562287,
+              -0.09736270741661297
+            ]
+          },
+          "point": {
+            "bias": 0.0009964477044796943,
+            "brier": -0.03717294583305586,
+            "log_loss": -0.11029613212355666
+          },
+          "primary": false
+        },
+        "OBS-EQ1_minus_OBS-EQ0": {
+          "intervals": {
+            "bias": [
+              -0.004775120732922794,
+              0.006254969797163854
+            ],
+            "brier": [
+              -0.041025256545079096,
+              -0.03354087448553214
+            ],
+            "log_loss": [
+              -0.13205541499153012,
+              -0.11217492294717235
+            ]
+          },
+          "point": {
+            "bias": 0.000880232286478418,
+            "brier": -0.037218288605558314,
+            "log_loss": -0.1220085439690265
+          },
+          "primary": true
+        },
+        "OBS-LR-r_minus_OBS-EQ0": {
+          "intervals": {
+            "bias": [
+              -0.0052980439077956595,
+              0.0063124641118277895
+            ],
+            "brier": [
+              -0.04631170007702529,
+              -0.039129896326029506
+            ],
+            "log_loss": [
+              -0.14152328947965037,
+              -0.12004064310281619
+            ]
+          },
+          "point": {
+            "bias": 0.000602369786387713,
+            "brier": -0.04267426700723555,
+            "log_loss": -0.13074368651259966
+          },
+          "primary": false
+        }
+      },
+      "record_equal": {
+        "OBS-EF_minus_OBS-EQ0": {
+          "intervals": {
+            "bias": [
+              -0.003993193018186975,
+              0.00605940455507134
+            ],
+            "brier": [
+              -0.03799738261266079,
+              -0.03127351788836677
+            ],
+            "log_loss": [
+              -0.11624864290898228,
+              -0.09022445030362952
+            ]
+          },
+          "point": {
+            "bias": 0.0011593740116566957,
+            "brier": -0.034661120309419424,
+            "log_loss": -0.10314656436378955
+          },
+          "primary": false
+        },
+        "OBS-EQ1_minus_OBS-EQ0": {
+          "intervals": {
+            "bias": [
+              -0.003978614013244774,
+              0.00592761098580081
+            ],
+            "brier": [
+              -0.038006431563688485,
+              -0.031325894382543455
+            ],
+            "log_loss": [
+              -0.12562952832182694,
+              -0.10768651643401832
+            ]
+          },
+          "point": {
+            "bias": 0.0010960210229021424,
+            "brier": -0.03468642397460392,
+            "log_loss": -0.11669571827829833
+          },
+          "primary": true
+        },
+        "OBS-LR-r_minus_OBS-EQ0": {
+          "intervals": {
+            "bias": [
+              -0.004857941793090511,
+              0.005629527417676396
+            ],
+            "brier": [
+              -0.04347007576016016,
+              -0.036904985593414125
+            ],
+            "log_loss": [
+              -0.13586733863987477,
+              -0.11629130107432195
+            ]
+          },
+          "point": {
+            "bias": 0.0004910160805157189,
+            "brier": -0.04012051684508271,
+            "log_loss": -0.12605692638749344
+          },
+          "primary": false
+        }
+      }
+    },
+    "games": 1500,
+    "known_source_limitations": [
+      "historical_training_rng_seed_includes_full_publication_bound_preparation_digest",
+      "architecture_selection_independence_not_established"
+    ],
+    "models": {
+      "game_equal": {
+        "OBS-EF": {
+          "by_tom_fold": {
+            "0": {
+              "bias": 0.0005015438450860395,
+              "brier": 0.08954777453776931,
+              "log_loss": 0.30163186198564373
+            },
+            "1": {
+              "bias": 0.00045125922345167483,
+              "brier": 0.09836774278311568,
+              "log_loss": 0.34062125431932117
+            },
+            "2": {
+              "bias": 0.00013491003815174448,
+              "brier": 0.10217440543912781,
+              "log_loss": 0.3380434471004065
+            },
+            "3": {
+              "bias": 0.0007700545706186029,
+              "brier": 0.08903480170244484,
+              "log_loss": 0.29909948020457955
+            },
+            "4": {
+              "bias": 0.00018790028087312376,
+              "brier": 0.10043342849011425,
+              "log_loss": 0.34812740691062594
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 17,
+              "intervals": null,
+              "mass": 3.4394934700662256,
+              "mean_prediction": 0.17658353005176558,
+              "observed_rate": 0.3294512451402917,
+              "rows": 42
+            },
+            {
+              "bin": 2,
+              "games": 31,
+              "intervals": {
+                "mean_prediction": [
+                  0.22923441696912902,
+                  0.24214793789014483
+                ],
+                "observed_rate": [
+                  0.07885209007437557,
+                  0.2607483641639215
+                ]
+              },
+              "mass": 7.711821420753309,
+              "mean_prediction": 0.23629643042670867,
+              "observed_rate": 0.160897111321384,
+              "rows": 102
+            },
+            {
+              "bin": 3,
+              "games": 65,
+              "intervals": {
+                "mean_prediction": [
+                  0.3510226722325938,
+                  0.3618899931803287
+                ],
+                "observed_rate": [
+                  0.348456548664259,
+                  0.5641733406297043
+                ]
+              },
+              "mass": 16.716119505709287,
+              "mean_prediction": 0.3565316900214541,
+              "observed_rate": 0.45362019342046866,
+              "rows": 220
+            },
+            {
+              "bin": 4,
+              "games": 604,
+              "intervals": {
+                "mean_prediction": [
+                  0.45522835963390645,
+                  0.4582536851945286
+                ],
+                "observed_rate": [
+                  0.43614670670347105,
+                  0.4938580700999756
+                ]
+              },
+              "mass": 194.95696810868012,
+              "mean_prediction": 0.4567488774757827,
+              "observed_rate": 0.46631813477729755,
+              "rows": 2705
+            },
+            {
+              "bin": 5,
+              "games": 216,
+              "intervals": {
+                "mean_prediction": [
+                  0.5159361931314536,
+                  0.5219986048247014
+                ],
+                "observed_rate": [
+                  0.4270625317716293,
+                  0.5254159102934495
+                ]
+              },
+              "mass": 66.87364921370342,
+              "mean_prediction": 0.5188897797444617,
+              "observed_rate": 0.4763837139611965,
+              "rows": 944
+            },
+            {
+              "bin": 6,
+              "games": 125,
+              "intervals": {
+                "mean_prediction": [
+                  0.6694728713138687,
+                  0.6759018848734064
+                ],
+                "observed_rate": [
+                  0.6326136220469408,
+                  0.7808352591744061
+                ]
+              },
+              "mass": 21.729241497909218,
+              "mean_prediction": 0.6725058543045125,
+              "observed_rate": 0.7113565487482678,
+              "rows": 290
+            },
+            {
+              "bin": 7,
+              "games": 205,
+              "intervals": {
+                "mean_prediction": [
+                  0.7462558418973619,
+                  0.7542767577671865
+                ],
+                "observed_rate": [
+                  0.695262459859298,
+                  0.8045643815299278
+                ]
+              },
+              "mass": 29.812235551872792,
+              "mean_prediction": 0.7503413576974068,
+              "observed_rate": 0.7489333189165676,
+              "rows": 490
+            },
+            {
+              "bin": 8,
+              "games": 856,
+              "intervals": {
+                "mean_prediction": [
+                  0.8629851355845714,
+                  0.8664284189965833
+                ],
+                "observed_rate": [
+                  0.853535525158497,
+                  0.8887668757304422
+                ]
+              },
+              "mass": 210.32912756970785,
+              "mean_prediction": 0.8647395195290144,
+              "observed_rate": 0.8716881021618481,
+              "rows": 3195
+            },
+            {
+              "bin": 9,
+              "games": 1448,
+              "intervals": {
+                "mean_prediction": [
+                  0.9596093354387996,
+                  0.9612125762290344
+                ],
+                "observed_rate": [
+                  0.9514271567243183,
+                  0.9616803048626761
+                ]
+              },
+              "mass": 948.4313436615988,
+              "mean_prediction": 0.9604118045011165,
+              "observed_rate": 0.9567555238659712,
+              "rows": 14697
+            }
+          ],
+          "clipped_rows": 1002,
+          "ece_descriptive": 0.008835812750000678,
+          "groups": {
+            "discussion/1": {
+              "bias": -0.0009973572819636598,
+              "brier": 0.1257658639228456,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.01879511097523081,
+                  0.01788286161837019
+                ],
+                "brier": [
+                  0.11606795278122155,
+                  0.1360777937484098
+                ],
+                "log_loss": [
+                  0.3726515566231687,
+                  0.43588193299524397
+                ]
+              },
+              "log_loss": 0.402839511622979,
+              "mass": 257.24119837701124,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": 0.000405271009576857,
+              "brier": 0.09198956276938368,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.00677018244035466,
+                  0.007771765105901054
+                ],
+                "brier": [
+                  0.08707953795925559,
+                  0.09704124303450408
+                ],
+                "log_loss": [
+                  0.28803595524412773,
+                  0.31797759339212045
+                ]
+              },
+              "log_loss": 0.30283803985953645,
+              "mass": 1163.0288620465574,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.037887189212019855,
+              "brier": 0.11996287355963224,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.02995697386740991,
+                  0.04610034179137062
+                ],
+                "brier": [
+                  0.11457336101261503,
+                  0.12521819577780585
+                ],
+                "log_loss": [
+                  0.3756585914541489,
+                  0.41528698872538883
+                ]
+              },
+              "log_loss": 0.39528694276744086,
+              "mass": 1110.382221714762,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": 0.0004091335916362382,
+              "brier": 0.09591163059051441,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.005778897268172662,
+                  0.0069262743686684634
+                ],
+                "brier": [
+                  0.0916067290461452,
+                  0.10012301591380095
+                ],
+                "log_loss": [
+                  0.3102599185617402,
+                  0.3407760293271626
+                ]
+              },
+              "log_loss": 0.3255046901041151,
+              "mass": 1500.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": 0.009855725818649297,
+              "brier": 0.0822784359473018,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.028498588698558255,
+                  0.053626603965638
+                ],
+                "brier": [
+                  0.051686112268146095,
+                  0.11840159202976154
+                ],
+                "log_loss": [
+                  0.24594613720418354,
+                  0.7732953818627517
+                ]
+              },
+              "log_loss": 0.47857297142383226,
+              "mass": 22.896031300253256,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": 0.003048582918416108,
+              "brier": 0.0465376790535647,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.013803694757289717,
+                  0.021313526122706143
+                ],
+                "brier": [
+                  0.031604908922906516,
+                  0.062125585598398425
+                ],
+                "log_loss": [
+                  0.20533785980694325,
+                  0.5726609936204665
+                ]
+              },
+              "log_loss": 0.37764979513543806,
+              "mass": 56.83390827618116,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.10640058861473782,
+              "brier": 0.027367344134727377,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.1127474928626327,
+                  -0.10032920407377759
+                ],
+                "brier": [
+                  0.024046029061010072,
+                  0.03084497754702809
+                ],
+                "log_loss": [
+                  0.11805066339766476,
+                  0.13579929339380767
+                ]
+              },
+              "log_loss": 0.1266303648882932,
+              "mass": 389.6177782852391,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 15
+        },
+        "OBS-EQ0": {
+          "by_tom_fold": {
+            "0": {
+              "bias": -0.00016726550248526316,
+              "brier": 0.1274081000497741,
+              "log_loss": 0.4216487512125539
+            },
+            "1": {
+              "bias": -0.0009964145061400762,
+              "brier": 0.13745618845413762,
+              "log_loss": 0.44753553876670726
+            },
+            "2": {
+              "bias": -0.0006221034916061226,
+              "brier": 0.1391526730109788,
+              "log_loss": 0.451083727123327
+            },
+            "3": {
+              "bias": -0.0004210898400889655,
+              "brier": 0.13165153295784238,
+              "log_loss": 0.43169862208412924
+            },
+            "4": {
+              "bias": -0.0007296972238968608,
+              "brier": 0.12975438764511885,
+              "log_loss": 0.42703747195164377
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 2,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 3,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 4,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 5,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 6,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 7,
+              "games": 652,
+              "intervals": {
+                "mean_prediction": [
+                  0.7630663404810489,
+                  0.7661352804641737
+                ],
+                "observed_rate": [
+                  0.7405150788095368,
+                  0.7970158571867725
+                ]
+              },
+              "mass": 188.42895590358128,
+              "mean_prediction": 0.7646390457294946,
+              "observed_rate": 0.7700482983771971,
+              "rows": 2751
+            },
+            {
+              "bin": 8,
+              "games": 1468,
+              "intervals": {
+                "mean_prediction": [
+                  0.8460497894648115,
+                  0.8465293519331909
+                ],
+                "observed_rate": [
+                  0.8373558940158067,
+                  0.8557178048380714
+                ]
+              },
+              "mass": 1245.0721143530236,
+              "mean_prediction": 0.84628771850728,
+              "observed_rate": 0.8465291268597928,
+              "rows": 18634
+            },
+            {
+              "bin": 9,
+              "games": 277,
+              "intervals": {
+                "mean_prediction": [
+                  0.9391160944852591,
+                  0.9441590944991268
+                ],
+                "observed_rate": [
+                  0.9149906359237072,
+                  0.9543749507018227
+                ]
+              },
+              "mass": 66.49892974339942,
+              "mean_prediction": 0.9416513097180844,
+              "observed_rate": 0.9350518130203155,
+              "rows": 1300
+            }
+          ],
+          "clipped_rows": 0,
+          "ece_descriptive": 0.0011724600691717436,
+          "groups": {
+            "discussion/1": {
+              "bias": 0.0002914247134954988,
+              "brier": 0.1735298388240692,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.022163272228547613,
+                  0.02491199345283582
+                ],
+                "brier": [
+                  0.16132468787994816,
+                  0.18708369085369683
+                ],
+                "log_loss": [
+                  0.5041821373986631,
+                  0.5621343350380414
+                ]
+              },
+              "log_loss": 0.5313895050887704,
+              "mass": 257.24119837701124,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": 3.615859762488268e-06,
+              "brier": 0.12918069470317461,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.0094647887063604,
+                  0.009597156782011021
+                ],
+                "brier": [
+                  0.12250811332354887,
+                  0.13594153183271174
+                ],
+                "log_loss": [
+                  0.41073211686465066,
+                  0.4439938139298043
+                ]
+              },
+              "log_loss": 0.4273285379576912,
+              "mass": 1163.0288620465574,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.05309728037046348,
+              "brier": 0.17139276791279107,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.04289703274758981,
+                  0.06374672130220468
+                ],
+                "brier": [
+                  0.16451368908952357,
+                  0.17858751589665353
+                ],
+                "log_loss": [
+                  0.5131385866229101,
+                  0.5479331976600246
+                ]
+              },
+              "log_loss": 0.5301271576762693,
+              "mass": 1110.382221714762,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": -0.0005873141128434562,
+              "brier": 0.13308457642357027,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.008924964331378014,
+                  0.00791874150227133
+                ],
+                "brier": [
+                  0.12745015693541134,
+                  0.13870643579514425
+                ],
+                "log_loss": [
+                  0.4216572144940939,
+                  0.4496899509260268
+                ]
+              },
+              "log_loss": 0.43580082222767175,
+              "mass": 1500.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": -0.01867921719313178,
+              "brier": 0.08627752978168224,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.059620499378223085,
+                  0.027527368339943806
+                ],
+                "brier": [
+                  0.05425884667760159,
+                  0.12397272050545581
+                ],
+                "log_loss": [
+                  0.23953033087222603,
+                  0.46414421841243353
+                ]
+              },
+              "log_loss": 0.3416873768251746,
+              "mass": 22.896031300253256,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": -0.009368756006725517,
+              "brier": 0.04876580979100855,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.027249021616808707,
+                  0.009377525166645206
+                ],
+                "brier": [
+                  0.03276021294645039,
+                  0.06579208203044584
+                ],
+                "log_loss": [
+                  0.15562690158666243,
+                  0.2776423402395232
+                ]
+              },
+              "log_loss": 0.21443628498396564,
+              "mass": 56.83390827618116,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.15358448882233416,
+              "brier": 0.02390902760009143,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.15457420073720254,
+                  -0.1526805893383403
+                ],
+                "brier": [
+                  0.023578272959592313,
+                  0.024270239069830522
+                ],
+                "log_loss": [
+                  0.16587206065185686,
+                  0.1681951052746018
+                ]
+              },
+              "log_loss": 0.16697765306276852,
+              "mass": 389.6177782852391,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 0
+        },
+        "OBS-EQ1": {
+          "by_tom_fold": {
+            "0": {
+              "bias": 0.00041997347096779935,
+              "brier": 0.08938526183166212,
+              "log_loss": 0.29020597684030286
+            },
+            "1": {
+              "bias": 0.0003677945141798501,
+              "brier": 0.0983426117060503,
+              "log_loss": 0.32233715122621887
+            },
+            "2": {
+              "bias": 7.019300258309922e-05,
+              "brier": 0.10213330311791576,
+              "log_loss": 0.32947875510983865
+            },
+            "3": {
+              "bias": 0.0007043694171281874,
+              "brier": 0.08898663322602342,
+              "log_loss": 0.29897525158149896
+            },
+            "4": {
+              "bias": -9.773953668413257e-05,
+              "brier": 0.10048362920840792,
+              "log_loss": 0.32796425653536526
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 7,
+              "intervals": null,
+              "mass": 1.322505925447102,
+              "mean_prediction": 0.17698161522417902,
+              "observed_rate": 0.45970971990278736,
+              "rows": 21
+            },
+            {
+              "bin": 2,
+              "games": 41,
+              "intervals": {
+                "mean_prediction": [
+                  0.23081103949832713,
+                  0.24794454953401576
+                ],
+                "observed_rate": [
+                  0.10487654332995913,
+                  0.2647237200414509
+                ]
+              },
+              "mass": 9.828808965372433,
+              "mean_prediction": 0.239809323063183,
+              "observed_rate": 0.17967450315245995,
+              "rows": 123
+            },
+            {
+              "bin": 3,
+              "games": 65,
+              "intervals": {
+                "mean_prediction": [
+                  0.3614674333121017,
+                  0.3700863052444067
+                ],
+                "observed_rate": [
+                  0.348456548664259,
+                  0.5641733406297043
+                ]
+              },
+              "mass": 16.716119505709287,
+              "mean_prediction": 0.3659829978257862,
+              "observed_rate": 0.45362019342046866,
+              "rows": 220
+            },
+            {
+              "bin": 4,
+              "games": 591,
+              "intervals": {
+                "mean_prediction": [
+                  0.4592458474576485,
+                  0.4622057275983855
+                ],
+                "observed_rate": [
+                  0.43858939777423167,
+                  0.4980398735346265
+                ]
+              },
+              "mass": 191.1504765008727,
+              "mean_prediction": 0.46072245754646685,
+              "observed_rate": 0.4693685205728379,
+              "rows": 2646
+            },
+            {
+              "bin": 5,
+              "games": 234,
+              "intervals": {
+                "mean_prediction": [
+                  0.519657186626795,
+                  0.5256847399409358
+                ],
+                "observed_rate": [
+                  0.41938264331465874,
+                  0.5141701406966989
+                ]
+              },
+              "mass": 70.68014082151083,
+              "mean_prediction": 0.5225039697218918,
+              "observed_rate": 0.467592033104342,
+              "rows": 1003
+            },
+            {
+              "bin": 6,
+              "games": 104,
+              "intervals": {
+                "mean_prediction": [
+                  0.6709107406440669,
+                  0.6782213876780873
+                ],
+                "observed_rate": [
+                  0.6280766952513863,
+                  0.7865322081508305
+                ]
+              },
+              "mass": 19.28365652732424,
+              "mean_prediction": 0.6744204436567705,
+              "observed_rate": 0.712719197263745,
+              "rows": 252
+            },
+            {
+              "bin": 7,
+              "games": 202,
+              "intervals": {
+                "mean_prediction": [
+                  0.7433637322210032,
+                  0.7520617474408524
+                ],
+                "observed_rate": [
+                  0.6739086337864589,
+                  0.7833357282438069
+                ]
+              },
+              "mass": 29.697909984229142,
+              "mean_prediction": 0.7476351232017895,
+              "observed_rate": 0.7296260034041954,
+              "rows": 479
+            },
+            {
+              "bin": 8,
+              "games": 893,
+              "intervals": {
+                "mean_prediction": [
+                  0.8627980298820949,
+                  0.8660915700941985
+                ],
+                "observed_rate": [
+                  0.8577878084791085,
+                  0.8913977824574584
+                ]
+              },
+              "mass": 217.76345107737228,
+              "mean_prediction": 0.8644729793777478,
+              "observed_rate": 0.8750671963432194,
+              "rows": 3321
+            },
+            {
+              "bin": 9,
+              "games": 1447,
+              "intervals": {
+                "mean_prediction": [
+                  0.9578639293711159,
+                  0.9594412611288754
+                ],
+                "observed_rate": [
+                  0.9512165106797148,
+                  0.961481365369039
+                ]
+              },
+              "mass": 943.5569306921626,
+              "mean_prediction": 0.95865177922164,
+              "observed_rate": 0.956564525489097,
+              "rows": 14620
+            }
+          ],
+          "clipped_rows": 0,
+          "ece_descriptive": 0.009009099178469508,
+          "groups": {
+            "discussion/1": {
+              "bias": -0.001044649930103232,
+              "brier": 0.1256060937920221,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.018811797595149338,
+                  0.017827058533110583
+                ],
+                "brier": [
+                  0.11609316947334765,
+                  0.13581240286506954
+                ],
+                "log_loss": [
+                  0.36801468333127146,
+                  0.423841317935289
+                ]
+              },
+              "log_loss": 0.39483470908675194,
+              "mass": 257.24119837701124,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": 0.00040736849912446346,
+              "brier": 0.0919945464788186,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.0067655510060675795,
+                  0.007740141246334308
+                ],
+                "brier": [
+                  0.08708850793582744,
+                  0.09706274641221294
+                ],
+                "log_loss": [
+                  0.28780332463272207,
+                  0.3166266839645502
+                ]
+              },
+              "log_loss": 0.3020099861537578,
+              "mass": 1163.0288620465574,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.03785023433761738,
+              "brier": 0.11999333828280045,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.029940824288300246,
+                  0.046067884944992456
+                ],
+                "brier": [
+                  0.11460876556983542,
+                  0.12526278480670355
+                ],
+                "log_loss": [
+                  0.363500754378021,
+                  0.3958842811039922
+                ]
+              },
+              "log_loss": 0.3794539986499376,
+              "mass": 1110.382221714762,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": 0.00029291817363496185,
+              "brier": 0.09586628781801196,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.005916091162393405,
+                  0.006792236125034747
+                ],
+                "brier": [
+                  0.09158138681218746,
+                  0.10007437637033816
+                ],
+                "log_loss": [
+                  0.30105626199706864,
+                  0.3263848926971127
+                ]
+              },
+              "log_loss": 0.31379227825864525,
+              "mass": 1500.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": 0.00458673808098303,
+              "brier": 0.08174085136377043,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.033223540536873375,
+                  0.04836418734994061
+                ],
+                "brier": [
+                  0.050658491812536906,
+                  0.11801125749040987
+                ],
+                "log_loss": [
+                  0.20715429099425986,
+                  0.41736772706323616
+                ]
+              },
+              "log_loss": 0.306280530901699,
+              "mass": 22.896031300253256,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": 0.0022751354541680636,
+              "brier": 0.046178697172561574,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.01432664071777207,
+                  0.020414748571773028
+                ],
+                "brier": [
+                  0.03106095004367812,
+                  0.06190553773338324
+                ],
+                "log_loss": [
+                  0.1337071273892572,
+                  0.2512807774997362
+                ]
+              },
+              "log_loss": 0.19111345402441637,
+              "mass": 56.83390827618116,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.10674269079510114,
+              "brier": 0.02710595553434737,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.1130166685873688,
+                  -0.10074608582785308
+                ],
+                "brier": [
+                  0.02385726385591407,
+                  0.03051401935302439
+                ],
+                "log_loss": [
+                  0.11818861782891649,
+                  0.13565024206607798
+                ]
+              },
+              "log_loss": 0.12666116917378054,
+              "mass": 389.6177782852391,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 0
+        },
+        "OBS-LR-r": {
+          "by_tom_fold": {
+            "0": {
+              "bias": -0.00023685368145216892,
+              "brier": 0.08593117336416692,
+              "log_loss": 0.28418660845958443
+            },
+            "1": {
+              "bias": -0.0003999474806043651,
+              "brier": 0.09059686126690226,
+              "log_loss": 0.3100649608264091
+            },
+            "2": {
+              "bias": 3.437763103019431e-05,
+              "brier": 0.09857669646266283,
+              "log_loss": 0.3225918764457252
+            },
+            "3": {
+              "bias": 0.00028093137975535975,
+              "brier": 0.08191099906543316,
+              "log_loss": 0.291949515458356
+            },
+            "4": {
+              "bias": 0.0003967705189922588,
+              "brier": 0.09503581692250845,
+              "log_loss": 0.3164927173852855
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 23,
+              "intervals": {
+                "mean_prediction": [
+                  0.1742241634804609,
+                  0.18677390462281057
+                ],
+                "observed_rate": [
+                  0.0347941407589082,
+                  0.25499251489487995
+                ]
+              },
+              "mass": 3.82233709273183,
+              "mean_prediction": 0.1802919702841006,
+              "observed_rate": 0.1229335540820759,
+              "rows": 55
+            },
+            {
+              "bin": 2,
+              "games": 155,
+              "intervals": {
+                "mean_prediction": [
+                  0.25229159823710534,
+                  0.2596866738091931
+                ],
+                "observed_rate": [
+                  0.13314372573581928,
+                  0.2362263162202112
+                ]
+              },
+              "mass": 29.43079683067265,
+              "mean_prediction": 0.25599728934373006,
+              "observed_rate": 0.18268089584716818,
+              "rows": 399
+            },
+            {
+              "bin": 3,
+              "games": 294,
+              "intervals": {
+                "mean_prediction": [
+                  0.3499610878240306,
+                  0.35582388217000116
+                ],
+                "observed_rate": [
+                  0.23219717056178502,
+                  0.31816781249172243
+                ]
+              },
+              "mass": 46.485318815532885,
+              "mean_prediction": 0.35293218452723985,
+              "observed_rate": 0.2748744753182879,
+              "rows": 641
+            },
+            {
+              "bin": 4,
+              "games": 387,
+              "intervals": {
+                "mean_prediction": [
+                  0.4495349131459595,
+                  0.45457403601046736
+                ],
+                "observed_rate": [
+                  0.3606907219902837,
+                  0.45007561104685767
+                ]
+              },
+              "mass": 56.25264598090923,
+              "mean_prediction": 0.45205961457161015,
+              "observed_rate": 0.40690349482585303,
+              "rows": 771
+            },
+            {
+              "bin": 5,
+              "games": 490,
+              "intervals": {
+                "mean_prediction": [
+                  0.549074021287846,
+                  0.5531311805078375
+                ],
+                "observed_rate": [
+                  0.47984212694649914,
+                  0.558890824522427
+                ]
+              },
+              "mass": 69.19495289028453,
+              "mean_prediction": 0.5512071151665516,
+              "observed_rate": 0.5189566490057798,
+              "rows": 980
+            },
+            {
+              "bin": 6,
+              "games": 554,
+              "intervals": {
+                "mean_prediction": [
+                  0.6501738798346592,
+                  0.6547274231553531
+                ],
+                "observed_rate": [
+                  0.6038377852808455,
+                  0.678886360985981
+                ]
+              },
+              "mass": 81.25452979477424,
+              "mean_prediction": 0.6525015186658748,
+              "observed_rate": 0.6417815800439567,
+              "rows": 1090
+            },
+            {
+              "bin": 7,
+              "games": 685,
+              "intervals": {
+                "mean_prediction": [
+                  0.7525559468321364,
+                  0.7558479169325137
+                ],
+                "observed_rate": [
+                  0.6858853035563014,
+                  0.7452576342650239
+                ]
+              },
+              "mass": 99.9485117182615,
+              "mean_prediction": 0.7541968082137189,
+              "observed_rate": 0.7174931580606669,
+              "rows": 1495
+            },
+            {
+              "bin": 8,
+              "games": 1159,
+              "intervals": {
+                "mean_prediction": [
+                  0.8647563857429802,
+                  0.8670643090841645
+                ],
+                "observed_rate": [
+                  0.913690833463864,
+                  0.9332766798486042
+                ]
+              },
+              "mass": 337.07376438976587,
+              "mean_prediction": 0.8659216362152246,
+              "observed_rate": 0.9238297228656481,
+              "rows": 5072
+            },
+            {
+              "bin": 9,
+              "games": 1396,
+              "intervals": {
+                "mean_prediction": [
+                  0.9683898051847899,
+                  0.9704835180845416
+                ],
+                "observed_rate": [
+                  0.9587566449078885,
+                  0.9688863915217687
+                ]
+              },
+              "mass": 776.5371424870685,
+              "mean_prediction": 0.9694486841637139,
+              "observed_rate": 0.9640077336037888,
+              "rows": 12182
+            }
+          ],
+          "clipped_rows": 0,
+          "ece_descriptive": 0.02604078468136618,
+          "groups": {
+            "discussion/1": {
+              "bias": 0.002111044548496986,
+              "brier": 0.12031897673251264,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.015585690688148536,
+                  0.020785771565946423
+                ],
+                "brier": [
+                  0.11178830221073256,
+                  0.12928194411113247
+                ],
+                "log_loss": [
+                  0.35568102801878543,
+                  0.4091865967133962
+                ]
+              },
+              "log_loss": 0.38140327912670874,
+              "mass": 257.24119837701124,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": -0.00015410355617984445,
+              "brier": 0.0866394566778943,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.007271305295719483,
+                  0.007224172973468859
+                ],
+                "brier": [
+                  0.0817932561628352,
+                  0.09177879050151191
+                ],
+                "log_loss": [
+                  0.2818546819854229,
+                  0.3123124841390509
+                ]
+              },
+              "log_loss": 0.2967783642335506,
+              "mass": 1163.0288620465574,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.04466224902431825,
+              "brier": 0.11321627999906327,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.036880473658696865,
+                  0.052916828272302076
+                ],
+                "brier": [
+                  0.10809203887983306,
+                  0.11870265672259038
+                ],
+                "log_loss": [
+                  0.3450069343046301,
+                  0.3786714897733988
+                ]
+              },
+              "log_loss": 0.36142521637880337,
+              "mass": 1110.382221714762,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": 1.5055673544256816e-05,
+              "brier": 0.09041030941633472,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.006132542430403688,
+                  0.006655381049280009
+                ],
+                "brier": [
+                  0.08622782927935514,
+                  0.09483806535878775
+                ],
+                "log_loss": [
+                  0.2920278216179539,
+                  0.31838128864177523
+                ]
+              },
+              "log_loss": 0.3050571357150721,
+              "mass": 1500.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": -0.0032297090575703286,
+              "brier": 0.06124286393499967,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.031229746637138463,
+                  0.027260691160486267
+                ],
+                "brier": [
+                  0.04016261907439381,
+                  0.08418634929003116
+                ],
+                "log_loss": [
+                  0.14990239731690239,
+                  0.29091700898789763
+                ]
+              },
+              "log_loss": 0.2170969805945235,
+              "mass": 22.896031300253256,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": -0.004702997277845949,
+              "brier": 0.043953674841422596,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.02129019338258802,
+                  0.011680657532264816
+                ],
+                "brier": [
+                  0.030642226922037847,
+                  0.05788471094363377
+                ],
+                "log_loss": [
+                  0.11640673658548548,
+                  0.21525386093826102
+                ]
+              },
+              "log_loss": 0.164349149494953,
+              "mass": 56.83390827618116,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.1272261856382596,
+              "brier": 0.02541495834312911,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.1324382418809936,
+                  -0.12259846159182082
+                ],
+                "brier": [
+                  0.022902792998858494,
+                  0.02841517684693948
+                ],
+                "log_loss": [
+                  0.1375595986099604,
+                  0.15203732037689655
+                ]
+              },
+              "log_loss": 0.14441222131548154,
+              "mass": 389.6177782852391,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 0
+        }
+      },
+      "record_equal": {
+        "OBS-EF": {
+          "by_tom_fold": {
+            "0": {
+              "bias": 0.00036581477664541194,
+              "brier": 0.08851051185043324,
+              "log_loss": 0.30414182372784565
+            },
+            "1": {
+              "bias": -0.0002174550255453796,
+              "brier": 0.09604235351364088,
+              "log_loss": 0.34259185010971976
+            },
+            "2": {
+              "bias": 0.0009315577194700947,
+              "brier": 0.09454539183324304,
+              "log_loss": 0.311746996529293
+            },
+            "3": {
+              "bias": 0.001309808446459072,
+              "brier": 0.08556207989624175,
+              "log_loss": 0.28773426808579317
+            },
+            "4": {
+              "bias": 0.00100684470646359,
+              "brier": 0.09300339237620943,
+              "log_loss": 0.32864648909182587
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 7,
+              "intervals": null,
+              "mass": 22.0,
+              "mean_prediction": 0.18253968253968259,
+              "observed_rate": 0.45454545454545453,
+              "rows": 22
+            },
+            {
+              "bin": 2,
+              "games": 42,
+              "intervals": {
+                "mean_prediction": [
+                  0.25601669974039065,
+                  0.2698543987750676
+                ],
+                "observed_rate": [
+                  0.12878787878787878,
+                  0.28875092661230534
+                ]
+              },
+              "mass": 131.0,
+              "mean_prediction": 0.2636364287108739,
+              "observed_rate": 0.20610687022900764,
+              "rows": 131
+            },
+            {
+              "bin": 3,
+              "games": 22,
+              "intervals": {
+                "mean_prediction": [
+                  0.3893914361430808,
+                  0.39289947842579426
+                ],
+                "observed_rate": [
+                  0.3792972831765935,
+                  0.7213342440801456
+                ]
+              },
+              "mass": 65.0,
+              "mean_prediction": 0.3910055804792646,
+              "observed_rate": 0.5384615384615384,
+              "rows": 65
+            },
+            {
+              "bin": 4,
+              "games": 605,
+              "intervals": {
+                "mean_prediction": [
+                  0.45933582618204577,
+                  0.4625428658491332
+                ],
+                "observed_rate": [
+                  0.44560175548876435,
+                  0.49928515143379865
+                ]
+              },
+              "mass": 2715.0,
+              "mean_prediction": 0.46093385988686714,
+              "observed_rate": 0.4736648250460405,
+              "rows": 2715
+            },
+            {
+              "bin": 5,
+              "games": 275,
+              "intervals": {
+                "mean_prediction": [
+                  0.5308460006623318,
+                  0.5349893457528553
+                ],
+                "observed_rate": [
+                  0.4423958850838573,
+                  0.5306313040527132
+                ]
+              },
+              "mass": 1301.0,
+              "mean_prediction": 0.5328313733032701,
+              "observed_rate": 0.4873174481168332,
+              "rows": 1301
+            },
+            {
+              "bin": 6,
+              "games": 152,
+              "intervals": {
+                "mean_prediction": [
+                  0.6550484608282836,
+                  0.6615891303440222
+                ],
+                "observed_rate": [
+                  0.6656891495601173,
+                  0.776479727484214
+                ]
+              },
+              "mass": 338.0,
+              "mean_prediction": 0.6583239154190604,
+              "observed_rate": 0.7218934911242604,
+              "rows": 338
+            },
+            {
+              "bin": 7,
+              "games": 222,
+              "intervals": {
+                "mean_prediction": [
+                  0.7393874875725037,
+                  0.7473848073313606
+                ],
+                "observed_rate": [
+                  0.6808005141669402,
+                  0.7843179513184584
+                ]
+              },
+              "mass": 528.0,
+              "mean_prediction": 0.7432534250000384,
+              "observed_rate": 0.7329545454545454,
+              "rows": 528
+            },
+            {
+              "bin": 8,
+              "games": 696,
+              "intervals": {
+                "mean_prediction": [
+                  0.8739208456959341,
+                  0.8764018727108425
+                ],
+                "observed_rate": [
+                  0.8687629427802515,
+                  0.9036253331619429
+                ]
+              },
+              "mass": 2412.0,
+              "mean_prediction": 0.875221314487816,
+              "observed_rate": 0.8864013266998342,
+              "rows": 2412
+            },
+            {
+              "bin": 9,
+              "games": 1456,
+              "intervals": {
+                "mean_prediction": [
+                  0.9599471339110488,
+                  0.9614570895176744
+                ],
+                "observed_rate": [
+                  0.9530580179965513,
+                  0.9623595373051017
+                ]
+              },
+              "mass": 15173.0,
+              "mean_prediction": 0.9607073061048297,
+              "observed_rate": 0.9579516245963224,
+              "rows": 15173
+            }
+          ],
+          "clipped_rows": 1165,
+          "ece_descriptive": 0.009371205354249785,
+          "groups": {
+            "discussion/1": {
+              "bias": 0.0022080292578431867,
+              "brier": 0.12056879889212678,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.01295203894200664,
+                  0.018279519426013444
+                ],
+                "brier": [
+                  0.11233129366556503,
+                  0.12946821222452942
+                ],
+                "log_loss": [
+                  0.3599657871717634,
+                  0.4259987037395961
+                ]
+              },
+              "log_loss": 0.3911296573914364,
+              "mass": 3768.0,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": 0.00021271971986163948,
+              "brier": 0.08886865142321972,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.0064921854423459656,
+                  0.007113382119481464
+                ],
+                "brier": [
+                  0.08425032035636824,
+                  0.09336912331968775
+                ],
+                "log_loss": [
+                  0.28063201049459,
+                  0.3086757815374845
+                ]
+              },
+              "log_loss": 0.29469240403175634,
+              "mass": 17368.0,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.036161924550201854,
+              "brier": 0.11326212039344792,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.028886030639250923,
+                  0.043624858066717294
+                ],
+                "brier": [
+                  0.10836298421298171,
+                  0.11817927402248962
+                ],
+                "log_loss": [
+                  0.3594899403825898,
+                  0.3982585765336854
+                ]
+              },
+              "log_loss": 0.37889086323012744,
+              "mass": 16985.0,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": 0.0006794671392284303,
+              "brier": 0.0915653400798547,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.005264885644171814,
+                  0.0067718216886145195
+                ],
+                "brier": [
+                  0.0876647846225911,
+                  0.09554578773396076
+                ],
+                "log_loss": [
+                  0.29991259512390245,
+                  0.3301779499053921
+                ]
+              },
+              "log_loss": 0.3150819606815671,
+              "mass": 22685.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": 0.0045264691296364274,
+              "brier": 0.07461202976956724,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.02823486581669609,
+                  0.04024048535672042
+                ],
+                "brier": [
+                  0.04777954086064045,
+                  0.10250895050202333
+                ],
+                "log_loss": [
+                  0.236719225353496,
+                  0.7134608930330911
+                ]
+              },
+              "log_loss": 0.4508713870909542,
+              "mass": 405.0,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": 0.0013689875155454823,
+              "brier": 0.042978929642318475,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.013692722503864966,
+                  0.017243571709736116
+                ],
+                "brier": [
+                  0.02981722818266475,
+                  0.05631982002075204
+                ],
+                "log_loss": [
+                  0.17444192173644874,
+                  0.4984542714708907
+                ]
+              },
+              "log_loss": 0.3260814195935564,
+              "mass": 1144.0,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.10505203095294414,
+              "brier": 0.026912741198033024,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.11110937951554432,
+                  -0.0993704535477275
+                ],
+                "brier": [
+                  0.023811512903030668,
+                  0.03021705248989423
+                ],
+                "log_loss": [
+                  0.11694160989491555,
+                  0.13348966082030206
+                ]
+              },
+              "log_loss": 0.12494262563116444,
+              "mass": 5700.0,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 13
+        },
+        "OBS-EQ0": {
+          "by_tom_fold": {
+            "0": {
+              "bias": -7.212454686068026e-05,
+              "brier": 0.12815031640857358,
+              "log_loss": 0.42314195011040534
+            },
+            "1": {
+              "bias": -0.0014141463107823049,
+              "brier": 0.12991592614612987,
+              "log_loss": 0.4289773352997981
+            },
+            "2": {
+              "bias": -0.0004505109803993644,
+              "brier": 0.12899683477130675,
+              "log_loss": 0.42577838357320935
+            },
+            "3": {
+              "bias": -0.0002560839472969706,
+              "brier": 0.1239405491274683,
+              "log_loss": 0.411498702238648
+            },
+            "4": {
+              "bias": -0.00021360398630734134,
+              "brier": 0.12015251781267217,
+              "log_loss": 0.4018037020892979
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 2,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 3,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 4,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 5,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 6,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 7,
+              "games": 498,
+              "intervals": {
+                "mean_prediction": [
+                  0.7707483910618348,
+                  0.7734657791124868
+                ],
+                "observed_rate": [
+                  0.7608057162136752,
+                  0.8153543216635304
+                ]
+              },
+              "mass": 2115.0,
+              "mean_prediction": 0.7721157131476465,
+              "observed_rate": 0.7886524822695036,
+              "rows": 2115
+            },
+            {
+              "bin": 8,
+              "games": 1473,
+              "intervals": {
+                "mean_prediction": [
+                  0.851586946903308,
+                  0.8522033012161291
+                ],
+                "observed_rate": [
+                  0.8425844382018401,
+                  0.8589833748215592
+                ]
+              },
+              "mass": 19207.0,
+              "mean_prediction": 0.8518929585000968,
+              "observed_rate": 0.85093976154527,
+              "rows": 19207
+            },
+            {
+              "bin": 9,
+              "games": 298,
+              "intervals": {
+                "mean_prediction": [
+                  0.9435622616497007,
+                  0.9487789914662802
+                ],
+                "observed_rate": [
+                  0.925111823245493,
+                  0.9581318312790467
+                ]
+              },
+              "mass": 1363.0,
+              "mean_prediction": 0.946280649582042,
+              "observed_rate": 0.942039618488628,
+              "rows": 1363
+            }
+          ],
+          "clipped_rows": 0,
+          "ece_descriptive": 0.002603652016063955,
+          "groups": {
+            "discussion/1": {
+              "bias": 9.111518488382476e-05,
+              "brier": 0.1661666560000289,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.01863442991248926,
+                  0.02019117186804112
+                ],
+                "brier": [
+                  0.15529148067449397,
+                  0.17780028366821762
+                ],
+                "log_loss": [
+                  0.489837757264813,
+                  0.5414930805554159
+                ]
+              },
+              "log_loss": 0.5148267385558128,
+              "mass": 3768.0,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": 3.353047634709183e-05,
+              "brier": 0.12407850866897578,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.008812614704622858,
+                  0.009022767934216273
+                ],
+                "brier": [
+                  0.11781514883248387,
+                  0.13054107993608668
+                ],
+                "log_loss": [
+                  0.3988372801879423,
+                  0.4308239584071377
+                ]
+              },
+              "log_loss": 0.41458611165546433,
+              "mass": 17368.0,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.048169500428747826,
+              "brier": 0.16140879295442456,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.038833481557951625,
+                  0.05769087162262769
+                ],
+                "brier": [
+                  0.1549656566918448,
+                  0.16814410929093446
+                ],
+                "log_loss": [
+                  0.48927924781920995,
+                  0.5228126782660117
+                ]
+              },
+              "log_loss": 0.5057797731180882,
+              "mass": 16985.0,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": -0.00047990687242826537,
+              "brier": 0.12622646038927413,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.008110880984816684,
+                  0.006975721411546148
+                ],
+                "brier": [
+                  0.12105239664405408,
+                  0.13146707357016776
+                ],
+                "log_loss": [
+                  0.4051810714424266,
+                  0.43179137775942644
+                ]
+              },
+              "log_loss": 0.4182285250453566,
+              "mass": 22685.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": -0.014495968635678055,
+              "brier": 0.07543582619430372,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.04852868394723662,
+                  0.02178048745227987
+                ],
+                "brier": [
+                  0.049021630576288805,
+                  0.10489784529745208
+                ],
+                "log_loss": [
+                  0.21606085964487784,
+                  0.39669733980039124
+                ]
+              },
+              "log_loss": 0.3011148607960984,
+              "mass": 405.0,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": -0.005193618385860227,
+              "brier": 0.04526594925795472,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.02100677283156627,
+                  0.011065675065772952
+                ],
+                "brier": [
+                  0.030944022360155546,
+                  0.060332140736331356
+                ],
+                "log_loss": [
+                  0.14592591167855867,
+                  0.2507064808338364
+                ]
+              },
+              "log_loss": 0.19682153314779813,
+              "mass": 1144.0,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.14544660564619555,
+              "brier": 0.021389281684171604,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.14612540384288716,
+                  -0.14481879164812836
+                ],
+                "brier": [
+                  0.02118438111078104,
+                  0.021609158898550387
+                ],
+                "log_loss": [
+                  0.15659647160515916,
+                  0.1581560464486007
+                ]
+              },
+              "log_loss": 0.15734116565670017,
+              "mass": 5700.0,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 0
+        },
+        "OBS-EQ1": {
+          "by_tom_fold": {
+            "0": {
+              "bias": 0.00032667314095519,
+              "brier": 0.08848007014885959,
+              "log_loss": 0.2898494403772027
+            },
+            "1": {
+              "bias": -0.0002820914567683661,
+              "brier": 0.09599955194742477,
+              "log_loss": 0.3175672875778515
+            },
+            "2": {
+              "bias": 0.0008596413618495017,
+              "brier": 0.09453218684564837,
+              "log_loss": 0.30698826318583283
+            },
+            "3": {
+              "bias": 0.0012591093680498439,
+              "brier": 0.08554286125648163,
+              "log_loss": 0.28746371035516877
+            },
+            "4": {
+              "bias": 0.0009172362530682797,
+              "brier": 0.09298231140782127,
+              "log_loss": 0.3054749277764472
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 7,
+              "intervals": null,
+              "mass": 22.0,
+              "mean_prediction": 0.1980371069648334,
+              "observed_rate": 0.45454545454545453,
+              "rows": 22
+            },
+            {
+              "bin": 2,
+              "games": 42,
+              "intervals": {
+                "mean_prediction": [
+                  0.2705995468141002,
+                  0.2841117312256336
+                ],
+                "observed_rate": [
+                  0.12878787878787878,
+                  0.28875092661230534
+                ]
+              },
+              "mass": 131.0,
+              "mean_prediction": 0.27800414759263675,
+              "observed_rate": 0.20610687022900764,
+              "rows": 131
+            },
+            {
+              "bin": 3,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 4,
+              "games": 621,
+              "intervals": {
+                "mean_prediction": [
+                  0.46182549264330974,
+                  0.46502606122410317
+                ],
+                "observed_rate": [
+                  0.4468832539584787,
+                  0.5009120277181982
+                ]
+              },
+              "mass": 2780.0,
+              "mean_prediction": 0.4634212326448071,
+              "observed_rate": 0.47517985611510793,
+              "rows": 2780
+            },
+            {
+              "bin": 5,
+              "games": 275,
+              "intervals": {
+                "mean_prediction": [
+                  0.5335977049362969,
+                  0.5378055324509262
+                ],
+                "observed_rate": [
+                  0.4423958850838573,
+                  0.5306313040527132
+                ]
+              },
+              "mass": 1301.0,
+              "mean_prediction": 0.5356162999515691,
+              "observed_rate": 0.4873174481168332,
+              "rows": 1301
+            },
+            {
+              "bin": 6,
+              "games": 152,
+              "intervals": {
+                "mean_prediction": [
+                  0.6585733346548566,
+                  0.6649596090621295
+                ],
+                "observed_rate": [
+                  0.6656891495601173,
+                  0.776479727484214
+                ]
+              },
+              "mass": 338.0,
+              "mean_prediction": 0.6617776449625501,
+              "observed_rate": 0.7218934911242604,
+              "rows": 338
+            },
+            {
+              "bin": 7,
+              "games": 203,
+              "intervals": {
+                "mean_prediction": [
+                  0.7398733993752495,
+                  0.7487091438953987
+                ],
+                "observed_rate": [
+                  0.670818836143175,
+                  0.7794768335262252
+                ]
+              },
+              "mass": 482.0,
+              "mean_prediction": 0.7442163600896506,
+              "observed_rate": 0.7261410788381742,
+              "rows": 482
+            },
+            {
+              "bin": 8,
+              "games": 705,
+              "intervals": {
+                "mean_prediction": [
+                  0.8726855439048506,
+                  0.8753150847023133
+                ],
+                "observed_rate": [
+                  0.8671949220740104,
+                  0.9018240021560178
+                ]
+              },
+              "mass": 2488.0,
+              "mean_prediction": 0.8740422254792967,
+              "observed_rate": 0.885048231511254,
+              "rows": 2488
+            },
+            {
+              "bin": 9,
+              "games": 1456,
+              "intervals": {
+                "mean_prediction": [
+                  0.9585896584974857,
+                  0.9600526266797702
+                ],
+                "observed_rate": [
+                  0.953113682463991,
+                  0.9625382575868852
+                ]
+              },
+              "mass": 15143.0,
+              "mean_prediction": 0.9593239893200193,
+              "observed_rate": 0.9580664333355345,
+              "rows": 15143
+            }
+          ],
+          "clipped_rows": 0,
+          "ece_descriptive": 0.008201236998557078,
+          "groups": {
+            "discussion/1": {
+              "bias": 0.0021308797759702017,
+              "brier": 0.12055404909940073,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.013157214950241811,
+                  0.01806845048879441
+                ],
+                "brier": [
+                  0.11236908227903677,
+                  0.12943617664601126
+                ],
+                "log_loss": [
+                  0.35504299513925064,
+                  0.404466221346976
+                ]
+              },
+              "log_loss": 0.3789971985747863,
+              "mass": 3768.0,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": 0.0002108726393497932,
+              "brier": 0.0888690394964014,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.006451615129190086,
+                  0.007118430565610771
+                ],
+                "brier": [
+                  0.08423709374867346,
+                  0.093365668250416
+                ],
+                "log_loss": [
+                  0.27979396222933245,
+                  0.307233814022194
+                ]
+              },
+              "log_loss": 0.29347551251771964,
+              "mass": 17368.0,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.03616116412433768,
+              "brier": 0.11329288003694958,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.02891467735355598,
+                  0.04357362386983775
+                ],
+                "brier": [
+                  0.1083584880325986,
+                  0.11822065988130502
+                ],
+                "log_loss": [
+                  0.345718079696083,
+                  0.3759410598396702
+                ]
+              },
+              "log_loss": 0.3607900767444021,
+              "mass": 16985.0,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": 0.0006161141504738771,
+              "brier": 0.0915400364146702,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.005321646630408431,
+                  0.006659080218969501
+                ],
+                "brier": [
+                  0.08763650169297814,
+                  0.09549857457887187
+                ],
+                "log_loss": [
+                  0.28972779316610536,
+                  0.31345384046208036
+                ]
+              },
+              "log_loss": 0.3015328067670583,
+              "mass": 22685.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": 0.0025157336516637646,
+              "brier": 0.07391868625653793,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.030713720801067164,
+                  0.03814518415164664
+                ],
+                "brier": [
+                  0.046892056383221886,
+                  0.10211194138561544
+                ],
+                "log_loss": [
+                  0.1967838139213432,
+                  0.3767014505456524
+                ]
+              },
+              "log_loss": 0.2836064540141001,
+              "mass": 405.0,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": 0.00110671886231923,
+              "brier": 0.04276531744130566,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.01371135081389759,
+                  0.017042180020570175
+                ],
+                "brier": [
+                  0.02952875830007256,
+                  0.056161165329665835
+                ],
+                "log_loss": [
+                  0.12408063058131047,
+                  0.22772158735557307
+                ]
+              },
+              "log_loss": 0.17505853321454914,
+              "mass": 1144.0,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.10530189879796058,
+              "brier": 0.026720378708632312,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.11130123677593086,
+                  -0.09964742764249175
+                ],
+                "brier": [
+                  0.02365293151647116,
+                  0.029988574055096116
+                ],
+                "log_loss": [
+                  0.117044772440923,
+                  0.13340738331074833
+                ]
+              },
+              "log_loss": 0.12495653824685118,
+              "mass": 5700.0,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 0
+        },
+        "OBS-LR-r": {
+          "by_tom_fold": {
+            "0": {
+              "bias": -0.00016681943935453403,
+              "brier": 0.08600863595891678,
+              "log_loss": 0.2845179727483328
+            },
+            "1": {
+              "bias": -0.0005654497629889521,
+              "brier": 0.08786222528855687,
+              "log_loss": 0.3030478673968122
+            },
+            "2": {
+              "bias": 0.00014086333106715462,
+              "brier": 0.09116392464274388,
+              "log_loss": 0.3007691237179807
+            },
+            "3": {
+              "bias": 0.00021266372507605335,
+              "brier": 0.07756422469909847,
+              "log_loss": 0.27724428157745734
+            },
+            "4": {
+              "bias": 0.000426589105581907,
+              "brier": 0.08765400718487132,
+              "log_loss": 0.2948673247875623
+            }
+          },
+          "calibration": [
+            {
+              "bin": 0,
+              "games": 0,
+              "intervals": null,
+              "mass": 0.0,
+              "mean_prediction": null,
+              "observed_rate": null,
+              "rows": 0
+            },
+            {
+              "bin": 1,
+              "games": 19,
+              "intervals": null,
+              "mass": 44.0,
+              "mean_prediction": 0.18402171255931246,
+              "observed_rate": 0.1590909090909091,
+              "rows": 44
+            },
+            {
+              "bin": 2,
+              "games": 149,
+              "intervals": {
+                "mean_prediction": [
+                  0.25562464824606956,
+                  0.2625642756592218
+                ],
+                "observed_rate": [
+                  0.13829519940126164,
+                  0.2556976593609375
+                ]
+              },
+              "mass": 382.0,
+              "mean_prediction": 0.25903317528062625,
+              "observed_rate": 0.19633507853403143,
+              "rows": 382
+            },
+            {
+              "bin": 3,
+              "games": 297,
+              "intervals": {
+                "mean_prediction": [
+                  0.35048399827230337,
+                  0.35547787769234507
+                ],
+                "observed_rate": [
+                  0.22429867141573812,
+                  0.3055141579731744
+                ]
+              },
+              "mass": 651.0,
+              "mean_prediction": 0.3529466435495631,
+              "observed_rate": 0.2642089093701997,
+              "rows": 651
+            },
+            {
+              "bin": 4,
+              "games": 405,
+              "intervals": {
+                "mean_prediction": [
+                  0.4484939342478454,
+                  0.45294198431604105
+                ],
+                "observed_rate": [
+                  0.3716337114803667,
+                  0.4515274599003513
+                ]
+              },
+              "mass": 803.0,
+              "mean_prediction": 0.4506524526601336,
+              "observed_rate": 0.410958904109589,
+              "rows": 803
+            },
+            {
+              "bin": 5,
+              "games": 475,
+              "intervals": {
+                "mean_prediction": [
+                  0.5499948701865562,
+                  0.5539285235026742
+                ],
+                "observed_rate": [
+                  0.46237473881587254,
+                  0.5412778050962634
+                ]
+              },
+              "mass": 944.0,
+              "mean_prediction": 0.5519686636863762,
+              "observed_rate": 0.5021186440677966,
+              "rows": 944
+            },
+            {
+              "bin": 6,
+              "games": 566,
+              "intervals": {
+                "mean_prediction": [
+                  0.6503574128303237,
+                  0.6541902976758651
+                ],
+                "observed_rate": [
+                  0.598669091292431,
+                  0.6660448195071156
+                ]
+              },
+              "mass": 1114.0,
+              "mean_prediction": 0.6523273087607164,
+              "observed_rate": 0.6328545780969479,
+              "rows": 1114
+            },
+            {
+              "bin": 7,
+              "games": 690,
+              "intervals": {
+                "mean_prediction": [
+                  0.7537091930232326,
+                  0.7569755416146434
+                ],
+                "observed_rate": [
+                  0.6915792581982809,
+                  0.749027671069915
+                ]
+              },
+              "mass": 1476.0,
+              "mean_prediction": 0.7553246395416156,
+              "observed_rate": 0.7208672086720868,
+              "rows": 1476
+            },
+            {
+              "bin": 8,
+              "games": 1151,
+              "intervals": {
+                "mean_prediction": [
+                  0.8645621088250175,
+                  0.8668640077413929
+                ],
+                "observed_rate": [
+                  0.9135873435552934,
+                  0.9335809765703311
+                ]
+              },
+              "mass": 4992.0,
+              "mean_prediction": 0.8657421071424068,
+              "observed_rate": 0.9238782051282052,
+              "rows": 4992
+            },
+            {
+              "bin": 9,
+              "games": 1402,
+              "intervals": {
+                "mean_prediction": [
+                  0.9691775590613353,
+                  0.9712118789964662
+                ],
+                "observed_rate": [
+                  0.9608202312577406,
+                  0.9701729408138254
+                ]
+              },
+              "mass": 12279.0,
+              "mean_prediction": 0.9702066448685647,
+              "observed_rate": 0.9656323804870104,
+              "rows": 12279
+            }
+          ],
+          "clipped_rows": 0,
+          "ece_descriptive": 0.025597655484931623,
+          "groups": {
+            "discussion/1": {
+              "bias": 0.0034565867742267515,
+              "brier": 0.11494428121931007,
+              "games": 895,
+              "intervals": {
+                "bias": [
+                  -0.011214393339051009,
+                  0.018532685382397347
+                ],
+                "brier": [
+                  0.10724334432570899,
+                  0.12310240731720179
+                ],
+                "log_loss": [
+                  0.3424732463691513,
+                  0.38971717905746217
+                ]
+              },
+              "log_loss": 0.3652964752607997,
+              "mass": 3768.0,
+              "positive": 2978,
+              "rows": 3768
+            },
+            "discussion/2": {
+              "bias": -0.00020570338375881954,
+              "brier": 0.08347506816294335,
+              "games": 1452,
+              "intervals": {
+                "bias": [
+                  -0.006955972695334191,
+                  0.006663558541939026
+                ],
+                "brier": [
+                  0.07891687851766503,
+                  0.08819833276194455
+                ],
+                "log_loss": [
+                  0.27367327379057377,
+                  0.3017755242184251
+                ]
+              },
+              "log_loss": 0.2873487125979986,
+              "mass": 17368.0,
+              "positive": 14854,
+              "rows": 17368
+            },
+            "nonempty": {
+              "bias": 0.04178002654109152,
+              "brier": 0.1069774218770771,
+              "games": 1491,
+              "intervals": {
+                "bias": [
+                  0.03475337300564883,
+                  0.04917341163791633
+                ],
+                "brier": [
+                  0.10201589370715058,
+                  0.11215770794181304
+                ],
+                "log_loss": [
+                  0.3275450264723277,
+                  0.35871588103803786
+                ]
+              },
+              "log_loss": 0.34305063617398135,
+              "mass": 16985.0,
+              "positive": 13596,
+              "rows": 16985
+            },
+            "overall": {
+              "bias": 1.1109208087453542e-05,
+              "brier": 0.08610594354419142,
+              "games": 1500,
+              "intervals": {
+                "bias": [
+                  -0.005723949574737885,
+                  0.005865212803105511
+                ],
+                "brier": [
+                  0.08224883356588887,
+                  0.09027842183873583
+                ],
+                "log_loss": [
+                  0.28038785076370504,
+                  0.30441807718707126
+                ]
+              },
+              "log_loss": 0.2921715986578632,
+              "mass": 22685.0,
+              "positive": 19296,
+              "rows": 22685
+            },
+            "pk_discussion/1": {
+              "bias": -0.007100527860651186,
+              "brier": 0.05813739119104107,
+              "games": 147,
+              "intervals": {
+                "bias": [
+                  -0.03342115032891161,
+                  0.020606005489191007
+                ],
+                "brier": [
+                  0.038770801135924265,
+                  0.07910375367316119
+                ],
+                "log_loss": [
+                  0.14866628853311642,
+                  0.2767519212280682
+                ]
+              },
+              "log_loss": 0.2094596437638861,
+              "mass": 405.0,
+              "positive": 374,
+              "rows": 405
+            },
+            "pk_discussion/2": {
+              "bias": -0.00552800386987376,
+              "brier": 0.040963855226620695,
+              "games": 226,
+              "intervals": {
+                "bias": [
+                  -0.02039377297402519,
+                  0.009539085041984372
+                ],
+                "brier": [
+                  0.028537706678115955,
+                  0.05403427886347109
+                ],
+                "log_loss": [
+                  0.10940853773123024,
+                  0.20035562914406443
+                ]
+              },
+              "log_loss": 0.15382167888505988,
+              "mass": 1144.0,
+              "positive": 1090,
+              "rows": 1144
+            },
+            "successful_empty": {
+              "bias": -0.1244529365640313,
+              "brier": 0.023912599775057365,
+              "games": 1099,
+              "intervals": {
+                "bias": [
+                  -0.1291581218633803,
+                  -0.12029465306268881
+                ],
+                "brier": [
+                  0.021566237424764427,
+                  0.026785812755748557
+                ],
+                "log_loss": [
+                  0.1344771234797674,
+                  0.14757322789627558
+                ]
+              },
+              "log_loss": 0.1405609930067631,
+              "mass": 5700.0,
+              "positive": 5700,
+              "rows": 5700
+            }
+          },
+          "wrong_endpoint_rows": 0
+        }
+      }
+    },
+    "numpy_version": "2.2.6",
+    "protocol_digest": "c76940b446ffaa3dc9e873620fe775a3b64db8544d0c5190a49778a2e48a6c20",
+    "research_scope": "conditional_downstream_development_validation_not_independent_end_to_end_test",
+    "rows": 22685,
+    "schema_version": "observer_dtrs_fixed_prediction_analysis_v1",
+    "scope": "formal_development_validation"
+  },
+  "remaining_evidence": [
+    "run_contract_and_sources_snapshot",
+    "25_outer_block_models_predictions_and_targets",
+    "referenced_inner_and_outer_artifacts_for_full_verify_result",
+    "paired_LR_minus_EQ1_and_EF_minus_EQ1_intervals_require_per_game_predictions_or_scores"
+  ],
+  "limitations": [
+    "historical_training_rng_seed_includes_full_publication_bound_preparation_digest",
+    "architecture_selection_independence_not_established",
+    "bootstrap_is_fixed_prediction_case_composition_stability_not_full_upstream_training_or_downstream_selection_uncertainty",
+    "D3_uses_of_these_development_results_are_posthoc_not_new_independent_tests",
+    "no_demonstrated_improvement_in_game_actions_or_win_rate"
+  ]
+}

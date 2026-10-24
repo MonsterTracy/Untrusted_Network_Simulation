@@ -1,0 +1,37 @@
+{
+  "arithmetic": "exact_standard_library_Fraction",
+  "brier_risk_counterexample": {
+    "eta": "37/50",
+    "higher_brier_probability": "7/10",
+    "higher_brier_regret": "0",
+    "lower_brier_probability": "19/25",
+    "lower_brier_regret": "1/200"
+  },
+  "cost_protocol_frozen": false,
+  "degenerate_controls": 5,
+  "formal_classification_or_fitting": false,
+  "formal_data_accessed": false,
+  "illustrative_anchor": {
+    "alpha": "3/4",
+    "beta": "1/4",
+    "gamma": "1/2",
+    "p_at_alpha_minimizers": [
+      "BND",
+      "POS"
+    ],
+    "p_at_beta_minimizers": [
+      "BND",
+      "NEG"
+    ]
+  },
+  "interval_scenario_checks": 4200,
+  "limitations": [
+    "finite_controlled_grid_is_not_a_general_proof",
+    "scenario_intervals_are_not_statistical_confidence_intervals",
+    "no_formal_D3_results_or_cost_elicitation"
+  ],
+  "proposed_nondegenerate_scenarios": 45,
+  "regret_bound_checks": 22050,
+  "status": "CONTROLLED_THEORY_CHECKS_PASSED",
+  "threshold_argmin_and_scale_checks": 5136
+}

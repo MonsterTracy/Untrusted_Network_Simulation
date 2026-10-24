@@ -1,0 +1,89 @@
+{
+  "adapter_file_sha256": {
+    "scripts/inspect_observer_dtrs_sealed_d2.py": "da4794c9e164f5e7576d5c95d3d1e4482e018cb713f52c58f29d689b8439029d",
+    "tests/observer_dtrs/test_sealed_d2.py": "2a6d3892728e4f560a727aacc94285edb992de9f60169674da5fb9bea42f07a5",
+    "werewolf/observer_dtrs/sealed_d2_offline.py": "b5bf8f741b7508783557c6a39e312b376d296feb1447174d6d20bf01d0823c61"
+  },
+  "blocks": 25,
+  "complete_digest": "870e75455572f4ce51dc3a0fc6d6ac050f658363d21ad130ba6616480bc831d1",
+  "contract_digest": "abbd3206f85ff12303639f18a501531257570baaa8d2c3aabdc6b0046addf754",
+  "d3_regions_or_risks_computed": false,
+  "dataset_digest": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+  "full_run_replayed": false,
+  "games": 1500,
+  "independent_D1c_labels_verified": false,
+  "inner_selection_replayed": false,
+  "known_source_limitations": [
+    "historical_training_rng_seed_includes_full_publication_bound_preparation_digest",
+    "architecture_selection_independence_not_established"
+  ],
+  "local_run_path": "/Users/name_yuxiao/Documents/Untrusted_Network_Simulation-results/d2-v1-run1-d3c",
+  "loss_protocol_selected_or_frozen": false,
+  "outer_models_verified": false,
+  "prediction_digests": {
+    "game_equal/OBS-EF": "81faa3e54def99827a6e1824b3ddafb679b2b1a6e074c8c96c5f0dd5fa7a2946",
+    "game_equal/OBS-EQ0": "24166b29cba2f265c67a60356a59da6a1f10593feafc536f9a11698a79ff7c1e",
+    "game_equal/OBS-EQ1": "b9b685a78f55b0109973a9ab543ecf755a9ccece0b8a40b3c6a103275bc50db9",
+    "game_equal/OBS-LR-r": "9e117aaa228b13979e0eb60b5153578c8a62d81773ca73faef12f2ec5bee245d",
+    "record_equal/OBS-EF": "7b909dc99f0807124ab18c92cca5e95217838705888165324ebc89631f0a9941",
+    "record_equal/OBS-EQ0": "e13174ba7bbb0cbce990247bb646e315199b2bb6baf2cef3cc5f66ff8ee7fe98",
+    "record_equal/OBS-EQ1": "34f2ed25b9755e08ee287b377cfc1fae7bf3ed72996c71199a640d6b2cdfb7fb",
+    "record_equal/OBS-LR-r": "2947c41cd58c1fab73d5b1b3bb183d4588cb8f2f58293891bd060d5d38575706"
+  },
+  "prediction_rows_by_weighting_model": {
+    "game_equal": {
+      "OBS-EF": 22685,
+      "OBS-EQ0": 22685,
+      "OBS-EQ1": 22685,
+      "OBS-LR-r": 22685
+    },
+    "record_equal": {
+      "OBS-EF": 22685,
+      "OBS-EQ0": 22685,
+      "OBS-EQ1": 22685,
+      "OBS-LR-r": 22685
+    }
+  },
+  "producer_git_blob_verification": {
+    "exact_production_file_inventory_and_blobs": 117,
+    "source_revision": "3ff578f97b9d4c3620a15a67357ddabd848d10fc",
+    "stored_source_executed": false
+  },
+  "protocol_digest": "c76940b446ffaa3dc9e873620fe775a3b64db8544d0c5190a49778a2e48a6c20",
+  "related_regression": {
+    "deselected": 1,
+    "passed": 430,
+    "scope": "Observer-DTRS canonical publication ToM dataset and boundaries; existing small training exclusion retained",
+    "seconds": 65.85
+  },
+  "research_scope": "conditional_downstream_development_validation_not_independent_end_to_end_test",
+  "sample_origins_digest": "2921c10817934c01af063389862c89399b39db3f9bffa133efb2df9dfbd8eadd",
+  "samples": 22685,
+  "schema_version": "observer_dtrs_sealed_d2_adapter_v1",
+  "scope": "formal_development_validation",
+  "sealed_targets_digest": "7015bb175ea2fe8cf8559e360ae89a795936cec2c059697f0a646da12d7e54a5",
+  "server_access": false,
+  "source_revision": "3ff578f97b9d4c3620a15a67357ddabd848d10fc",
+  "source_snapshot_digest": "e56bee9f9ec8e422c367766340ec78a2d87616486d23a6c89e9232f2af83c990",
+  "split_digest": "32e30246cbadec8240f47291422a791b4419482e1386b4d8b570344a2e45acc5",
+  "targeted_tests": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -q tests/observer_dtrs/test_sealed_d2.py -p no:cacheprovider --maxfail=3",
+    "passed": 31,
+    "seconds": 1.42
+  },
+  "verification_level": "sealed_complete_contract_and_25_blocks",
+  "workspace_verification": {
+    "HEAD": "3ff578f97b9d4c3620a15a67357ddabd848d10fc",
+    "commit_push_merge_stash_or_server_operation": false,
+    "formal_guard_expected_rejection": "formal experiment requires committed, unchanged production sources; no automatic commit",
+    "index_empty": true,
+    "new_files": [
+      "docs/research/observer-dtrs-v1-d3c1-acceptance.json",
+      "docs/research/observer-dtrs-v1-d3c1.md",
+      "scripts/inspect_observer_dtrs_sealed_d2.py",
+      "tests/observer_dtrs/test_sealed_d2.py",
+      "werewolf/observer_dtrs/sealed_d2_offline.py"
+    ],
+    "preexisting_files_unchanged": 410
+  }
+}

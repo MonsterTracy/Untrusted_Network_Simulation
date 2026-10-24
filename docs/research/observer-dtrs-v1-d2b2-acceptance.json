@@ -1,0 +1,248 @@
+{
+  "branch": "three-way",
+  "commit_push_merge_or_stash_operation": false,
+  "current_head": "d8397ce56c65d6d46b24a6b53f0b71431c04267b",
+  "dataset_digest": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+  "formal_execution_this_turn": false,
+  "historical_test_acceptance_before_stability_fix": {
+    "acceptance_json_sha256": "712fe330289f248252cc49458659baf26acb061a43ac47653efab24144b0f034",
+    "implementation_file_sha256": {
+      "scripts/run_observer_dtrs_validation.py": "dcac7db5833eb4bb3091ea5606a4a0773f5efe6e5004c81eec3ff627bd411a97",
+      "tests/observer_dtrs/test_nested_validation.py": "4543efa3eeb9a40bd8190778b189adeba6e8e7a2911e5de708fbb44eb289905c",
+      "tests/observer_dtrs/test_secondary_analysis.py": "57148f9aadbba88024698f827444a12d6d8ba8b02d044bc17095f177ae9cdc40",
+      "werewolf/observer_dtrs/baselines.py": "3bef272ae9fb42c09cdf036d14f8d6ad1248999de4b2b83624a1a763a034ac6f",
+      "werewolf/observer_dtrs/nested_validation.py": "628516ca2fabcbcd50e60d65f9e5a3c2cbb9773c030492b4fba7bb61a527eb89",
+      "werewolf/observer_dtrs/statistical_analysis.py": "81a2e7962e771de7f4062da2e586d1e367796806e84dfa73af10e73ff13ef0f6",
+      "werewolf/observer_dtrs/validation_artifacts.py": "ae39cf74272ebb83a1e7c6165f67d8f7b90c49bac9dc33dc2e7b11f06049f1fd",
+      "werewolf/observer_dtrs/validation_data.py": "9f80b9c80241a58bbcb36f505e51ceb20b08b9858cdda032739402a23e1cf6c7"
+    },
+    "regression": {
+      "deselected": 1,
+      "passed": 324,
+      "seconds": 64.51
+    },
+    "scope": "original_D2b2_acceptance_on_precommit_HEAD_preserved_not_a_postfix_test_run"
+  },
+  "implementation_file_sha256": {
+    "scripts/run_observer_dtrs_validation.py": "dcac7db5833eb4bb3091ea5606a4a0773f5efe6e5004c81eec3ff627bd411a97",
+    "tests/observer_dtrs/test_nested_validation.py": "58c7c8fa525a6c380834343d3aa13d209231a21ada518487bddf56de710bbafd",
+    "tests/observer_dtrs/test_secondary_analysis.py": "57148f9aadbba88024698f827444a12d6d8ba8b02d044bc17095f177ae9cdc40",
+    "werewolf/observer_dtrs/baselines.py": "3bef272ae9fb42c09cdf036d14f8d6ad1248999de4b2b83624a1a763a034ac6f",
+    "werewolf/observer_dtrs/nested_validation.py": "628516ca2fabcbcd50e60d65f9e5a3c2cbb9773c030492b4fba7bb61a527eb89",
+    "werewolf/observer_dtrs/statistical_analysis.py": "81a2e7962e771de7f4062da2e586d1e367796806e84dfa73af10e73ff13ef0f6",
+    "werewolf/observer_dtrs/validation_artifacts.py": "ae39cf74272ebb83a1e7c6165f67d8f7b90c49bac9dc33dc2e7b11f06049f1fd",
+    "werewolf/observer_dtrs/validation_data.py": "9f80b9c80241a58bbcb36f505e51ceb20b08b9858cdda032739402a23e1cf6c7"
+  },
+  "local_controlled_acceptance": {
+    "artifact_root": "/private/tmp/observer-dtrs-d2b2-acceptance-zc6nw848",
+    "complete": {
+      "contract_digest": "1159ed6919540510579abe654141a4414659c3c5c7ccb1f253851fc99571ac72",
+      "games": 75,
+      "manifest_digest": "371509f8f3c88e49816c5761284d881d70a8e2258fea07f497583f0d33e82ea0",
+      "rows": 150,
+      "scope": "controlled_fixture",
+      "status": "ALL_BLOCKS_COMPLETE"
+    },
+    "inner_candidate_artifacts": 2400,
+    "local_build_seconds": 4.777871915604919,
+    "local_readonly_audit_seconds": 1.24869095813483,
+    "local_resume_seconds": 1.6706092501990497,
+    "readonly_verified": true,
+    "repeated_execution_same_digest": true,
+    "scope": "controlled_fixture_not_formal_performance"
+  },
+  "precommit_test_stability_fix": {
+    "changed_files": [
+      "tests/observer_dtrs/test_nested_validation.py",
+      "docs/research/observer-dtrs-v1-d2b2-acceptance.json"
+    ],
+    "classification": "test_only_Git_state_fixture_fix",
+    "controlled_heads": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "controlled_states": [
+      "OID_mismatch_rejected_before_source_checks",
+      "untracked_production_rejected",
+      "modified_production_rejected",
+      "matching_committed_clean_production_accepted"
+    ],
+    "data_or_model_semantics_changed": false,
+    "date_Asia_Shanghai": "2026-10-14",
+    "frozen_protocol_changed": false,
+    "historical_controlled_artifacts_preserved": true,
+    "prior_preflight_reproduction": {
+      "actual_precommit_HEAD": "1 passed in 0.95s",
+      "simulated_changed_HEAD": "1 failed in 0.96s; regex mismatch; no Git mutation"
+    },
+    "production_guard_changed": false,
+    "production_guard_sha256": "ae39cf74272ebb83a1e7c6165f67d8f7b90c49bac9dc33dc2e7b11f06049f1fd",
+    "reason": "original_test_pinned_precommit_HEAD_and_assumed_only_uncommitted_source_error",
+    "record_scope": "records_this_precommit_validation_not_future_commit_OIDs_or_postcommit_results",
+    "targeted_result": {
+      "command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q tests/observer_dtrs/test_nested_validation.py -k 'source_guard or readonly_partial' -p no:cacheprovider",
+      "deselected": 4,
+      "passed": 9,
+      "seconds": 1.56
+    },
+    "test_sha256_after": "58c7c8fa525a6c380834343d3aa13d209231a21ada518487bddf56de710bbafd",
+    "test_sha256_before": "4543efa3eeb9a40bd8190778b189adeba6e8e7a2911e5de708fbb44eb289905c"
+  },
+  "previous_stage_groups_preserved": true,
+  "previous_stage_source_snapshot_digest": "02bfea7f6f90b171d1b7bb0ecc3720dfff584a1808103d6e0ea45ccc4911ab31",
+  "prior_stage_file_sha256": {
+    "configs/observer_dtrs/d2-execution-v1.json": "16da8f6872944a91673e0c84a91c508aea1fd995246aa0f2a3aef8d1712f4059",
+    "configs/observer_dtrs/d2-protocol-proposal-v1.json": "eef909fefd5d8f4753979770bc4ca96b5d844ae6dec486e356e293736c6017bb",
+    "docs/research/observer-dtrs-v1-d1a.md": "ec0df2263a720fdbb94512162e4462b01088725b024a78d65b4930dc62331c25",
+    "docs/research/observer-dtrs-v1-d1b.md": "67a2a69aa03928da3991f9ef5e5fc087e197552eeaeefd54364569f287ed1802",
+    "docs/research/observer-dtrs-v1-d1c.md": "fa1c07ad16aba4a316cf73f7fc4f2fb60130e6ea9c936fa479e0e343af06e7f6",
+    "docs/research/observer-dtrs-v1-d2a-diagnostics.json": "76cdef55ff8b409dcbf0e561782dcd7437067134ea0a326298de4e8510433b18",
+    "docs/research/observer-dtrs-v1-d2a-methods-sources.md": "db9fde34761f4458065ec0e20b3e9b05cb802eebf2079f8bf5abc7d431e79032",
+    "docs/research/observer-dtrs-v1-d2a-protocol.md": "32cf1b59ead29ca78222d69639c5c6b30d295dfcf048afefa14efbc4d5636a23",
+    "docs/research/observer-dtrs-v1-d2b1-release.json": "8879f6a04e982aa89b24dc4004583afae7682f45999b839a7d995fedbbfaaa81",
+    "docs/research/observer-dtrs-v1-d2b1.md": "7409a471bab3951449225ece93e6bf9e8b547baa5ec6e0b07b503fb57e7add1d",
+    "scripts/check_observer_dtrs_estimator.py": "e1e11330fa6af907a9cfafaffa8eb2eb059d8b25210207596d7e0dbc67b12853",
+    "scripts/diagnose_observer_dtrs_dataset.py": "39ec16cfb5fa3f4c8b777918032be065b643bb95e12e73aad50833087723c48d",
+    "scripts/inspect_observer_dtrs_samples.py": "4143575e7c0eb711c39b2cdc02450219f1c557334fca2051f1ed72e3bfbc819a",
+    "scripts/manage_observer_dtrs_d2.py": "3dc308284530015150ebcd97d14d788bb9e70a9d81d97d3cea6ffbec9826eeb9",
+    "scripts/manage_observer_dtrs_dataset.py": "92730988d01e9453e4fd1f537a0ae5ba3005555d58ab8c98a470e1a506cde5d1",
+    "tests/observer_dtrs/__init__.py": "c9f506032a817bf92ac45a0d6808127e82dfefa330980af28bd5ee34db11bb94",
+    "tests/observer_dtrs/conftest.py": "33194fbd2d134584347322c041a088ef80e821843999dd894f6fa3ecf7834c5b",
+    "tests/observer_dtrs/test_context_labels.py": "87c0c644e1c56b9bd700e223a5953c3352d28a2e5c4cf993c1a48cc247e3300e",
+    "tests/observer_dtrs/test_d2_splits.py": "5ad899a240b7397b8189c4dea7d220a373b91935bb45b340773fc24f2186b69d",
+    "tests/observer_dtrs/test_dataset.py": "5a46cccb85693d429456a47c6d9ffe424977f59acbafb45089a645649fec6395",
+    "tests/observer_dtrs/test_diagnostics.py": "03c2a32c6b7bb614b9cac229248d7ae72dd66bf539d427651e02b4bad16e6406",
+    "tests/observer_dtrs/test_estimation.py": "1972cc00f9a717a8be033e10261747fd0d2a85821bf90cf163763f81e8655638",
+    "tests/observer_dtrs/test_features.py": "3638182ad68097287795fed0e6570baee448ce572cf5700e7fc87c6de6bdcd65",
+    "tests/observer_dtrs/test_offline.py": "ff01e1b6df5e8b1a2ea14745c892dfa8aef4ae0199279101262261234eabb623",
+    "tests/observer_dtrs/test_oof.py": "7af21ab6ee6adf3c4b8fa20ecb0fae39dff62be96f9e8c5c9a77e3d32969399d",
+    "werewolf/observer_dtrs/__init__.py": "94e8e35c3781c5064eaea8628894be897b111eb0ea00b9f6bb1db3796f7bb79e",
+    "werewolf/observer_dtrs/context.py": "6faaae0de0360e0d93061c50907ccd0e9496fe7eee1b95fa54146aee90e0aab0",
+    "werewolf/observer_dtrs/d2_protocol.py": "ec0c3358c85541b19d7a272e531ca7ffd06a6d50b1108e6944002985b37e63e4",
+    "werewolf/observer_dtrs/dataset.py": "1c01fe5ec89286411cbefff47c9f00acd065388c7f0378faf161620980eadaa1",
+    "werewolf/observer_dtrs/dataset_offline.py": "32643a8bc8f312897bac94893c1111cc4098722447945ad6ede1d918ac8db746",
+    "werewolf/observer_dtrs/estimation.py": "cc666fe3f66968a9c07e026c92f991f1f2f0b0e797b65e7de2880fc7b7d98f29",
+    "werewolf/observer_dtrs/estimation_offline.py": "23c921b20508f3beb25c6d72bdef6f5fc283d07b89dcceeb00ba3c5dfcb3683c",
+    "werewolf/observer_dtrs/features.py": "d5e227b87237c86ea605e81b911b11f003bc117252143a9703ce00d7a1e7a028",
+    "werewolf/observer_dtrs/labels.py": "0c603db30a64c166b0bbb553fefdf6cd3f653c2b020d9aa383db6510ca45da58",
+    "werewolf/observer_dtrs/offline.py": "3490f970ba6e8f90cdfa6f4a3fd6820e7ba9352b43697d2bb8fb2505783c23cf",
+    "werewolf/observer_dtrs/oof.py": "cd7c1106aef6e51463bc1cc77993f6a20c815f73cc835cd8634c27a7d92b78e4",
+    "werewolf/observer_dtrs/probabilities.py": "f9b2cbd96b9e495afbb379b39e215b4e4bda6ab53646f869b388accc5581f8b7",
+    "werewolf/observer_dtrs/scoring.py": "70a4797fcfcf634a4459ac6a15524b15bba0579f806454bd8b9a7790eb83d7fa",
+    "werewolf/observer_dtrs/splits.py": "58745071c264e9c7c5ed07404c021f17dcf7093ce76040c4a46bf44df98261b4"
+  },
+  "production_source_snapshot_digest": "f35346aff3f59a4b582ee15426ab5f84ce515f520e43e20d88b2d06049c67c2e",
+  "protocol_digest": "c76940b446ffaa3dc9e873620fe775a3b64db8544d0c5190a49778a2e48a6c20",
+  "regression": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q tests/observer_dtrs tests/canonical_collection tests/development_publication tests/tom/test_dataset.py tests/tom/test_boundaries.py -k 'not off_diagonal_readout_can_memorize_controlled_public_fixture' -p no:cacheprovider --maxfail=3",
+    "context": "after_test_stability_fix_before_stage_commits",
+    "deselected": 1,
+    "passed": 332,
+    "seconds": 63.68
+  },
+  "scope": "engineering_acceptance_only_no_formal_performance",
+  "server_controlled_acceptance": {
+    "Logistic_candidates": {
+      "0.001": {
+        "gradient_inf": 8.735351925311108e-10,
+        "iterations": 7,
+        "objective": 0.4968759052231865,
+        "reason": "gradient_tolerance"
+      },
+      "0.01": {
+        "gradient_inf": 4.206704429243757e-15,
+        "iterations": 6,
+        "objective": 0.5100127921714456,
+        "reason": "gradient_tolerance"
+      },
+      "0.1": {
+        "gradient_inf": 2.8204542867893423e-11,
+        "iterations": 4,
+        "objective": 0.5386994356568111,
+        "reason": "gradient_tolerance"
+      },
+      "1": {
+        "gradient_inf": 8.439429710627167e-14,
+        "iterations": 4,
+        "objective": 0.5581862761349545,
+        "reason": "gradient_tolerance"
+      }
+    },
+    "bootstrap_replicates": 2000,
+    "indices_digest": "8653052b86ae1207f26009f96508032e8b2af3e3030bf0fef6ef9fb9dfd5fe27",
+    "numpy": "2.2.6",
+    "python": "3.10.21",
+    "scope": "server_in_memory_controlled_acceptance_only",
+    "server_files_written": false,
+    "synthetic_games": 75,
+    "synthetic_rows": 150,
+    "wall_seconds": 0.3585138348862529
+  },
+  "server_manifest_read_only_check": {
+    "check_scope": "manifest_identity_fields_and_environment_only_not_full_source_reconstruction",
+    "dataset": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+    "protocol": "f6d12824a5b74b45faf00fe3efea3b8f21db9a78ad06c158c8dc1a355f2fc5eb",
+    "server_main_checkout_has_new_runner": false,
+    "split": "32e30246cbadec8240f47291422a791b4419482e1386b4d8b570344a2e45acc5"
+  },
+  "split_manifest_digest": "32e30246cbadec8240f47291422a791b4419482e1386b4d8b570344a2e45acc5",
+  "stage_file_groups": {
+    "D1a-D1c": [
+      "docs/research/observer-dtrs-v1-d1a.md",
+      "docs/research/observer-dtrs-v1-d1b.md",
+      "docs/research/observer-dtrs-v1-d1c.md",
+      "scripts/inspect_observer_dtrs_samples.py",
+      "scripts/manage_observer_dtrs_dataset.py",
+      "tests/observer_dtrs/__init__.py",
+      "tests/observer_dtrs/conftest.py",
+      "tests/observer_dtrs/test_context_labels.py",
+      "tests/observer_dtrs/test_dataset.py",
+      "tests/observer_dtrs/test_features.py",
+      "tests/observer_dtrs/test_offline.py",
+      "tests/observer_dtrs/test_oof.py",
+      "werewolf/observer_dtrs/__init__.py",
+      "werewolf/observer_dtrs/context.py",
+      "werewolf/observer_dtrs/dataset.py",
+      "werewolf/observer_dtrs/dataset_offline.py",
+      "werewolf/observer_dtrs/features.py",
+      "werewolf/observer_dtrs/labels.py",
+      "werewolf/observer_dtrs/offline.py",
+      "werewolf/observer_dtrs/oof.py",
+      "werewolf/observer_dtrs/probabilities.py"
+    ],
+    "D2a": [
+      "configs/observer_dtrs/d2-protocol-proposal-v1.json",
+      "docs/research/observer-dtrs-v1-d2a-diagnostics.json",
+      "docs/research/observer-dtrs-v1-d2a-methods-sources.md",
+      "docs/research/observer-dtrs-v1-d2a-protocol.md",
+      "scripts/diagnose_observer_dtrs_dataset.py",
+      "tests/observer_dtrs/test_diagnostics.py"
+    ],
+    "D2b-1": [
+      "configs/observer_dtrs/d2-execution-v1.json",
+      "docs/research/observer-dtrs-v1-d2b1-release.json",
+      "docs/research/observer-dtrs-v1-d2b1.md",
+      "scripts/check_observer_dtrs_estimator.py",
+      "scripts/manage_observer_dtrs_d2.py",
+      "tests/observer_dtrs/test_d2_splits.py",
+      "tests/observer_dtrs/test_estimation.py",
+      "werewolf/observer_dtrs/d2_protocol.py",
+      "werewolf/observer_dtrs/estimation.py",
+      "werewolf/observer_dtrs/estimation_offline.py",
+      "werewolf/observer_dtrs/scoring.py",
+      "werewolf/observer_dtrs/splits.py"
+    ],
+    "D2b-2": [
+      "werewolf/observer_dtrs/baselines.py",
+      "werewolf/observer_dtrs/validation_data.py",
+      "werewolf/observer_dtrs/validation_artifacts.py",
+      "werewolf/observer_dtrs/statistical_analysis.py",
+      "werewolf/observer_dtrs/nested_validation.py",
+      "scripts/run_observer_dtrs_validation.py",
+      "tests/observer_dtrs/test_secondary_analysis.py",
+      "tests/observer_dtrs/test_nested_validation.py",
+      "docs/research/observer-dtrs-v1-d2b2.md",
+      "docs/research/observer-dtrs-v1-d2b2-acceptance.json"
+    ]
+  }
+}

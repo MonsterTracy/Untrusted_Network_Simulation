@@ -1,0 +1,301 @@
+{
+  "D1_implementation_files_compared": 10,
+  "coverage": {
+    "games": 1500,
+    "inner_blocks": 75,
+    "outer_blocks": 25,
+    "outer_test_appearances_per_game": 1,
+    "samples": 22685
+  },
+  "dataset_digest": "d25537be18da93ddc2f49be695f876db2edef5f31904fea0999a292f491abfa3",
+  "fresh_readonly_session_verified": true,
+  "frozen_source_snapshot_matches_local": true,
+  "implementation_snapshot_digest": "02bfea7f6f90b171d1b7bb0ecc3720dfff584a1808103d6e0ea45ccc4911ab31",
+  "known_limitations": [
+    "historical_training_rng_seed_includes_full_publication_bound_preparation_digest",
+    "architecture_selection_independence_not_established"
+  ],
+  "local_regression": {
+    "deselected": 1,
+    "passed": 313,
+    "scope": "Observer-DTRS/canonical/publication/ToM dataset and boundary regressions",
+    "seconds": 51.15
+  },
+  "outer_assignment_digest": "99c50a8125559022823f6084c8f456601f93ed9c0620f6b0ceef7cf0b17a80f4",
+  "outer_blocks": [
+    {
+      "outer_fold": 0,
+      "test_games": 60,
+      "test_samples": 869,
+      "tom_fold": 0,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 1,
+      "test_games": 60,
+      "test_samples": 895,
+      "tom_fold": 0,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 2,
+      "test_games": 60,
+      "test_samples": 902,
+      "tom_fold": 0,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 3,
+      "test_games": 60,
+      "test_samples": 963,
+      "tom_fold": 0,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 4,
+      "test_games": 60,
+      "test_samples": 913,
+      "tom_fold": 0,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 0,
+      "test_games": 60,
+      "test_samples": 878,
+      "tom_fold": 1,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 1,
+      "test_games": 60,
+      "test_samples": 862,
+      "tom_fold": 1,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 2,
+      "test_games": 60,
+      "test_samples": 951,
+      "tom_fold": 1,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 3,
+      "test_games": 60,
+      "test_samples": 903,
+      "tom_fold": 1,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 4,
+      "test_games": 60,
+      "test_samples": 908,
+      "tom_fold": 1,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 0,
+      "test_games": 60,
+      "test_samples": 918,
+      "tom_fold": 2,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 1,
+      "test_games": 60,
+      "test_samples": 945,
+      "tom_fold": 2,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 2,
+      "test_games": 60,
+      "test_samples": 836,
+      "tom_fold": 2,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 3,
+      "test_games": 60,
+      "test_samples": 957,
+      "tom_fold": 2,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 4,
+      "test_games": 60,
+      "test_samples": 947,
+      "tom_fold": 2,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 0,
+      "test_games": 60,
+      "test_samples": 863,
+      "tom_fold": 3,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 1,
+      "test_games": 60,
+      "test_samples": 890,
+      "tom_fold": 3,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 2,
+      "test_games": 60,
+      "test_samples": 877,
+      "tom_fold": 3,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 3,
+      "test_games": 60,
+      "test_samples": 936,
+      "tom_fold": 3,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 4,
+      "test_games": 60,
+      "test_samples": 868,
+      "tom_fold": 3,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 0,
+      "test_games": 60,
+      "test_samples": 958,
+      "tom_fold": 4,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 1,
+      "test_games": 60,
+      "test_samples": 898,
+      "tom_fold": 4,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 2,
+      "test_games": 60,
+      "test_samples": 926,
+      "tom_fold": 4,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 3,
+      "test_games": 60,
+      "test_samples": 899,
+      "tom_fold": 4,
+      "train_games": 240
+    },
+    {
+      "outer_fold": 4,
+      "test_games": 60,
+      "test_samples": 923,
+      "tom_fold": 4,
+      "train_games": 240
+    }
+  ],
+  "previous_stage_file_sha256": {
+    "configs/observer_dtrs/d2-protocol-proposal-v1.json": "eef909fefd5d8f4753979770bc4ca96b5d844ae6dec486e356e293736c6017bb",
+    "docs/research/observer-dtrs-v1-d1a.md": "ec0df2263a720fdbb94512162e4462b01088725b024a78d65b4930dc62331c25",
+    "docs/research/observer-dtrs-v1-d1b.md": "67a2a69aa03928da3991f9ef5e5fc087e197552eeaeefd54364569f287ed1802",
+    "docs/research/observer-dtrs-v1-d1c.md": "fa1c07ad16aba4a316cf73f7fc4f2fb60130e6ea9c936fa479e0e343af06e7f6",
+    "docs/research/observer-dtrs-v1-d2a-diagnostics.json": "76cdef55ff8b409dcbf0e561782dcd7437067134ea0a326298de4e8510433b18",
+    "docs/research/observer-dtrs-v1-d2a-methods-sources.md": "db9fde34761f4458065ec0e20b3e9b05cb802eebf2079f8bf5abc7d431e79032",
+    "docs/research/observer-dtrs-v1-d2a-protocol.md": "32cf1b59ead29ca78222d69639c5c6b30d295dfcf048afefa14efbc4d5636a23",
+    "scripts/diagnose_observer_dtrs_dataset.py": "39ec16cfb5fa3f4c8b777918032be065b643bb95e12e73aad50833087723c48d",
+    "scripts/inspect_observer_dtrs_samples.py": "4143575e7c0eb711c39b2cdc02450219f1c557334fca2051f1ed72e3bfbc819a",
+    "scripts/manage_observer_dtrs_dataset.py": "92730988d01e9453e4fd1f537a0ae5ba3005555d58ab8c98a470e1a506cde5d1",
+    "tests/observer_dtrs/__init__.py": "c9f506032a817bf92ac45a0d6808127e82dfefa330980af28bd5ee34db11bb94",
+    "tests/observer_dtrs/conftest.py": "33194fbd2d134584347322c041a088ef80e821843999dd894f6fa3ecf7834c5b",
+    "tests/observer_dtrs/test_context_labels.py": "87c0c644e1c56b9bd700e223a5953c3352d28a2e5c4cf993c1a48cc247e3300e",
+    "tests/observer_dtrs/test_dataset.py": "5a46cccb85693d429456a47c6d9ffe424977f59acbafb45089a645649fec6395",
+    "tests/observer_dtrs/test_diagnostics.py": "03c2a32c6b7bb614b9cac229248d7ae72dd66bf539d427651e02b4bad16e6406",
+    "tests/observer_dtrs/test_features.py": "3638182ad68097287795fed0e6570baee448ce572cf5700e7fc87c6de6bdcd65",
+    "tests/observer_dtrs/test_offline.py": "ff01e1b6df5e8b1a2ea14745c892dfa8aef4ae0199279101262261234eabb623",
+    "tests/observer_dtrs/test_oof.py": "7af21ab6ee6adf3c4b8fa20ecb0fae39dff62be96f9e8c5c9a77e3d32969399d",
+    "werewolf/observer_dtrs/__init__.py": "94e8e35c3781c5064eaea8628894be897b111eb0ea00b9f6bb1db3796f7bb79e",
+    "werewolf/observer_dtrs/context.py": "6faaae0de0360e0d93061c50907ccd0e9496fe7eee1b95fa54146aee90e0aab0",
+    "werewolf/observer_dtrs/dataset.py": "1c01fe5ec89286411cbefff47c9f00acd065388c7f0378faf161620980eadaa1",
+    "werewolf/observer_dtrs/dataset_offline.py": "32643a8bc8f312897bac94893c1111cc4098722447945ad6ede1d918ac8db746",
+    "werewolf/observer_dtrs/features.py": "d5e227b87237c86ea605e81b911b11f003bc117252143a9703ce00d7a1e7a028",
+    "werewolf/observer_dtrs/labels.py": "0c603db30a64c166b0bbb553fefdf6cd3f653c2b020d9aa383db6510ca45da58",
+    "werewolf/observer_dtrs/offline.py": "3490f970ba6e8f90cdfa6f4a3fd6820e7ba9352b43697d2bb8fb2505783c23cf",
+    "werewolf/observer_dtrs/oof.py": "cd7c1106aef6e51463bc1cc77993f6a20c815f73cc835cd8634c27a7d92b78e4",
+    "werewolf/observer_dtrs/probabilities.py": "f9b2cbd96b9e495afbb379b39e215b4e4bda6ab53646f869b388accc5581f8b7"
+  },
+  "protocol_digest": "c76940b446ffaa3dc9e873620fe775a3b64db8544d0c5190a49778a2e48a6c20",
+  "protocol_manifest_digest": "f6d12824a5b74b45faf00fe3efea3b8f21db9a78ad06c158c8dc1a355f2fc5eb",
+  "protocol_path": "/data/yuxiao/Untrusted_Network_Simulation/observer-dtrs/protocols/observer-dtrs-d2-execution-v1",
+  "python": "3.10.21",
+  "saved_D1_audit_overall": {
+    "game_count": 1500,
+    "negative": 3389,
+    "positive": 19296,
+    "sample_count": 22685,
+    "successful_empty": 5700,
+    "successful_nonempty": 16985,
+    "wolf_pre_count": 5835
+  },
+  "server_controlled_acceptance": {
+    "Brier": 0.015625,
+    "server_controlled_in_memory_predictions": {
+      "controlled-a": 0.875,
+      "controlled-b": 0.125
+    }
+  },
+  "split_manifest_digest": "32e30246cbadec8240f47291422a791b4419482e1386b4d8b570344a2e45acc5",
+  "split_path": "/data/yuxiao/Untrusted_Network_Simulation/observer-dtrs/splits/paper-development-qwen35-9b-1500-v1-d2-splits-v1",
+  "stage_file_groups": {
+    "D1a-D1c": [
+      "docs/research/observer-dtrs-v1-d1a.md",
+      "docs/research/observer-dtrs-v1-d1b.md",
+      "docs/research/observer-dtrs-v1-d1c.md",
+      "scripts/inspect_observer_dtrs_samples.py",
+      "scripts/manage_observer_dtrs_dataset.py",
+      "tests/observer_dtrs/__init__.py",
+      "tests/observer_dtrs/conftest.py",
+      "tests/observer_dtrs/test_context_labels.py",
+      "tests/observer_dtrs/test_dataset.py",
+      "tests/observer_dtrs/test_features.py",
+      "tests/observer_dtrs/test_offline.py",
+      "tests/observer_dtrs/test_oof.py",
+      "werewolf/observer_dtrs/__init__.py",
+      "werewolf/observer_dtrs/context.py",
+      "werewolf/observer_dtrs/dataset.py",
+      "werewolf/observer_dtrs/dataset_offline.py",
+      "werewolf/observer_dtrs/features.py",
+      "werewolf/observer_dtrs/labels.py",
+      "werewolf/observer_dtrs/offline.py",
+      "werewolf/observer_dtrs/oof.py",
+      "werewolf/observer_dtrs/probabilities.py"
+    ],
+    "D2a": [
+      "configs/observer_dtrs/d2-protocol-proposal-v1.json",
+      "docs/research/observer-dtrs-v1-d2a-diagnostics.json",
+      "docs/research/observer-dtrs-v1-d2a-methods-sources.md",
+      "docs/research/observer-dtrs-v1-d2a-protocol.md",
+      "scripts/diagnose_observer_dtrs_dataset.py",
+      "tests/observer_dtrs/test_diagnostics.py"
+    ],
+    "D2b-1": [
+      "configs/observer_dtrs/d2-execution-v1.json",
+      "docs/research/observer-dtrs-v1-d2b1-release.json",
+      "docs/research/observer-dtrs-v1-d2b1.md",
+      "scripts/check_observer_dtrs_estimator.py",
+      "scripts/manage_observer_dtrs_d2.py",
+      "tests/observer_dtrs/test_d2_splits.py",
+      "tests/observer_dtrs/test_estimation.py",
+      "werewolf/observer_dtrs/d2_protocol.py",
+      "werewolf/observer_dtrs/estimation.py",
+      "werewolf/observer_dtrs/estimation_offline.py",
+      "werewolf/observer_dtrs/scoring.py",
+      "werewolf/observer_dtrs/splits.py"
+    ]
+  },
+  "status": "published_and_reconstructed_not_model_experiment"
+}
