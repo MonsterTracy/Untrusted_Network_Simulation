@@ -1,14 +1,43 @@
 # Classic7 observer-conditioned ToM
 
-Data Acquisition & Preprocessing: [technical lifecycle and operation](docs/research/data-acquisition-preprocessing.md) · [branch registry draft](docs/BRANCHES.md).
+Data Acquisition & Preprocessing: [technical lifecycle and operation](docs/research/data-acquisition-preprocessing.md) · [current branch registry](docs/BRANCHES.md).
 
 This repository owns canonical scientific game generation and the public-only
 Theory-of-Mind mainline for seven-player, multi-day text Werewolf:
 two Werewolves, three Villagers, one Seer and one Witch, including Night0.
 
-`CONTEXT.md`, ADRs 0001–0021 and
+`CONTEXT.md`, ADRs 0001–0022 and
 [the Phase-1 specification](docs/specs/phase-1-classic7-tom-mainline.md)
 are authoritative. This repository owns the current scientific mainline.
+
+## Implemented research modules
+
+Functional integration baseline before this documentation update (2026-10-24):
+`29fba64f64b3ec310d3f12ecd4247ff46879ec54`. This is a historical snapshot,
+not a permanently current HEAD. `twd/mainline` is the ongoing research development
+line; `main` remains the stable-release branch. See the
+[registry](docs/BRANCHES.md) for retained sources and pending work.
+
+| Module | Implemented source and reference |
+|---|---|
+| Canonical Data | Collection/evidence audit, whole-game split, V1/V2 publication and release: [Data lifecycle](docs/research/data-acquisition-preprocessing.md) |
+| Observer-conditioned ToM | Public-only non-self suspicion modeling, training/recovery, OOF and sealed Final Fit lifecycles: [ToM contract](docs/tom_contract.md), [Qwen3 Final Fit](docs/qwen3-final-fit.md) |
+| Observer-DTRS D1–D4 | PRE features and conditional event estimation, `LossSpec`, conditional risks, derived thresholds and POS/BND/NEG; Capsule/Broker/Resident Service/Shadow/QUAL engineering: [D2](docs/research/observer-dtrs-v1-d2a-protocol.md), [D3](docs/research/observer-dtrs-v1-d3a-protocol.md), [D4](docs/research/observer-dtrs-v1-d4c2b2-resident-service.md) |
+| Contextual speech research | Opt-in contextual losses and strategy intents through existing Actor/Parser/verified speech, with three-condition synthetic comparisons: [prototype and evidence limits](docs/research/observer-dtrs-contextual-speech-prototype.md) |
+| Experiment A | Paired Qwen3 temporal conditions, continuous/competition-top1 Q and fixed-M3 development contrasts: [temporal contract](docs/adr/0005-isolate-direct-day-phase-features-in-temporal-ablation.md), [paired preparation](werewolf/tom/backbone_study.py), [mapper runner](scripts/run_phase2_mapper_study.py), [statistical consumer](scripts/experiment_a_mapper_contrasts.py) |
+
+These are source capabilities, not a claim that a frozen real model or formal
+experiment is admitted on this checkout. Runtime/source, data partition and
+artifact guards still apply. Synthetic CPU/controlled-generator tests establish
+contracts and transport behavior, not LLM quality, information gain or win-rate
+improvement. The speech prototype is not a frozen experiment or default game
+policy. Experiment A retains Execution Source
+`39f4ea25906808bf1ed28b05fdfb63865cc3ffb3` and Analysis Source
+`13ca742d7d98e41d5f68e5cb98ad5901f017115c` for the original study.
+
+Mapper/Experiment A tools and their tests additionally use the `mapper` optional
+dependency group in [setup.py](setup.py). The default CLI and collection flow
+below remain unchanged.
 
 ## One executable path
 
@@ -68,9 +97,11 @@ git diff --check
 [Architecture](docs/architecture.md), [collection contract](docs/collection_contract.md),
 [ToM contract](docs/tom_contract.md), and
 [module ownership](docs/repository_structure.md) describe the live implementation.
-Game agents exist only to generate canonical evidence; trained ToM outputs never
-control gameplay. Phase-1 acceptance is contract-complete small-scale execution,
-not model quality or a paper-level scientific conclusion.
+In the default canonical-collection path, game agents generate canonical evidence;
+trained ToM outputs do not control gameplay. The opt-in research prototypes above
+do not change default collection, language or game behavior. Phase-1 acceptance
+is contract-complete small-scale execution, not model quality or a paper-level
+scientific conclusion.
 
 ## Final fit and independent evaluation
 

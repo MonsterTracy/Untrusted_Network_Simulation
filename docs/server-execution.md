@@ -1,5 +1,43 @@
 # Server execution and storage
 
+## Source versions and server responsibilities
+
+Registry update: 2026-10-24. The current Mac/GitHub integration source is
+`twd/mainline@29fba64f64b3ec310d3f12ecd4247ff46879ec54`; this does **not** mean
+any Ubuntu directory has been synchronized to it.
+
+The following is the **2026-10-22 server inventory snapshot**, reused from the
+local project audit. No server, process, model or environment was rechecked for
+this update. Existing operational recipes and historical environment incidents
+below are not evidence of the server's present health or deployment state.
+
+| Historical source directory | Snapshot identity | Version responsibility / relationship |
+|---|---|---|
+| `/home/dell/yuxiao/Untrusted_Network_Simulation` | `three-way@7b51f276b04b386ec1aa4ae44454c1d809a10897` | Main server checkout and historical Formal Probe/D1–D3 source; not asserted to be today's Mainline. Common Git store G1 |
+| `/home/dell/yuxiao/Untrusted_Network_Simulation_data_acquisition_99f559c` | detached `99f559c5f274f79fbaf4e2056b40c96c84441531` | G1 linked worktree for frozen collection/campaign source; preserve its Plan and publication lineage |
+| `/home/dell/yuxiao/Untrusted_Network_Simulation_qwen3_predictor_f199` | detached `f199a9e6c64168a412de91ff8ca04d0c795c57e2` | G1 linked worktree for frozen ToM predictor, fit/seal and recovery identity; do not replace it with moving Mainline |
+| `/home/dell/yuxiao/Untrusted_Network_Simulation_experiment_a_exec` | `research/main-experiments@39f4ea25906808bf1ed28b05fdfb63865cc3ffb3` | Independent clone/G2, original Experiment A Execution Source |
+| `/home/dell/yuxiao/Untrusted_Network_Simulation_experiment_a_analysis` | detached `13ca742d7d98e41d5f68e5cb98ad5901f017115c` | Independent clone/G3, original Experiment A Analysis Source; distinct from the ToM visualization branch |
+| `/home/dell/yuxiao/3wd-tom` | `tom-v2@50d8c7d6f94829cfc4481d04d8cb2f83e1995a34` | Separate legacy repository/G4; preserve historical reproduction, not a new Mainline deployment |
+| `/home/dell/yuxiao/3wd-tom/.worktrees/dev540-composite` | `dev540-composite@0e03ca35758c0b9c78414d652ef58d359dee8082` | G4 linked worktree for the legacy protocol; preserve its source/artifacts |
+
+This snapshot describes seven code directories and four Git object stores. The
+legacy `3wd-tom` SHAs above are snapshot metadata, not commits verified in the
+current Mac project object store. Current server refs and activity remain unknown.
+`/data/yuxiao/Untrusted_Network_Simulation` is the snapshot's external artifact
+root, not another code checkout. The separate
+`/data/yuxiao/tom-llm-reasoner-b2` Candidate deployment namespace is also protected;
+this table establishes neither its Git identity nor permission to replace it.
+
+Use the existing `uns` CLI, storage profile and manifest/source identities for
+the selected runtime. A shared storage root does not make experiment namespaces
+interchangeable. Preserve frozen predictor/campaign and Experiment A versions;
+new runs need separately admitted source and a fresh output namespace. Before
+changing a particular server directory, its live source, tasks and artifact
+references require a separate operator check. This documentation performs no
+sync, deployment, environment removal or service restart. See the
+[branch registry](BRANCHES.md) for Mac development ownership.
+
 ## Local Qwen service
 
 The scientific client and external base-model server use separate environments:
