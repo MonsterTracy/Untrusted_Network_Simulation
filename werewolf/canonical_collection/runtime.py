@@ -14,7 +14,7 @@ from werewolf.canonical_collection.failure_evidence import (
     CanonicalFailureStage,
     construct_canonical_failure_attempt,
 )
-from werewolf.canonical_collection.game_bundle import DeterministicReplayExecutor
+from werewolf.canonical_collection.game_bundle import DeterministicReplayExecutor, FullGameReplayExecutor
 from werewolf.canonical_collection.pre import (
     AuthoritativePREPrefix,
     SpeakerPREBeliefHandoff,
@@ -526,11 +526,18 @@ def make_classic7_replay_executor(
     *,
     identity: str,
     environment_factory,
+    require_full_game: bool = False,
 ) -> DeterministicReplayExecutor:
-    """Replay submitted runtime actions without any external backend calls."""
+    """Replay actions; whole-game mode independently verifies terminal/winner.
+
+    Default replay retains the historical public-trajectory contract. Gameplay
+    uses whole-game mode, with the same real environment and recorded actions.
+    """
 
     if not callable(environment_factory):
         raise TypeError("environment_factory must be callable")
+    if type(require_full_game) is not bool:
+        raise TypeError("require_full_game must be a boolean")
 
     def execute(private_replay_evidence, submitted_actions):
         replay_inputs = private_replay_evidence.replay_inputs.to_value()
@@ -544,13 +551,32 @@ def make_classic7_replay_executor(
             role for _, role in private_replay_evidence.role_assignment
         ]
         env.reset(roles=roles)
+        done, info = False, {}
         for raw_action in raw_actions:
+            if require_full_game and done:
+                raise ValueError("replay contains actions after the terminal step")
             if not isinstance(raw_action, list):
                 raise TypeError("replay action must be a JSON array")
-            env.step(tuple(raw_action))
+            outcome = env.step(tuple(raw_action))
+            if require_full_game:
+                _, _, done, info = outcome
+        if require_full_game:
+            # Check both the final step and the environment's native win rule.
+            # A supplied winner string or a synthetic early `done` is insufficient.
+            _, state_done, state_info = env.is_done()
+            if done is not True or state_done is not True or env.phase != "end_game":
+                raise ValueError("replay does not reach a complete native game terminal")
+            if (not isinstance(info, dict) or not isinstance(state_info, dict)
+                    or type(info.get("Werewolf")) is not int
+                    or info["Werewolf"] not in (-1, 1) or state_info != info):
+                raise ValueError("replay terminal winner disagrees with native win rule")
+            winner = "Werewolf" if info["Werewolf"] == 1 else "Villager"
+            if replay_inputs.get("winner") != winner:
+                raise ValueError("recorded winner disagrees with replay terminal winner")
         return list(env.public_events)
 
-    return DeterministicReplayExecutor(identity=identity, execute=execute)
+    executor_type = FullGameReplayExecutor if require_full_game else DeterministicReplayExecutor
+    return executor_type(identity=identity, execute=execute)
 
 
 __all__ = [

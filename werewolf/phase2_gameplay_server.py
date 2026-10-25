@@ -164,7 +164,7 @@ def execute_games(ledger, *, runtime_factory, router_factory, run_game, replay_e
                     canonical_recorder=runtime.recorder, call_audit=runtime.call_audit, online_pilot=router)
                 product = runtime.recorder.complete_evidence()
                 publish_canonical_game_bundle(ledger.work / "games" / allocation["game_id"],
-                    plan=game_plan, claim=claim, evidence=product, replay_executor=runtime.replay_executor)
+                    plan=game_plan, claim=claim, evidence=product, replay_executor=replay_executor)
                 source_check()
                 result = dict((a["game_id"], r) for a, r in verify_results(ledger, replay_executor, verify_router))[allocation["game_id"]]
                 ledger._append("RESULT", result)
@@ -301,19 +301,22 @@ def execute_server(plan, *, repo, work, destination, preflight_only=False, runti
     if not preflight_only and allow_gpu is not True:
         raise ValueError("runtime check/run/resume requires explicit GPU permission")
     bind_campaign_profile(plan, repo, work=work, destination=destination)
-    from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory, classic7_replay_executor, run_game
+    from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory, classic7_full_game_replay_executor, run_game
     from werewolf.phase2_online_runner import OnlineTerminalPilotRunnerV1
     paths, config, limit, mapper, reference = server_inputs(plan, repo)
     if Path(__file__).resolve().parents[1] != safe_path(repo):
         raise ValueError("gameplay imports must originate in the pinned checkout")
     ledger = GameplayLedger(work, plan)
-    replay = classic7_replay_executor(config)
+    replay = classic7_full_game_replay_executor(config)
     inspect.signature(run_game).bind(None, (), (), canonical_recorder=None, call_audit=None, online_pilot=None)
     if plan["purpose"] == "formal":
         from werewolf.phase2_gameplay import validate_publication
         admission = plan["qualification"]
-        qualified = validate_publication(admission["path"], admission["manifest_digest"], replay, verify_router)
+        qualified = verify_artifact(safe_path(admission["path"]), expected_artifact_type="phase2_router_gameplay",
+                                    expected_schema_version=plan["schema_version"])
         qplan = _load_canonical_json(read_artifact_file(qualified, "run_plan.json"))
+        qualified = validate_publication(admission["path"], admission["manifest_digest"], replay, verify_router,
+                                         expected_plan=qplan)
         if (qualified.manifest["purpose"] != "qualification" or qualified.manifest["qualification_gate_passed"] is not True or
                 qplan["game_plan"] not in plan["exclusions"] or
                 any(plan["source"]["source_sha256"].get(n) != sha for n, sha in qplan["source"]["source_sha256"].items()

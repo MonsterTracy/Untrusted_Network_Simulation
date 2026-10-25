@@ -20,7 +20,9 @@ from tests.phase2.test_probe_policy_runner import runtime
 from tests.phase2.test_decision_opportunity import Mapper, q_matrix
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact, read_artifact_file
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
-from werewolf.canonical_collection.game_bundle import _raw_public_event, publish_canonical_game_bundle
+from werewolf.canonical_collection.game_bundle import (
+    DeterministicReplayExecutor, FullGameReplayExecutor, _raw_public_event, publish_canonical_game_bundle,
+)
 from werewolf.canonical_collection.trajectory_evidence import construct_private_replay_evidence
 from werewolf.canonical_collection.failure_evidence import construct_canonical_partial_evidence, publish_canonical_partial_evidence
 from werewolf.phase2_gameplay import (
@@ -48,14 +50,47 @@ def no_router(*args):
     return {"triggered": False, "t1_committed": False, "t3_committed": False}
 
 
+def endpoint_factory():
+    """Actual production replay definition, without native-environment imports.
+
+    This component test supplies a scripted terminal environment. The separate
+    native endpoint tests import and execute the real environment on CPU.
+    """
+    path = cli.ROOT / "werewolf/canonical_collection/runtime.py"
+    node = next(n for n in ast.parse(path.read_text()).body
+                if isinstance(n, ast.FunctionDef) and n.name == "make_classic7_replay_executor")
+    scope = {"DeterministicReplayExecutor": DeterministicReplayExecutor, "FullGameReplayExecutor": FullGameReplayExecutor}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), scope)
+    return scope["make_classic7_replay_executor"]
+
+
+def endpoint_replay(*, terminal=True, native_done=True):
+    """Explicitly synthetic endpoint/trajectory; never native-game evidence."""
+    class Env:
+        phase = "speech"
+        public_events = []
+        def reset(self, *, roles):
+            self.phase, self.result = "speech", {}
+        def step(self, action):
+            self.phase = "end_game" if terminal else "speech"
+            self.result = {"Werewolf": 1 if action[1] == "Werewolf" else -1} if terminal else {}
+            self.public_events = [_raw_public_event(e) for e in _fixture()[2].public_event_stream.to_records()]
+            return {}, [], terminal, self.result
+        def is_done(self):
+            return [], terminal and native_done, self.result if native_done else {}
+    return endpoint_factory()(identity="synthetic-full-game-endpoint-v1",
+                              environment_factory=lambda seed: Env(), require_full_game=True)
+
+
 def bundle(ledger, allocation, claim, winner="Werewolf"):
     game = collection_plan_from_record(ledger.plan["game_plan"])
-    _, _, evidence, replay = _fixture(game, claim, game_id=allocation["game_id"])
+    _, _, evidence, _ = _fixture(game, claim, game_id=allocation["game_id"])
+    replay = endpoint_replay()
     old = evidence.private_replay_evidence
     private = construct_private_replay_evidence(game_id=evidence.game_id, seed=claim.seed,
         role_assignment=dict(old.role_assignment), runtime_configuration=old.runtime_configuration,
         initial_runtime_state=old.initial_runtime_state,
-        replay_inputs={"fixture": "deterministic-v1", "winner": winner},
+        replay_inputs={"submitted_actions": [["fixture_terminal", winner]], "winner": winner},
         expected_public_event_digest=old.expected_public_event_digest)
     evidence = replace(evidence, private_replay_evidence=private)
     published = publish_canonical_game_bundle(ledger.work / "games" / allocation["game_id"],
@@ -63,8 +98,8 @@ def bundle(ledger, allocation, claim, winner="Werewolf"):
     return published, replay, evidence
 
 
-def complete(tmp_path, n=2):
-    ledger = GameplayLedger(tmp_path / "work", plan(n))
+def complete(tmp_path, n=2, *, campaign_plan=None):
+    ledger = GameplayLedger(tmp_path / "work", campaign_plan if campaign_plan is not None else plan(n))
     ledger.initialize()
     for i, allocation in enumerate(ledger.plan["allocations"]):
         claim = ledger.start(allocation)
@@ -92,12 +127,76 @@ def test_balanced_allocation_is_preplay_reproducible_and_arm_independent_candida
 def test_all_randomized_games_and_zero_interventions_publish_with_full_winners(tmp_path):
     ledger, replay = complete(tmp_path)
     artifact = publish_campaign(ledger, tmp_path / "publication", replay, no_router)
-    verified = validate_publication(artifact.path, artifact.manifest_digest, replay, no_router)
+    verified = validate_publication(artifact.path, artifact.manifest_digest, replay, no_router, expected_plan=ledger.plan)
     outcomes = [json.loads(line) for line in read_artifact_file(verified, "outcomes.jsonl").splitlines()]
     assert len(outcomes) == 2 and sum(r["wolf_win"] for r in outcomes) == 1
     assert all(r["router_process"]["triggered"] is False for r in outcomes)
     assert artifact.manifest["primary_population"] == "all_randomized_games"
     assert artifact.manifest["qualification_gate_passed"] is None
+
+
+def test_generic_public_replay_cannot_certify_a_gameplay_winner(tmp_path):
+    ledger, _ = complete(tmp_path)
+    with pytest.raises(TypeError, match="full-game terminal"):
+        verify_results(ledger, _fixture()[3], no_router)
+
+
+@pytest.mark.parametrize("violation", ["unfinished", "false_done", "wrong_winner", "extra_action"])
+def test_actual_endpoint_replay_definition_rejects_invalid_terminal(violation):
+    _, _, evidence, _ = _fixture()
+    old = evidence.private_replay_evidence
+    raw = [["fixture_terminal", "Werewolf"]]
+    actions = evidence.submitted_gameplay_actions
+    if violation == "extra_action":
+        raw *= 2
+        actions *= 2
+    private = construct_private_replay_evidence(game_id=evidence.game_id, seed=old.seed,
+        role_assignment=dict(old.role_assignment), runtime_configuration=old.runtime_configuration,
+        initial_runtime_state=old.initial_runtime_state,
+        replay_inputs={"submitted_actions": raw, "winner": "Villager" if violation == "wrong_winner" else "Werewolf"},
+        expected_public_event_digest=old.expected_public_event_digest)
+    replay = endpoint_replay(terminal=violation != "unfinished", native_done=violation != "false_done")
+    with pytest.raises(ValueError, match="terminal|winner"):
+        replay.execute(private, actions)
+
+
+@pytest.mark.parametrize("mismatch", [None, "source", "runtime_inputs"])
+def test_cli_validate_binds_actual_publication_to_exact_prepared_plan(tmp_path, monkeypatch, mismatch):
+    paths = {"plan": str(tmp_path / "prepared"), "work": str(tmp_path / "work"),
+             "destination": str(tmp_path / "publication")}
+    p = plan(paths=paths)
+    config = tmp_path / "runtime.json"
+    config.write_bytes(b"{}")
+    p["runtime_inputs"] = {"paths": {"runtime_config": str(config)}}
+    p["plan_digest"] = digest({k: v for k, v in p.items() if k != "plan_digest"})
+    ledger, replay = complete(tmp_path, campaign_plan=p)
+    publication = publish_campaign(ledger, paths["destination"], replay, no_router)
+    expected = deepcopy(p)
+    if mismatch == "source":
+        expected["source"]["source_sha256"]["fixture.py"] = "c" * 64
+    elif mismatch == "runtime_inputs":
+        expected["runtime_inputs"]["other_binding"] = "different-prepared-input"
+    expected["plan_digest"] = digest({k: v for k, v in expected.items() if k != "plan_digest"})
+    prepared = publish_artifact(paths["plan"], manifest_fields={
+        "artifact_type": "phase2_router_gameplay_plan", "schema_version": p["schema_version"],
+        "study_name": p["campaign_id"], "purpose": p["purpose"], "source": expected["source"],
+        "plan_digest": expected["plan_digest"]}, files={
+            "run_plan.json": canonical_json_bytes(expected), "game_plan.json": canonical_json_bytes(expected["game_plan"]),
+            "operator_paths.json": canonical_json_bytes({"work": paths["work"], "destination": paths["destination"]})})
+    monkeypatch.setattr("werewolf.phase2_gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
+    module = ModuleType("werewolf.canonical_collection.production_runtime")
+    module.classic7_full_game_replay_executor = lambda config: replay
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(cli, "verify_router", no_router)
+    before = {name: read_artifact_file(publication, name) for name in publication.manifest["file_table"]}
+    argv = ["validate", "--plan", paths["plan"], "--plan-manifest-digest", prepared.manifest_digest,
+            "--publication-manifest-digest", publication.manifest_digest]
+    if mismatch is None:
+        assert cli.main(argv) == 0
+    else:
+        with pytest.raises(ValueError, match="specified prepared plan/source"):
+            cli.main(argv)
+    assert before == {name: read_artifact_file(publication, name) for name in publication.manifest["file_table"]}
 
 
 def test_full_bundle_before_result_index_recovers_without_replay_or_rerandomization(tmp_path):
@@ -121,16 +220,16 @@ def test_started_without_full_endpoint_is_permanent_and_prevents_new_game(tmp_pa
     ledger.initialize()
     ledger.start(ledger.plan["allocations"][0])
     with pytest.raises(ValueError, match="missing whole-game"):
-        recover(ledger, None, no_router)
+        recover(ledger, endpoint_replay(), no_router)
     assert ledger.status()["status"] == "INCOMPLETE"
     with pytest.raises(ValueError, match="permanently"):
-        recover(ledger, None, no_router)
+        recover(ledger, endpoint_replay(), no_router)
     before = ledger.path.read_bytes()
     with pytest.raises(ValueError, match="unresolved"):
         ledger.start(ledger.plan["allocations"][1])
     assert ledger.path.read_bytes() == before
     with pytest.raises(ValueError, match="all randomized"):
-        publish_campaign(ledger, tmp_path / "publication", None, no_router)
+        publish_campaign(ledger, tmp_path / "publication", endpoint_replay(), no_router)
 
 
 @pytest.mark.parametrize("mutation", ("run_inputs", "source", "journal", "partial_line", "symlink"))
@@ -156,7 +255,7 @@ def test_resume_bindings_and_tampering_fail_closed(tmp_path, mutation):
         (tmp_path / "elsewhere").write_bytes(original)
         ledger.path.symlink_to(tmp_path / "elsewhere")
     with pytest.raises(ValueError):
-        recover(ledger, None, no_router)
+        recover(ledger, endpoint_replay(), no_router)
 
 
 def test_rehashed_publication_cannot_filter_games_or_change_winner(tmp_path):
@@ -170,7 +269,7 @@ def test_rehashed_publication_cannot_filter_games_or_change_winner(tmp_path):
     manifest = {k: v for k, v in artifact.manifest.items() if k not in ("file_table", "manifest_digest")}
     altered = publish_artifact(tmp_path / "altered", manifest_fields=manifest, files=files)
     with pytest.raises(ValueError, match="population/endpoint"):
-        validate_publication(altered.path, altered.manifest_digest, replay, no_router)
+        validate_publication(altered.path, altered.manifest_digest, replay, no_router, expected_plan=ledger.plan)
 
 
 def test_seed_overlap_and_unfrozen_formal_fail_before_publication(tmp_path):
@@ -233,7 +332,7 @@ def test_failure_is_recorded_after_preplay_claim_and_not_noop(tmp_path, runtime)
     assert ledger.status()["status"] == "INCOMPLETE"
     with pytest.raises(ValueError, match="missing whole-game"):
         server.execute_games(ledger, runtime_factory=factory, router_factory=None,
-            run_game=runtime.run_canonical_game, replay_executor=None, source_check=lambda: None, resume=True)
+            run_game=runtime.run_canonical_game, replay_executor=endpoint_replay(), source_check=lambda: None, resume=True)
     assert called == [100]
 
 
@@ -293,7 +392,7 @@ def test_server_preflight_does_not_construct_runtime_or_mutate_ledger(tmp_path, 
         "scripts.qwen3_gameplay_predictor": {"Qwen3GameplayPredictorClient": Client},
         "werewolf.backends.factory": {"load_named_backends": forbidden},
         "werewolf.canonical_collection.production_runtime": {"Classic7RuntimeFactory": forbidden,
-            "classic7_replay_executor": lambda config: None, "run_game": runtime.run_canonical_game},
+            "classic7_full_game_replay_executor": lambda config: endpoint_replay(), "run_game": runtime.run_canonical_game},
         "werewolf.phase2_online_runner": {"OnlineTerminalPilotRunnerV1": forbidden},
     }
     for name, fields in modules.items():
@@ -483,11 +582,13 @@ def test_production_loop_to_real_bundle_and_publication_includes_both_noeligible
     def factory(*, plan, claim):
         allocation = ledger.plan["allocations"][claim.ordinal]
         assert ledger.read()[1][allocation["game_id"]][0]["kind"] == "STARTED"
-        _, _, evidence, replay = _fixture(plan, claim, game_id=allocation["game_id"])
+        _, _, evidence, _ = _fixture(plan, claim, game_id=allocation["game_id"])
+        replay = endpoint_replay()
         old = evidence.private_replay_evidence
         private = construct_private_replay_evidence(game_id=evidence.game_id, seed=claim.seed,
             role_assignment=dict(old.role_assignment), runtime_configuration=old.runtime_configuration,
-            initial_runtime_state=old.initial_runtime_state, replay_inputs={"fixture": "deterministic-v1", "winner": "Werewolf"},
+            initial_runtime_state=old.initial_runtime_state,
+            replay_inputs={"submitted_actions": [["fixture_terminal", "Werewolf"]], "winner": "Werewolf"},
             expected_public_event_digest=old.expected_public_event_digest)
         evidence = replace(evidence, private_replay_evidence=private)
         prefix = evidence.authoritative_pre_prefixes[0]
@@ -538,13 +639,13 @@ def test_production_loop_to_real_bundle_and_publication_includes_both_noeligible
             mapper=SimpleNamespace(infer=forbidden, artifact_digest="c" * 64),
             backend=SimpleNamespace(chat_with_metadata=forbidden), model_name="scripted", reference_tables=reference,
             reference_artifact_digest=reference_tables_digest(reference), record_evidence=sink)
-    replay = _fixture()[3]
+    replay = endpoint_replay()
     result = server.execute_games(ledger, runtime_factory=factory, router_factory=router_factory,
         run_game=runtime.run_canonical_game, replay_executor=replay, source_check=lambda: None)
     assert result["status"] == "COMPLETE" and constructed == [100, 101]
     assert ballots == [("speech", "player3 is suspicious")] * 2
     published = publish_campaign(ledger, tmp_path / "publication", replay, server.verify_router)
-    validate_publication(published.path, published.manifest_digest, replay, server.verify_router)
+    validate_publication(published.path, published.manifest_digest, replay, server.verify_router, expected_plan=ledger.plan)
     assert all(r[1]["router_process"]["triggered"] is False for r in verify_results(ledger, replay, server.verify_router))
     server.execute_games(ledger, runtime_factory=factory, router_factory=router_factory,
         run_game=runtime.run_canonical_game, replay_executor=replay, source_check=lambda: None, resume=True)

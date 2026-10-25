@@ -148,6 +148,15 @@ class Classic7RuntimeFactory:
 
 
 def classic7_replay_executor(runtime_config):
+    return _classic7_replay_executor(runtime_config, require_full_game=False)
+
+
+def classic7_full_game_replay_executor(runtime_config):
+    """Gameplay endpoint verifier; no backend, model or live agent execution."""
+    return _classic7_replay_executor(runtime_config, require_full_game=True)
+
+
+def _classic7_replay_executor(runtime_config, *, require_full_game):
     env_config = deepcopy(normalize_runtime_config(runtime_config)["env_config"])
     env_config["log_save_path"] = None
 
@@ -155,7 +164,9 @@ def classic7_replay_executor(runtime_config):
         return WerewolfTextEnvV0(**env_config, speech_perceiver=_ReplaySpeechPerceiver(), random_seed=seed)
 
     return make_classic7_replay_executor(
-        identity="classic7-runtime-action-replay-v1", environment_factory=replay_environment)
+        identity=("classic7-full-game-runtime-action-replay-v1" if require_full_game
+                  else "classic7-runtime-action-replay-v1"),
+        environment_factory=replay_environment, require_full_game=require_full_game)
 
 
-__all__ = ["Classic7RuntimeFactory", "classic7_replay_executor"]
+__all__ = ["Classic7RuntimeFactory", "classic7_replay_executor", "classic7_full_game_replay_executor"]

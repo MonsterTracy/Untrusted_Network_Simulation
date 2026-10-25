@@ -15,7 +15,7 @@ from scripts import phase2_gameplay_campaign as cli
 from werewolf import phase2_gameplay_server as server
 from werewolf.phase2_gameplay import digest, bind_campaign_profile, validate_profile, VERSION, qualification_diagnostics, freeze_source
 from werewolf.artifact_io import publish_artifact, canonical_json_bytes
-from tests.phase2.test_gameplay_campaign import plan, GameplayLedger
+from tests.phase2.test_gameplay_campaign import plan, GameplayLedger, endpoint_replay
 from tests.phase2.test_probe_policy_runner import runtime
 from tests.runtime.test_runtime_config import new_config
 from werewolf.runtime_config import normalize_runtime_config
@@ -66,7 +66,7 @@ def assembly(monkeypatch, runtime):
     for name, fields in {
         "scripts.qwen3_gameplay_predictor": {"Qwen3GameplayPredictorClient": Client},
         "werewolf.canonical_collection.production_runtime": {"Classic7RuntimeFactory": forbidden,
-            "classic7_replay_executor": lambda config: None, "run_game": runtime.run_canonical_game},
+            "classic7_full_game_replay_executor": lambda config: endpoint_replay(), "run_game": runtime.run_canonical_game},
         "werewolf.phase2_online_runner": {"OnlineTerminalPilotRunnerV1": forbidden},
     }.items():
         module = ModuleType(name)

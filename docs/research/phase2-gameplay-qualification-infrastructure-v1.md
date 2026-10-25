@@ -123,12 +123,38 @@ Recovery is fail closed:
 - Canonical deterministic **action replay validation** uses recorded actions
   without agent/backend calls. It is evidence verification, not re-execution of
   an assigned game to obtain a new outcome.
+  Gameplay uses `classic7_full_game_replay_executor`: recorded actions must
+  reach the real environment's `end_game`; the last step and native win rule
+  must both report terminal and agree with the recorded winner. An unfinished
+  trace, forged winner or action after terminal is rejected. Ordinary Canonical
+  replay remains partial/public-trajectory validation by default.
 
 Publication includes every allocation and result, the journal, all complete
 canonical bundle bytes and Router partial proofs. Validation needs no historical
 work directory: it recomputes allocations, joins exactly N games, revalidates
 bundles/winners and policy proofs, and rejects filtered or rehashed bad tables.
 Immutable destinations cannot be overwritten. No partial ITT completion claim.
+`validate_publication(..., expected_plan=...)` also binds the entire published
+run plan to the caller's expected prepared plan, including execution source and
+runtime inputs. The CLI supplies the independently opened prepared plan. Formal
+admission still requires its pinned qualification digest, excluded game plan
+and matching execution source; this check does not grant qualification.
+
+### S1 source integration boundary
+
+The full-game verifier selectively carries forward terminal-safety work from
+stash `c75cb291ac6a12b1ad697537d78ee98e0513dbd0` onto integrated Mainline
+`6249485c56cc3a5107a0b0de2252de3435421b45`. It does not restore the old runtime,
+CI or unrelated analysis files. The D4 Shadow hook remains unchanged.
+
+`tests/phase2/test_gameplay_native_endpoint.py` exercises both native winners,
+zero-intervention publication, unfinished traces, forged winners, post-terminal
+actions and artificial early termination with deterministic synthetic agents.
+It uses no real labels, external LLM, ToM model or GPU. These CPU regressions
+establish engineering behavior, not real-model qualification or gameplay gains.
+New Gameplay execution needs its own reviewed source/plan identity. Historical
+source SHAs, replay identities, manifests and results must not be rewritten or
+represented as executions of the new verifier.
 
 ## CLI
 

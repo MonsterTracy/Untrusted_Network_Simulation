@@ -76,12 +76,13 @@ def prepare(args):
     if args.purpose == "formal":
         if not isinstance(admission, dict) or set(admission) != {"path", "manifest_digest"}:
             raise ValueError("formal requires an explicitly reviewed gameplay qualification")
-        from werewolf.canonical_collection.production_runtime import classic7_replay_executor
+        from werewolf.canonical_collection.production_runtime import classic7_full_game_replay_executor
         import yaml
         artifact = verify_artifact(safe_path(admission["path"]), expected_artifact_type="phase2_router_gameplay", expected_schema_version=VERSION)
         qplan = validate_plan(_load_canonical_json(read_artifact_file(artifact, "run_plan.json")))
-        replay = classic7_replay_executor(yaml.safe_load(Path(qplan["runtime_inputs"]["paths"]["runtime_config"]).read_bytes()))
-        artifact = validate_publication(admission["path"], admission["manifest_digest"], replay, verify_router)
+        replay = classic7_full_game_replay_executor(yaml.safe_load(Path(qplan["runtime_inputs"]["paths"]["runtime_config"]).read_bytes()))
+        artifact = validate_publication(admission["path"], admission["manifest_digest"], replay, verify_router,
+                                         expected_plan=qplan)
         if artifact.manifest["purpose"] != "qualification" or artifact.manifest["qualification_gate_passed"] is not True:
             raise ValueError("qualification lacks reviewed mechanism gate")
         for name, sha in qplan["source"]["source_sha256"].items():
@@ -178,10 +179,11 @@ def main(argv=None):
         elif args.command == "validate":
             if args.publication_manifest_digest is None:
                 parser.error("validate requires publication-manifest-digest")
-            from werewolf.canonical_collection.production_runtime import classic7_replay_executor
+            from werewolf.canonical_collection.production_runtime import classic7_full_game_replay_executor
             import yaml
-            replay = classic7_replay_executor(yaml.safe_load(Path(plan["runtime_inputs"]["paths"]["runtime_config"]).read_bytes()))
-            artifact = validate_publication(paths["destination"], args.publication_manifest_digest, replay, verify_router)
+            replay = classic7_full_game_replay_executor(yaml.safe_load(Path(plan["runtime_inputs"]["paths"]["runtime_config"]).read_bytes()))
+            artifact = validate_publication(paths["destination"], args.publication_manifest_digest, replay, verify_router,
+                                             expected_plan=plan)
             result = {"valid": True, "manifest_digest": artifact.manifest_digest}
         else:
             from scripts.phase2_online_campaign import frozen_environment

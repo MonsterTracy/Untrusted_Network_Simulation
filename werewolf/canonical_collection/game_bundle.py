@@ -150,6 +150,15 @@ class DeterministicReplayExecutor:
 
 
 @dataclass(frozen=True)
+class FullGameReplayExecutor(DeterministicReplayExecutor):
+    """Replay that also requires a native terminal state and matching winner.
+
+    Gameplay publications require this boundary; ordinary canonical/ToM replay
+    may legitimately describe a partial trajectory.
+    """
+
+
+@dataclass(frozen=True)
 class DeterministicReplayResult:
     schema_version: str
     replay_executor_identity: str

@@ -27,7 +27,9 @@ from werewolf.canonical_collection.attempt_ledger import (
     _claim_from_record, _publish_bytes_noreplace, collection_plan_from_record,
     construct_attempt_claim,
 )
-from werewolf.canonical_collection.game_bundle import CANONICAL_GAME_BUNDLE_SCHEMA_VERSION, validate_canonical_game_bundle
+from werewolf.canonical_collection.game_bundle import (
+    CANONICAL_GAME_BUNDLE_SCHEMA_VERSION, FullGameReplayExecutor, validate_canonical_game_bundle,
+)
 from werewolf.phase2_online_plan import Phase2RouterPolicyV1, ProbeStrategy
 
 
@@ -341,6 +343,8 @@ class GameplayLedger:
 
 def verify_results(ledger, replay_executor, verify_router):
     """Validate every full bundle, including games with zero interventions."""
+    if not isinstance(replay_executor, FullGameReplayExecutor):
+        raise TypeError("Gameplay winners require a full-game terminal replay executor")
     _, games = ledger.read()
     game_plan = collection_plan_from_record(ledger.plan["game_plan"])
     results = []
@@ -429,11 +433,13 @@ def qualification_diagnostics(outcomes):
                 and r["router_process"]["t3_committed"] for r in outcomes)}
 
 
-def validate_publication(path, expected_digest, replay_executor, verify_router):
+def validate_publication(path, expected_digest, replay_executor, verify_router, *, expected_plan):
     artifact = verify_artifact(safe_path(path), expected_artifact_type="phase2_router_gameplay", expected_schema_version=VERSION)
     if artifact.manifest_digest != expected_digest:
         raise ValueError("publication digest mismatch")
     plan = validate_plan(_load_canonical_json(read_artifact_file(artifact, "run_plan.json")))
+    if canonical_json_bytes(plan) != canonical_json_bytes(validate_plan(expected_plan)):
+        raise ValueError("publication does not match the specified prepared plan/source")
     # The publication includes a byte-identical immutable run_inputs copy.
     ledger = GameplayLedger(artifact.path, plan)
     verified = verify_results(ledger, replay_executor, verify_router)
