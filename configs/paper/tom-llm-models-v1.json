@@ -1,0 +1,225 @@
+{
+  "mistral": {
+    "assets": {
+      "config.json": {
+        "bytes": 601,
+        "sha256": "affafc6478ec0fd07a32f0ca57aa2fc57743f4d17d6730f86a96ac24d1507f99"
+      },
+      "generation_config.json": {
+        "bytes": 116,
+        "sha256": "b4669f1b8f4185324bd9b12a69e85a1ad2289bc48111ef739cfaaea3bba6b0a9"
+      },
+      "special_tokens_map.json": {
+        "bytes": 414,
+        "sha256": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0"
+      },
+      "tokenizer.json": {
+        "bytes": 1961548,
+        "sha256": "e553af6fff7d7ad76e830608b218c5c0b0822998d5a1a96099a74cd3c1cb1a49"
+      },
+      "tokenizer.model": {
+        "bytes": 587404,
+        "sha256": "37f00374dea48658ee8f5d0f21895b9bc55cb0103939607c8185bfd1c6ca1f89"
+      },
+      "tokenizer_config.json": {
+        "bytes": 140874,
+        "sha256": "0533dec9cfe319163801b6618d0f3ec9cfa126b6288e3df5deca6e32acb09cd2"
+      }
+    },
+    "chat_template": {
+      "kwargs": {},
+      "path": "model_assets/mistral.jinja",
+      "sha256": "e16746b40344d6c5b5265988e0328a0bf7277be86f1c335156eae07e29c82826"
+    },
+    "context_length": 8192,
+    "decoding": {
+      "max_tokens": 512,
+      "min_p": 0,
+      "n": 1,
+      "seed": 20261014,
+      "temperature": 0,
+      "top_k": -1,
+      "top_p": 1
+    },
+    "dtype": "bfloat16",
+    "key": "mistral",
+    "model": "mistralai/Mistral-7B-Instruct-v0.3",
+    "native_context_length": 32768,
+    "quantization": null,
+    "readiness": "CPU_MOCK_ONLY_NOT_ADMITTED",
+    "revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+    "schema_version": "classic7_llm_model_spec_v1",
+    "source": {
+      "file_url_prefix": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/c170c708c41dac9275d15a8fff4eca08d52bab71/",
+      "repo": "mistralai/Mistral-7B-Instruct-v0.3",
+      "revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+      "snapshot_kind": "official_tokenizer_config_only",
+      "weights_verified": false
+    },
+    "termination": {
+      "extra_stop_token_ids": [],
+      "generation_eos_token_id": 2
+    },
+    "tokenizer": {
+      "add_generation_prompt": true,
+      "add_special_tokens": false,
+      "bos_token": "<s>",
+      "bos_token_id": 1,
+      "class": "LlamaTokenizer",
+      "eos_token": "</s>",
+      "eos_token_id": 2
+    },
+    "tokenizer_revision": "c170c708c41dac9275d15a8fff4eca08d52bab71"
+  },
+  "qwen3": {
+    "assets": {
+      "config.json": {
+        "bytes": 728,
+        "sha256": "f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30"
+      },
+      "generation_config.json": {
+        "bytes": 239,
+        "sha256": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed22ca97d4cb993d2"
+      },
+      "merges.txt": {
+        "bytes": 1671853,
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      },
+      "tokenizer.json": {
+        "bytes": 11422654,
+        "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+      },
+      "tokenizer_config.json": {
+        "bytes": 9732,
+        "sha256": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101"
+      },
+      "vocab.json": {
+        "bytes": 2776833,
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    "chat_template": {
+      "kwargs": {
+        "enable_thinking": false
+      },
+      "path": "assets/chat_template.jinja",
+      "sha256": "9e35b8b74492fa12cfcc68184f6992e900048bd61b36a7ec438737d8628e2f1f"
+    },
+    "context_length": 8192,
+    "decoding": {
+      "max_tokens": 512,
+      "min_p": 0,
+      "n": 1,
+      "seed": 20261014,
+      "temperature": 0,
+      "top_k": -1,
+      "top_p": 1
+    },
+    "dtype": "bfloat16",
+    "key": "qwen3",
+    "model": "Qwen/Qwen3-8B",
+    "native_context_length": 40960,
+    "quantization": null,
+    "readiness": "CPU_MOCK_ONLY_NOT_ADMITTED",
+    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "schema_version": "classic7_llm_model_spec_v1",
+    "source": {
+      "file_url_prefix": "https://huggingface.co/Qwen/Qwen3-8B/resolve/b968826d9c46dd6066d109eabc6255188de91218/",
+      "repo": "Qwen/Qwen3-8B",
+      "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+      "snapshot_kind": "official_tokenizer_config_only",
+      "weights_verified": false
+    },
+    "termination": {
+      "extra_stop_token_ids": [],
+      "generation_eos_token_id": [
+        151645,
+        151643
+      ]
+    },
+    "tokenizer": {
+      "add_generation_prompt": true,
+      "add_special_tokens": false,
+      "bos_token": null,
+      "bos_token_id": null,
+      "class": "Qwen2Tokenizer",
+      "eos_token": "<|im_end|>",
+      "eos_token_id": 151645
+    },
+    "tokenizer_revision": "b968826d9c46dd6066d109eabc6255188de91218"
+  },
+  "yi": {
+    "assets": {
+      "config.json": {
+        "bytes": 639,
+        "sha256": "84818d0aa650bb8f668a8bae5e569c4f1d79b913d329f59c1536ab2544e88250"
+      },
+      "generation_config.json": {
+        "bytes": 111,
+        "sha256": "5d96ed7903c0b56b0bfb894ffe2fb9783b57d75eaf58726b81b36a330904fb09"
+      },
+      "special_tokens_map.json": {
+        "bytes": 570,
+        "sha256": "60e13afe3f527b158f80280639bf11d3f7bf5ac660fb282be3dd5669042a6099"
+      },
+      "tokenizer.json": {
+        "bytes": 3602758,
+        "sha256": "a13ccc285aea27f5e9a98d40e04e330b01d89db6de7af10b013f56eec8eae8a2"
+      },
+      "tokenizer.model": {
+        "bytes": 1033105,
+        "sha256": "386c49cf943d71aa110361135338c50e38beeff0a66593480421f37b319e1a39"
+      },
+      "tokenizer_config.json": {
+        "bytes": 1677,
+        "sha256": "2296d393a86abb12afc0c301fef45197da31fb0e691062ae992789c072b5e4b0"
+      }
+    },
+    "chat_template": {
+      "kwargs": {},
+      "path": "model_assets/yi.jinja",
+      "sha256": "91aa728ae59c8e30443382f44f48d594b5f7afe91a449c0e5ed0e920a71d60a2"
+    },
+    "context_length": 8192,
+    "decoding": {
+      "max_tokens": 512,
+      "min_p": 0,
+      "n": 1,
+      "seed": 20261014,
+      "temperature": 0,
+      "top_k": -1,
+      "top_p": 1
+    },
+    "dtype": "bfloat16",
+    "key": "yi",
+    "model": "01-ai/Yi-1.5-9B-Chat-16K",
+    "native_context_length": 16384,
+    "quantization": null,
+    "readiness": "CPU_MOCK_ONLY_NOT_ADMITTED",
+    "revision": "2f8753bed95bd4fede3fd64f8305428620b4b212",
+    "schema_version": "classic7_llm_model_spec_v1",
+    "source": {
+      "file_url_prefix": "https://huggingface.co/01-ai/Yi-1.5-9B-Chat-16K/resolve/2f8753bed95bd4fede3fd64f8305428620b4b212/",
+      "repo": "01-ai/Yi-1.5-9B-Chat-16K",
+      "revision": "2f8753bed95bd4fede3fd64f8305428620b4b212",
+      "snapshot_kind": "official_tokenizer_config_only",
+      "weights_verified": false
+    },
+    "termination": {
+      "extra_stop_token_ids": [
+        7
+      ],
+      "generation_eos_token_id": 2
+    },
+    "tokenizer": {
+      "add_generation_prompt": true,
+      "add_special_tokens": false,
+      "bos_token": "<|startoftext|>",
+      "bos_token_id": 1,
+      "class": "LlamaTokenizer",
+      "eos_token": "<|im_end|>",
+      "eos_token_id": 7
+    },
+    "tokenizer_revision": "2f8753bed95bd4fede3fd64f8305428620b4b212"
+  }
+}
