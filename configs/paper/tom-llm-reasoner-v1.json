@@ -1,0 +1,52 @@
+{
+  "schema_version": "classic7_llm_reasoner_policy_v1",
+  "model": "Qwen/Qwen3-8B",
+  "model_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+  "dtype": "bfloat16",
+  "quantization": null,
+  "mode": "zero_shot_nonthinking",
+  "chat_template_version": "qwen3_single_turn_nonthinking_v1",
+  "prompt_version": "classic7_llm_public_plan_prompt_v1",
+  "decoding": {
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": -1,
+    "min_p": 0,
+    "n": 1,
+    "max_tokens": 512,
+    "seed": 20261014,
+    "enable_thinking": false
+  },
+  "normalization": {
+    "sum_tolerance": 0.001,
+    "epsilon": 1e-06,
+    "fallback": "uniform_non_self"
+  },
+  "semantic_attempts": 1,
+  "transport_attempts": 2,
+  "sdk_max_retries": 0,
+  "max_structured_tokens": 1024,
+  "context_length": 8192,
+  "dispatch_population": "public_alive",
+  "evaluation_population": "non_wolf_alive",
+  "reference_temporal_condition": "explicit_day_phase",
+  "canonical_shift": 0,
+  "subset": {
+    "version": "tom_llm_subset_v1",
+    "seed": 20261014,
+    "games_per_fold": 30
+  },
+  "bootstrap": {
+    "replicates": 10000,
+    "confidence": 0.95,
+    "unit": "game",
+    "interval_method": "percentile_linear",
+    "seed": 2196221715671680944
+  },
+  "limitations": [
+    "pretraining_and_posttraining",
+    "explicit_rules_and_action_lexicon",
+    "qwen_family_related_to_generator",
+    "method_comparison_not_architecture_ablation"
+  ]
+}

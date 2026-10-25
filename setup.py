@@ -6,6 +6,7 @@ setup(
     description="Multi-agent Theory-of-Mind reasoning in Werewolf.",
     keywords="werewolf, multi-agent, theory-of-mind",
     packages=find_packages(),
+    package_data={"werewolf.tom_llm": ["assets/*.txt", "assets/*.jinja"]},
     py_modules=["run_random"],
     entry_points={"console_scripts": ["uns=werewolf.cli:main"]},
     python_requires=">=3.10",
@@ -20,6 +21,7 @@ setup(
         "tiktoken>=0.7.0",
     ],
     extras_require={
+        "llm-reasoner": ["Jinja2>=3.1,<4"],
         "tom": [
             "torch>=2.0.0",
             "transformers>=4.47.1",

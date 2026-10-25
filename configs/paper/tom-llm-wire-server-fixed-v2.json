@@ -1,0 +1,25 @@
+{
+  "schema_version": "classic7_llm_wire_server_fixed_v2",
+  "template_origin": "server_fixed",
+  "template_source": "werewolf/tom_llm/assets/chat_template.jinja",
+  "template_sha256": "9e35b8b74492fa12cfcc68184f6992e900048bd61b36a7ec438737d8628e2f1f",
+  "tokenizer_asset_set_digest": "2a79647fc03fd742128d932e571e644d73d350076d88388e3baf49e5aa3fca91",
+  "server": {
+    "model": "Qwen/Qwen3-8B",
+    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "tokenizer_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "dtype": "bfloat16",
+    "quantization": null,
+    "served_model_name": "Qwen/Qwen3-8B",
+    "max_model_len": 8192,
+    "chat_template": "chat_template.jinja",
+    "chat_template_content_format": "string",
+    "trust_request_chat_template": false,
+    "generation_config": "auto",
+    "generation_config_sha256": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed22ca97d4cb993d2",
+    "add_generation_prompt": true,
+    "continue_final_message": false,
+    "add_special_tokens": false,
+    "reasoning_parser": null
+  }
+}

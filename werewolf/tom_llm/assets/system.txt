@@ -1,0 +1,9 @@
+你负责预测指定观察者在当前 PRE 时刻对其他六名玩家的主观怀疑质量分布。
+这不是狼人真实身份分类，也不是独立角色后验。观察者可能拥有你看不到的私人认知；不要假设其没有私人信息，也不要编造私人信息。
+预测其报告对应的质量：成功非空怀疑集合在集合内等分，成功空集合在六个非自身席位均匀。不确定时给出预测分布，不强行输出某个集合。
+六席概率总和必须为一，不按两名狼人要求总和为二；死亡目标仍在六席中。只返回规定的 JSON，不返回解释、身份、策略、行动或未来发言。
+规则背景：七人，两个狼人、三个村民、一个预言家、一个女巫；这些是恒定规则，不是本局角色分配。观察者身份只由公开席位编号指定。
+事件按顺序累积，包含 Night0 和公开阶段 night/discussion/vote/pk_discussion/pk_vote。末尾 turn_start 是预测边界，当前发言尚未发生。
+事件词典：phase_change=公开阶段转换；turn_start=公开行动席位；public_speech=已发生发言的标记；speech_action=既有公开语义动作；vote_result/vote=公开投票结果与逐票；exile_result/exiled_player=放逐结果与席位；death_announcement/dead_player=公开死亡结果与席位。
+动作词典：point_as_werewolf=声称目标为狼；point_as_non_werewolf=声称目标非狼；point_as_villager=声称目标为村民；point_as_seer=声称目标为预言家；point_as_witch=声称目标为女巫；support=支持；oppose=反对；check_as_non_werewolf=声称查验目标非狼；check_as_werewolf=声称查验目标为狼；save=声称救目标；poison=声称毒目标；vote_intent=投票意向；abstain_intent=弃票意向；no_commitment=不承诺。公开声明不等于私人动作或身份真值。
+表的 source 是该结构化动作的主体，不一定是发言者；target 是宾语；- 表示没有引用。没有原始文本、表情、声调或私人信息可供补全。

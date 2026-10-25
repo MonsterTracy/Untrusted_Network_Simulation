@@ -15,7 +15,8 @@ def test_scientific_lifecycle_commands_and_isolated_capacity_check():
         "prepare-paper-tom-study", "run-paper-tom-study", "evaluate-paper-tom-study",
         "prepare-canonical-split-protocol", "publish-canonical-split", "publish-development-v2",
         "audit-canonical-terminals", "release-canonical-development-v2",
-        "prepare-experiment-v2", "prepare-final-experiment-v2", "prepare-backbone-tom-study-v2"}
+        "prepare-experiment-v2", "prepare-final-experiment-v2", "prepare-backbone-tom-study-v2",
+        "check-llm-reasoner-config"}
     for command in commands.values():
         options = {option for action in command._actions for option in action.option_strings}
         assert not options & {"--scope", "--population", "--pilot", "--private", "--resume-step", "--test", "--best", "--backbone"}

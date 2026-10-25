@@ -153,6 +153,8 @@ def build_parser():
     final_evaluation.add_argument("--experiment", type=Path, required=True)
     final_evaluation.add_argument("--publication", type=Path, required=True)
     final_evaluation.add_argument("--resume", action="store_true")
+    from werewolf.tom_llm.cli import register
+    register(commands)
     return parser
 
 
@@ -311,6 +313,10 @@ def validate_artifact(path, runtime_config=None, final_experiment_path=None, exp
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.command == "check-llm-reasoner-config":
+        from werewolf.tom_llm.cli import check_config
+        print(json.dumps(check_config(args.config), sort_keys=True))
+        return 0
     if args.command == "capacity-check":
         from werewolf.tom.capacity_check import NOTICE, check_training_capacity
         print(NOTICE, flush=True)
