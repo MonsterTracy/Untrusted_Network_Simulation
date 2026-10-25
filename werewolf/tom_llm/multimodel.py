@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import fcntl
+import os
+import subprocess
 from pathlib import Path
 
 from werewolf.artifact_io import (publish_artifact, verify_artifact, canonical_json_bytes,
@@ -23,11 +25,22 @@ def source_identity():
     root = Path(__file__).resolve().parents[2]
     files = dict(source['file_digests'])
     for name in ['configs/paper/tom-llm-models-v1.json', 'scripts/check_tom_multimodel_cpu.py',
+                 'scripts/tom_multimodel_admission.py',
+                 'configs/paper/tom-llm-physical-assets-v1.json',
+                 'configs/paper/tom-llm-qualification-recipe-v1.json',
+                 'werewolf/tom_llm/qualification_assets/qwen3-suite-v1.json',
                  *['werewolf/tom_llm/' + r['chat_template']['path'] for r in registry().values()]]:
         p = root / name
         require(not any(x.is_symlink() for x in (p, *p.parents)), 'multimodel source symlink')
         files[name] = sha256_bytes(p.read_bytes())
-    return {**source, 'schema_version': VERSION + '_source', 'file_digests': files,
+    # Recompute Git metadata over the complete extended runtime inventory.
+    # The legacy Qwen development_source contract remains untouched.
+    env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+    env.update(GIT_OPTIONAL_LOCKS='0', GIT_NO_LAZY_FETCH='1')
+    status = subprocess.check_output(['git','-C',str(root),'status','--porcelain=v1',
+        '--untracked-files=all','--',*sorted(files)],env=env,stderr=subprocess.PIPE).decode().strip()
+    return {**source, 'schema_version': 'classic7_multimodel_source_v2', 'file_digests': files,
+            'source_inventory_clean': not bool(status), 'source_status_digest': digest(status),
             'implementation_digest': digest(files), 'qualification': 'CPU_MOCK_ONLY_NOT_ADMITTED'}
 
 

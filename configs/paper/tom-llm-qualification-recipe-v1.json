@@ -1,0 +1,31 @@
+{
+  "frontend": {
+    "add_generation_prompt": true,
+    "add_special_tokens": false,
+    "continue_final_message": false,
+    "quantization": null,
+    "reasoning_parser": null
+  },
+  "generation_config": "auto",
+  "gpu_memory_utilization": 0.9,
+  "http_transport_retries": 0,
+  "instances": 2,
+  "max_num_seqs": 1,
+  "per_instance_calls": 38,
+  "prefix_caching": false,
+  "proxy_allowed": false,
+  "sampling_backend": "xgrammar",
+  "schema_version": "classic7_multimodel_deployment_recipe_v1",
+  "sdk_max_retries": 0,
+  "synthetic_only": true,
+  "vllm_source_sha256": {
+    "entrypoints/openai/api_server.py": "cd4b83e85dc9d5aae808348d336e59b3064bee697012750d23c786de082a1c53",
+    "entrypoints/openai/chat_completion/protocol.py": "69ca76724ccb4a2e990814767c344226d47ead7d608213a4939584cd048637dd",
+    "entrypoints/openai/chat_completion/serving.py": "f3fb82d6eeb956e0e5e9b8e17e135769b3378421ad0fb7958daaf774adc57079",
+    "sampling_params.py": "cc040f9b21e373be3fa5f47c0f3a50e77229dede20cae6a8019f2b7f5ce365cf",
+    "v1/engine/__init__.py": "fb7f8a1b1a1f9ce4ae838f7300f2e882c75339521ebf2168034860e6d3523df3",
+    "v1/engine/async_llm.py": "81a0cae6d5da22140f509a59d6c6bb8fc6ee1572da2a2cd793b5830222d18bcc",
+    "v1/engine/input_processor.py": "5de9296e6f4c00473a92df8df6e4e7e5f83fa37852c7540c4447c59a8b813111"
+  },
+  "vllm_version": "0.27.0"
+}
