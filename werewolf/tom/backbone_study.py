@@ -9,6 +9,7 @@ from werewolf.artifact_io import (canonical_json_bytes, sha256_bytes, publish_ar
     verify_artifact, publish_tensor_state, verify_tensor_state)
 from werewolf.artifact_io.tensor_state import encode_tensor_container
 from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input
 from werewolf.tom.backbone_model import (ARCHITECTURES, BACKBONE_CONFIGS, BackboneToM,
     graph_identity, initialization_seeds)
 from werewolf.tom.experiment import ExperimentConfig, configure_runtime, runtime_provenance
@@ -19,6 +20,7 @@ from werewolf.tom.state import model_tensor_values, restore_model_tensors
 from werewolf.tom.temporal import publish_temporal, TemporalCodeProvider
 
 STUDY_VERSION = "classic7_backbone_study_v1"
+STUDY_V2_VERSION = "classic7_backbone_study_v2"
 INITIAL_VERSION = "classic7_backbone_initial_v1"
 PAIRED_STUDY_VERSION = "classic7_qwen3_paired_temporal_study_v2"
 PAIRED_INITIAL_VERSION = "classic7_qwen3_paired_initial_v1"
@@ -60,6 +62,22 @@ def _design(schema):
 
 def _architectures(design):
     return ("qwen3",) if design["schema_version"] == PAIRED_STUDY_VERSION else ARCHITECTURES
+
+
+def validated_design(design, schema):
+    """V2 changes data identity/count only; V1 and paired contracts stay exact."""
+    if schema == STUDY_V2_VERSION:
+        if (not isinstance(design.get("publication_id"), str) or not design["publication_id"]
+                or type(design.get("game_count")) is not int or design["game_count"] < 5
+                or design["game_count"] % 5):
+            raise ValueError("V2 backbone design requires equal complete-game folds")
+        expected = {**_frozen_design(), "schema_version": STUDY_V2_VERSION,
+                    "publication_id": design["publication_id"], "game_count": design["game_count"]}
+    else:
+        expected = _design(schema)
+    if canonical_json_bytes(design) != canonical_json_bytes(expected):
+        raise ValueError("backbone study differs from frozen design")
+    return design
 
 
 def initialization_lineages(design):
@@ -136,16 +154,27 @@ def load_initial_state(path, model, *, study_digest, study_seed, fold, expected_
     return state
 
 
-def prepare_study(config_path, publication_path, destination, *, paired_temporal=False):
+def prepare_study(config_path, publication_path, destination, *, paired_temporal=False,
+                  publication_digest=None, split_digest=None):
     design = json.loads(Path(config_path).read_bytes())
-    if canonical_json_bytes(design) != canonical_json_bytes(_frozen_design()):
-        raise ValueError("backbone study differs from frozen design")
     if type(paired_temporal) is not bool:
         raise ValueError("paired temporal mode must be boolean")
-    if paired_temporal:
-        design = _paired_design()
+    v2 = publication_digest is not None or split_digest is not None
+    if v2:
+        if publication_digest is None or split_digest is None:
+            raise ValueError("V2 preparation requires trusted Publication and Split digests")
+        if paired_temporal:
+            raise ValueError("paired temporal V2 input is not a registered study contract")
+        validated_design(design, STUDY_V2_VERSION)
+    else:
+        if canonical_json_bytes(design) != canonical_json_bytes(_frozen_design()):
+            raise ValueError("backbone study differs from frozen design")
+        if paired_temporal:
+            design = _paired_design()
     source = attest_source()
-    publication = open_publication(publication_path)
+    publication = (open_development_input(publication_path,
+        expected_publication_digest=publication_digest, expected_split_digest=split_digest)
+        if v2 else open_publication(publication_path))
     inputs, population = _inputs(design, publication, source)
     study_digest = _digest(inputs)
     config = ExperimentConfig(**design["reference_protocol"])
@@ -189,7 +218,8 @@ def prepare_study(config_path, publication_path, destination, *, paired_temporal
 
 def verify_study_artifact(path):
     schema = json.loads((Path(path) / "manifest.json").read_bytes())["schema_version"]
-    _design(schema)  # Only the frozen historical and paired study contracts.
+    if schema != STUDY_V2_VERSION:
+        _design(schema)  # Keep the exact historical and paired study contracts.
     return verify_artifact(path, expected_artifact_type="backbone_tom_study",
                            expected_schema_version=schema)
 
@@ -200,10 +230,11 @@ def open_study(path):
     if set(m) != {"artifact_type", "schema_version", "protocol_inputs", "study_digest", "publication_path",
                   "runtime", "temporal_artifact_digest", "folds", "initializations", "file_table", "manifest_digest"}:
         raise ValueError("backbone study schema mismatch")
-    design = _design(m["schema_version"])
+    design = validated_design(m["protocol_inputs"]["design"], m["schema_version"])
     paired_temporal = design["schema_version"] == PAIRED_STUDY_VERSION
     source = attest_source()
-    publication = open_publication(m["publication_path"])
+    publication = open_development_input(m["publication_path"],
+        expected_publication_digest=m["protocol_inputs"]["publication_digest"])
     inputs, population = _inputs(design, publication, source)
     if _digest(m["protocol_inputs"]) != _digest(inputs) or m["study_digest"] != _digest(inputs):
         raise ValueError("backbone study source/config/publication binding mismatch")

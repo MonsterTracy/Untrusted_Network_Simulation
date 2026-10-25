@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes, verify_artifact
-from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.tom import backbone_execution as training, evaluation
 from werewolf.tom.backbone_model import ARCHITECTURES
 from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors
@@ -86,6 +86,7 @@ def open_sealed_training(root, execution_digest, seal_digest, training_revision)
     m = contract.manifest
     snapshot = training.validate_frozen_snapshot(m["prepared_path"], m["preparation"])
     paired = snapshot.manifest["schema_version"] == training.prepared.PAIRED_STUDY_VERSION
+    v2 = snapshot.manifest["schema_version"] == training.prepared.STUDY_V2_VERSION
     lineages = training.study_lineages(snapshot)
     if (contract.manifest_digest != execution_digest
             or set(m) != {"artifact_type", "schema_version", "engineering_only", "prepared_path", "preparation",
@@ -95,11 +96,12 @@ def open_sealed_training(root, execution_digest, seal_digest, training_revision)
             or m["schema_version"] != (training.PAIRED_EXECUTION_VERSION if paired else training.EXECUTION_VERSION)
             or m["lineages"] != [list(x) for x in lineages]
             or m["training_rng_version"] != (training.PAIRED_RNG_VERSION if paired else training.RNG_VERSION)
-            or type(m["expected_optimizer_steps"]) is not int or m["expected_optimizer_steps"] != 25200
+            or type(m["expected_optimizer_steps"]) is not int
+            or m["expected_optimizer_steps"] != training.formal_optimizer_steps(snapshot)
             or type(m["recovery_cadence"]) is not int or m["recovery_cadence"] != 1000
             or set(m["execution_source"]) != {"source_revision", "implementation_digest"}
-            or (not paired and training_revision != TRAINING_REVISION)
-            or re.fullmatch(r"[0-9a-f]{40}", training_revision) is None
+            or (not paired and not v2 and training_revision != TRAINING_REVISION)
+            or not isinstance(training_revision, str) or re.fullmatch(r"[0-9a-f]{40}", training_revision) is None
             or m["execution_source"]["source_revision"] != training_revision
             or m["execution_source"]["implementation_digest"] != m["runtime"]["implementation_digest"]):
         raise ValueError("historical training contract identity/control mismatch")
@@ -110,7 +112,7 @@ def open_sealed_training(root, execution_digest, seal_digest, training_revision)
                  {k: v for k, v in snapshot.manifest["runtime"].items() if k != "implementation_digest"}):
         raise ValueError("historical preparation/execution runtime mismatch")
     config = ExperimentConfig(**snapshot.manifest["protocol_inputs"]["design"]["reference_protocol"])
-    if config.recovery_cadence != 1000 or any(f["optimizer_steps"] != 25200 for f in snapshot.manifest["folds"]):
+    if config.recovery_cadence != 1000:
         raise ValueError("historical formal budget mismatch")
     seal = verify_artifact(root / "seal", expected_artifact_type="backbone_execution_seal",
                            expected_schema_version=training.PAIRED_SEAL_VERSION if paired else training.SEAL_VERSION)
@@ -147,9 +149,10 @@ def validate_historical_terminal(owner, architecture, fold, temporal_condition=C
         raise ValueError("historical terminal ownership mismatch")
     model, optimizer = training._model_optimizer(execution, architecture, fold)
     logs, ancestry = training._recovery_chain(execution, architecture, fold, model, optimizer)
-    if len(logs) != 25200 or not ancestry or ancestry[-1]["step"] != 25200:
+    budget = training.formal_optimizer_steps(execution.snapshot)
+    if len(logs) != budget or not ancestry or ancestry[-1]["step"] != budget:
         raise ValueError("historical terminal incomplete")
-    checkpoint = verify_artifact(lineage / "recovery" / "25200", expected_artifact_type="backbone_recovery",
+    checkpoint = verify_artifact(lineage / "recovery" / str(budget), expected_artifact_type="backbone_recovery",
                                  expected_schema_version=training.CHECKPOINT_VERSION)
     expected = training._terminal_fields(execution, architecture, fold, checkpoint, ancestry)
     terminal = verify_artifact(lineage / "terminal", expected_artifact_type="backbone_terminal",
@@ -174,10 +177,14 @@ def _evaluation_source(owner):
             raise ValueError("paired training/inference source changed")
         return source, runtime
     revision = owner.execution.manifest["execution_source"]["source_revision"]
-    if revision != TRAINING_REVISION or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+    v2 = owner.execution.snapshot.manifest["schema_version"] == training.prepared.STUDY_V2_VERSION
+    if ((not v2 and revision != TRAINING_REVISION)
+            or not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None):
         raise ValueError("invalid historical training revision")
     project = Path(__file__).resolve().parents[2]
-    for relative in INFERENCE_SOURCES:
+    sources = INFERENCE_SOURCES + (("werewolf/canonical_split.py", "werewolf/development_publication_v2.py",
+                                   "werewolf/tom/development_input.py") if v2 else ())
+    for relative in sources:
         try:
             frozen = subprocess.check_output(["git", "-C", str(project), "show", f"{revision}:{relative}"],
                                               env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
@@ -234,7 +241,8 @@ def _held_out(owner, fold):
     execution = owner.execution
     record = execution.snapshot.manifest["folds"][fold]
     ids = record["held_out_game_ids"]
-    publication = open_publication(execution.snapshot.manifest["publication_path"], game_ids=ids)
+    publication = open_publication(execution.snapshot.manifest["publication_path"],
+        expected_publication_digest=execution.snapshot.manifest["protocol_inputs"]["publication_digest"], game_ids=ids)
     if publication.manifest_digest != execution.snapshot.manifest["protocol_inputs"]["publication_digest"]:
         raise ValueError("held-out publication binding mismatch")
     dataset = CanonicalToMDataset(publication.public_view, ids, ExperimentCapacity(execution.config.max_seq_len))

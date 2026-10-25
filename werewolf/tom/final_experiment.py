@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact, verify_artifact, sha256_bytes
-from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.tom.dataset import ExperimentCapacity
 from werewolf.tom.experiment import (ExperimentConfig, TEMPORAL_CONDITIONS, RECOVERY_POLICY,
     configure_runtime, runtime_provenance, validate_runtime, read_json)
@@ -78,7 +78,7 @@ class VerifiedFinalExperiment:
 def prepare_final_experiment(publication, config, destination):
     revision = actual_clean_revision()
     configure_runtime(config)
-    publication = open_publication(publication.path)
+    publication = open_publication(publication.path, expected_publication_digest=publication.manifest_digest)
     capacity = derived_capacity(config.max_seq_len)
     for game in publication.public_view.games:
         for prefix in game.authoritative_pre_prefixes:
@@ -161,7 +161,7 @@ def final_training_inputs(experiment):
     validate_runtime(experiment)
     if actual_clean_revision() != experiment.manifest["protocol_inputs"]["actual_source_revision"]:
         raise ValueError("final implementation revision changed")
-    publication = open_publication(experiment.manifest["publication_path"])
+    publication = open_publication(experiment.manifest["publication_path"], expected_publication_digest=experiment.manifest["publication_digest"])
     if (publication.manifest_digest != experiment.manifest["publication_digest"]
         or publication.public_view.publication_id != experiment.manifest["publication_id"]
         or sorted(publication.public_view.game_ids) != experiment.manifest["game_ids"]):

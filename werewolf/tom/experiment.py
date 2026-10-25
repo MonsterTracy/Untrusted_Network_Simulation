@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import transformers
 
-from werewolf.artifact_io import (canonical_json_bytes, canonical_jsonl_bytes, open_artifact_envelope,
+from werewolf.artifact_io import (ArtifactValidationError, canonical_json_bytes, canonical_jsonl_bytes, open_artifact_envelope,
     publish_artifact, read_artifact_file, sha256_bytes)
 from werewolf.tom.dataset import ExperimentCapacity
 from werewolf.tom.model import MODEL_GRAPH, ObserverConditionedToM
@@ -287,11 +287,15 @@ def validate_experiment_preflight(experiment):
         # all-ten seal before it opens any held-out records or eligibility.
         from werewolf.tom.training import verify_checkpoint_set
         verify_checkpoint_set(experiment)
-    from werewolf.development_publication import open_publication
+    from werewolf.tom.development_input import open_development_input as open_publication
     from werewolf.tom.population import load_training_primary, load_held_out_primary, load_held_out_all_alive
     from werewolf.tom.protocol import load_bootstrap_plan
     from werewolf.tom.state import load_model_state
-    publication = open_publication(experiment.manifest["publication_path"])
+    try:
+        publication = open_publication(experiment.manifest["publication_path"],
+            expected_publication_digest=experiment.manifest["publication_digest"])
+    except ArtifactValidationError as error:
+        raise ValueError(f"experiment publication preflight rejected: {error}") from error
     if (publication.manifest_digest != experiment.manifest["publication_digest"]
         or publication.public_view.publication_id != experiment.manifest["publication_id"]
         or publication.public_view.fold_manifest.manifest_digest != experiment.manifest["fold_manifest_digest"]

@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, sha256_bytes
-from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors
 from werewolf.tom.experiment import read_json, validate_runtime
 from werewolf.tom.run_records import publish_record, publish_run_bytes, read_record
@@ -19,7 +19,7 @@ from werewolf.tom.population import load_held_out_primary, load_held_out_all_ali
 def _held_out_data(experiment, fold):
     verify_checkpoint_set(experiment)
     validate_runtime(experiment)
-    publication = open_publication(experiment.manifest["publication_path"], game_ids=experiment.fold(fold)["held_out_game_ids"])
+    publication = open_publication(experiment.manifest["publication_path"], expected_publication_digest=experiment.manifest["publication_digest"], game_ids=experiment.fold(fold)["held_out_game_ids"])
     if publication.manifest_digest != experiment.manifest["publication_digest"]:
         raise ValueError("held-out publication parent mismatch")
     data = CanonicalToMDataset(publication.public_view, publication.public_view.game_ids, ExperimentCapacity(experiment.config.max_seq_len))

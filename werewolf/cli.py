@@ -110,6 +110,13 @@ def build_parser():
     experiment.add_argument("--publication", type=Path, required=True)
     experiment.add_argument("--protocol", type=Path, required=True)
     experiment.add_argument("--destination", type=Path, required=True)
+    for name in ("prepare-experiment-v2", "prepare-final-experiment-v2", "prepare-backbone-tom-study-v2"):
+        development_v2 = commands.add_parser(name)
+        development_v2.add_argument("--publication", type=Path, required=True)
+        development_v2.add_argument("--publication-digest", required=True)
+        development_v2.add_argument("--split-digest", required=True)
+        development_v2.add_argument("--destination", type=Path, required=True)
+        development_v2.add_argument("--config" if name == "prepare-backbone-tom-study-v2" else "--protocol", type=Path, required=True)
     terminal_audit = commands.add_parser("audit-canonical-terminals")
     terminal_audit.add_argument("--collection", type=Path, required=True)
     terminal_audit.add_argument("--runtime-config", type=Path, required=True)
@@ -312,6 +319,26 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command in {"prepare-experiment-v2", "prepare-final-experiment-v2", "prepare-backbone-tom-study-v2"}:
+        from werewolf.tom.development_input import open_development_input
+        publication_path = _artifact_path(root, args.publication, "publications")
+        publication = open_development_input(publication_path,
+            expected_publication_digest=args.publication_digest, expected_split_digest=args.split_digest)
+        if args.command == "prepare-backbone-tom-study-v2":
+            from werewolf.tom.backbone_study import prepare_study
+            identity = prepare_study(args.config, publication_path, _artifact_path(root, args.destination),
+                publication_digest=args.publication_digest, split_digest=args.split_digest).manifest_digest
+        else:
+            from werewolf.tom.experiment import ExperimentConfig, prepare_experiment
+            config = ExperimentConfig(**json.loads(args.protocol.read_bytes()))
+            destination = _experiment_path(root, args.destination)
+            if args.command == "prepare-final-experiment-v2":
+                from werewolf.tom.final_experiment import prepare_final_experiment
+                identity = prepare_final_experiment(publication, config, destination).digest
+            else:
+                identity = prepare_experiment(publication, config, destination).digest
+        print(identity)
+        return 0
     if args.command == "release-canonical-development-v2":
         from werewolf.canonical_release import publish_canonical_release
         from werewolf.canonical_split import open_split_protocol

@@ -13,7 +13,7 @@ import torch
 from werewolf.artifact_io import (canonical_json_bytes, sha256_bytes, publish_artifact,
     verify_artifact, open_artifact_envelope, canonical_jsonl_bytes)
 from werewolf.artifact_io.tensor_state import encode_tensor_container
-from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.tom.population import load_training_primary
 from werewolf.tom.protocol import digest_fields
 from werewolf.tom.experiment import (prepare_experiment, open_experiment, validate_runtime,
@@ -261,7 +261,7 @@ def _train_baseline(study, condition, fold):
     lineage = training.lineage_path(experiment, fold, condition)
     fold_record = experiment.fold(fold)
     schedule = experiment.schedule(fold)
-    publication = open_publication(full.manifest["publication_path"], game_ids=fold_record["training_game_ids"])
+    publication = open_publication(full.manifest["publication_path"], expected_publication_digest=full.manifest["publication_digest"], game_ids=fold_record["training_game_ids"])
     if (publication.manifest_digest != full.manifest["publication_digest"]
             or publication.public_view.fold_manifest.manifest_digest != full.manifest["fold_manifest_digest"]
             or set(publication.public_view.fold_manifest.folds[fold].game_ids) != set(fold_record["held_out_game_ids"])):

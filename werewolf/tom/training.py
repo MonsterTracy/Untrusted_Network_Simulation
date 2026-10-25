@@ -10,7 +10,7 @@ import torch
 
 from werewolf.artifact_io import TensorValue, canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes, verify_artifact
 from werewolf.artifact_io.tensor_state import encode_tensor_container, decode_tensor_container
-from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors, rotate
 from werewolf.tom.experiment import (TEMPORAL_CONDITIONS, RECOVERY_POLICY, open_experiment,
     validate_runtime, read_json, MODEL_GRAPH)
@@ -254,7 +254,7 @@ def _train_worker(path, expected_digest, fold, condition):
         return verify_terminal(experiment, fold, condition)
     schedule = experiment.schedule(fold)
     fold_record = experiment.fold(fold)
-    publication = open_publication(experiment.manifest["publication_path"], game_ids=fold_record["training_game_ids"])
+    publication = open_publication(experiment.manifest["publication_path"], expected_publication_digest=experiment.manifest["publication_digest"], game_ids=fold_record["training_game_ids"])
     if publication.manifest_digest != experiment.manifest["publication_digest"] or publication.public_view.fold_manifest.manifest_digest != experiment.manifest["fold_manifest_digest"]:
         raise ValueError("publication/fold parent mismatch")
     if set(publication.public_view.fold_manifest.folds[fold].game_ids) != set(fold_record["held_out_game_ids"]):

@@ -73,7 +73,8 @@ def historical_evaluation_source(monkeypatch):
     monkeypatch.setattr(Path, "read_bytes", read_historical)
     old_runtime = {"source_revision": "reference-scientific-revision", "implementation_digest": "a" * 64,
                    "torch": "frozen"}
-    owner = SimpleNamespace(execution=SimpleNamespace(config=object(), paired=False, manifest={
+    owner = SimpleNamespace(execution=SimpleNamespace(config=object(), paired=False,
+        snapshot=SimpleNamespace(manifest={"schema_version": training.prepared.STUDY_VERSION}), manifest={
         "runtime": old_runtime, "execution_source": {"source_revision": revision,
         "implementation_digest": "a" * 64}}))
     source = {"source_revision": "c" * 40, "implementation_digest": "b" * 64}

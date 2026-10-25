@@ -19,7 +19,7 @@ from werewolf.artifact_io import (canonical_json_bytes, canonical_jsonl_bytes, s
     publish_artifact, verify_artifact)
 from werewolf.artifact_io.tensor_state import encode_tensor_container, decode_tensor_container
 from werewolf.artifact_io.canonical import ensure_durable_directory
-from werewolf.development_publication import open_publication
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.tom import backbone_study as prepared, training
 from werewolf.tom.backbone_model import ARCHITECTURES, BackboneToM, graph_identity
 from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity
@@ -54,6 +54,18 @@ def study_lineages(snapshot):
                  for f in range(5) for t in design["temporal_conditions"])
 
 
+def formal_optimizer_steps(snapshot):
+    budgets = {fold["optimizer_steps"] for fold in snapshot.manifest["folds"]}
+    if len(budgets) != 1:
+        raise ValueError("formal backbone folds require equal fixed step budgets")
+    budget = budgets.pop()
+    if type(budget) is not int or budget <= 0:
+        raise ValueError("formal backbone step budget must be a positive integer")
+    if snapshot.manifest["schema_version"] != prepared.STUDY_V2_VERSION and budget != 25200:
+        raise ValueError("historical and paired formal backbone budget remains 25200")
+    return budget
+
+
 def snapshot_identity(artifact):
     m = artifact.manifest
     return {"manifest_digest": artifact.manifest_digest, "study_digest": m["study_digest"],
@@ -69,7 +81,7 @@ def validate_frozen_snapshot(path, identity):
     """
     artifact = prepared.verify_study_artifact(path)
     m = artifact.manifest
-    design = prepared._design(m["schema_version"])
+    design = prepared.validated_design(m["protocol_inputs"]["design"], m["schema_version"])
     paired = m["schema_version"] == prepared.PAIRED_STUDY_VERSION
     if (set(identity) != {"manifest_digest", "study_digest", "source_revision", "implementation_digest"}
             or any(re.fullmatch(r"[0-9a-f]{40}" if k == "source_revision" else r"[0-9a-f]{64}", v) is None
@@ -78,7 +90,8 @@ def validate_frozen_snapshot(path, identity):
     if set(m) != {"artifact_type", "schema_version", "protocol_inputs", "study_digest", "publication_path",
                   "runtime", "temporal_artifact_digest", "folds", "initializations", "file_table", "manifest_digest"}:
         raise ValueError("frozen preparation schema mismatch")
-    publication = open_publication(m["publication_path"])
+    publication = open_publication(m["publication_path"],
+        expected_publication_digest=m["protocol_inputs"]["publication_digest"])
     inputs, population = prepared._inputs(design, publication, m["protocol_inputs"]["source"])
     if (not _same(inputs, m["protocol_inputs"]) or _hash(inputs) != identity["study_digest"]
             or m["runtime"]["implementation_digest"] != identity["implementation_digest"]):
@@ -167,8 +180,9 @@ def create_execution(study_path, expected_manifest_digest, *, engineering=False)
     identity = snapshot_identity(snapshot)
     snapshot = validate_frozen_snapshot(snapshot.path, identity)
     config = ExperimentConfig(**snapshot.manifest["protocol_inputs"]["design"]["reference_protocol"])
-    if not engineering and (config.recovery_cadence != 1000 or any(f["optimizer_steps"] != 25200 for f in snapshot.manifest["folds"])):
-        raise ValueError("formal execution requires 25200 steps and cadence 1000")
+    if not engineering and config.recovery_cadence != 1000:
+        raise ValueError("formal execution requires cadence 1000")
+    budget = 2 if engineering else formal_optimizer_steps(snapshot)
     source, runtime = _runtime(config)
     if not _same({k: v for k, v in runtime.items() if k != "implementation_digest"},
                  {k: v for k, v in snapshot.manifest["runtime"].items() if k != "implementation_digest"}):
@@ -181,7 +195,7 @@ def create_execution(study_path, expected_manifest_digest, *, engineering=False)
         "execution_source": source, "runtime": runtime,
         "lineages": [list(x) for x in study_lineages(snapshot)], "training_rng_version": PAIRED_RNG_VERSION if snapshot.manifest["schema_version"] == prepared.PAIRED_STUDY_VERSION else RNG_VERSION,
         "recovery_cadence": 1 if engineering else 1000,
-        "expected_optimizer_steps": 2 if engineering else 25200,
+        "expected_optimizer_steps": budget,
     }, files={})
     return Execution(artifact, snapshot, config)
 
@@ -206,7 +220,8 @@ def open_execution(root):
             or not _same(m["lineages"], [list(x) for x in study_lineages(snapshot)])
             or m["training_rng_version"] != (PAIRED_RNG_VERSION if paired else RNG_VERSION)
             or type(m["recovery_cadence"]) is not int or m["recovery_cadence"] != (1 if engineering else 1000)
-            or type(m["expected_optimizer_steps"]) is not int or m["expected_optimizer_steps"] != (2 if engineering else 25200)):
+            or type(m["expected_optimizer_steps"]) is not int
+            or m["expected_optimizer_steps"] != (2 if engineering else formal_optimizer_steps(snapshot))):
         raise ValueError("execution schema/lineage/control mismatch")
     expected_root = snapshot.path.parent / ("engineering-executions" if engineering else "executions") / snapshot.manifest_digest
     if artifact.path.parent != expected_root:
@@ -217,7 +232,7 @@ def open_execution(root):
             or not _same({k: v for k, v in runtime.items() if k != "implementation_digest"},
                          {k: v for k, v in snapshot.manifest["runtime"].items() if k != "implementation_digest"})):
         raise ValueError("execution source identity changed")
-    if not engineering and (config.recovery_cadence != 1000 or any(f["optimizer_steps"] != 25200 for f in snapshot.manifest["folds"])):
+    if not engineering and config.recovery_cadence != 1000:
         raise ValueError("formal execution budget mismatch")
     return Execution(artifact, snapshot, config)
 
@@ -430,7 +445,8 @@ def _materialize(execution, fold):
     ids = record['training_game_ids']
     if execution.manifest['engineering_only']:
         ids = sorted({r['game_id'] for b in execution.schedule(fold)['batches'] for r in b})
-    publication = open_publication(execution.snapshot.manifest['publication_path'], game_ids=ids)
+    publication = open_publication(execution.snapshot.manifest['publication_path'],
+        expected_publication_digest=execution.snapshot.manifest["protocol_inputs"]["publication_digest"], game_ids=ids)
     if publication.manifest_digest != execution.snapshot.manifest['protocol_inputs']['publication_digest']:
         raise ValueError("training publication mismatch")
     dataset = CanonicalToMDataset(publication.public_view, ids, ExperimentCapacity(execution.config.max_seq_len))

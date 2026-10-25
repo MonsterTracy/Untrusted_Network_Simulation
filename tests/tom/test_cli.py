@@ -14,7 +14,8 @@ def test_scientific_lifecycle_commands_and_isolated_capacity_check():
         "prepare-qwen3-final-fit", "run-qwen3-final-fit", "seal-qwen3-final-fit", "validate-qwen3-final-fit",
         "prepare-paper-tom-study", "run-paper-tom-study", "evaluate-paper-tom-study",
         "prepare-canonical-split-protocol", "publish-canonical-split", "publish-development-v2",
-        "audit-canonical-terminals", "release-canonical-development-v2"}
+        "audit-canonical-terminals", "release-canonical-development-v2",
+        "prepare-experiment-v2", "prepare-final-experiment-v2", "prepare-backbone-tom-study-v2"}
     for command in commands.values():
         options = {option for action in command._actions for option in action.option_strings}
         assert not options & {"--scope", "--population", "--pilot", "--private", "--resume-step", "--test", "--best", "--backbone"}

@@ -7,7 +7,8 @@ from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 
 import torch
 
-from werewolf.development_publication import open_publication, open_role_sidecar
+from werewolf.development_publication import open_role_sidecar
+from werewolf.tom.development_input import open_development_input as open_publication
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 
 PRIMARY_SELECTOR_VERSION = "classic7_primary_population_v1"
@@ -48,7 +49,7 @@ def _decode_eligibility(experiment, game, payload, *, primary):
     if primary:
         # Only this typed population boundary may reopen role truth. Limit
         # public reads to this game, including when called by a training worker.
-        publication = open_publication(experiment.manifest["publication_path"], game_ids=[game.game_id])
+        publication = open_publication(experiment.manifest["publication_path"], expected_publication_digest=experiment.manifest["publication_digest"], game_ids=[game.game_id])
         if publication.manifest_digest != experiment.manifest["publication_digest"]:
             raise ValueError("Primary publication provenance mismatch")
         expected_primary = select_primary_population(publication)
