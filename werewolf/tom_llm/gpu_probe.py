@@ -108,7 +108,7 @@ def validate_launch_args(parsed,profile):
         if key=='structured-outputs-config':
             actual={'backend':actual['backend'] if type(actual) is dict else actual.backend}
         require(actual==want,'effective server argument drift: '+key)
-    require(parsed.quantization is None and parsed.reasoning_parser is None,'undeclared quantization/reasoning parser')
+    require(parsed.quantization is None and parsed.reasoning_parser == '','undeclared quantization/reasoning parser')
 
 
 def start_deployment(root, expected, *, execute=False):

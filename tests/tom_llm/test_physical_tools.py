@@ -282,8 +282,12 @@ def test_full_queue_budget_no_truncation_or_model_filtering(native_suites):
 
 def test_probe_launch_effective_options_and_mac_gpu_guard(tmp_path,monkeypatch):
     p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/qwen3/unit-candidate')
-    args=NS(**{k.replace('-','_'):v for k,v in p['argv_options'].items()},quantization=None,reasoning_parser=None)
-    validate_launch_args(args,p);args.max_model_len=4096
+    args=NS(**{k.replace('-','_'):v for k,v in p['argv_options'].items()},quantization=None,reasoning_parser='')
+    validate_launch_args(args,p)
+    for field,value in [('reasoning_parser','qwen3'),('reasoning_parser',None),('quantization','awq'),('quantization','')]:
+        wrong=deepcopy(args);setattr(wrong,field,value)
+        with pytest.raises(ValueError,match='undeclared quantization/reasoning parser'):validate_launch_args(wrong,p)
+    args.max_model_len=4096
     with pytest.raises(ValueError):validate_launch_args(args,p)
     from werewolf.tom_llm.gpu_probe import main
     monkeypatch.setattr('sys.argv',['probe','--deployment','missing','--expected-deployment','0'*64])
@@ -474,9 +478,10 @@ def test_native_vllm_yaml_config_keeps_effective_parameters(tmp_path,vllm027_par
         elif type(value) is dict:parser.add_argument('--'+name,type=json.loads)
         elif type(value) is list:parser.add_argument('--'+name,nargs='+')
         else:parser.add_argument('--'+name,type=type(value))
-    parser.set_defaults(quantization=None,reasoning_parser=None)
+    parser.set_defaults(quantization=None,reasoning_parser='')
     config=tmp_path/'vllm.yaml';config.write_bytes(dep.vllm_config_bytes(p['argv_options']))
     parsed=parser.parse_args(['--config',str(config)]);validate_launch_args(parsed,p)
+    assert parsed.quantization is None and parsed.reasoning_parser==''
     assert parsed.served_model_name==[spec.record()['model']]
     assert parsed.enable_prefix_caching is False and parsed.trust_request_chat_template is False
     assert parsed.structured_outputs_config=={'backend':'xgrammar'}
