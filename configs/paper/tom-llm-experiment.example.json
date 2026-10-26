@@ -1,0 +1,23 @@
+{
+  "publication": "/data/yuxiao/Untrusted_Network_Simulation/publications/paper-development-qwen35-9b-1500-v1",
+  "prepared": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-development-qwen35-9b-1500-v1-backbone-v1",
+  "evaluation": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/evaluations/0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",
+  "expected_reference": "66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925",
+  "selection": "/data/yuxiao/tom-llm-reasoner-b2/selection-subset150-first-publication-v1/artifact",
+  "expected_selection_json": "/data/yuxiao/tom-llm-reasoner-b2/selection-subset150-first-publication-v1/bindings/selection-expected.json",
+  "selection_provenance_json": "/data/yuxiao/tom-llm-reasoner-b2/selection-subset150-first-publication-v1/bindings/selection-provenance.json",
+  "pre_reference_evidence": "REPLACE_WITH_VERIFIED_HANDOFF/originals/tom-llm-phase3a-20261015/selection-before-reference.json",
+  "reconciliation_evidence": "REPLACE_WITH_VERIFIED_HANDOFF/originals/tom-llm-phase3a-20261015/selection-identity-reconciliation.json",
+  "cohort": null,
+  "models": {
+    "qwen3": {
+      "tokenizer_assets": "/data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/qwen3"
+    },
+    "yi": {
+      "tokenizer_assets": "/data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/yi"
+    },
+    "mistral": {
+      "tokenizer_assets": "/data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/mistral"
+    }
+  }
+}

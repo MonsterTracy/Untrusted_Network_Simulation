@@ -54,6 +54,14 @@ def publish_mock_cohort(destination, tasks, reference, *, selection_root, expect
         files={'requests.jsonl':canonical_jsonl_bytes(tasks)})
 
 
+def nonuniform_prediction_rows(reference, predictions, games):
+    refs = [r for r in reference.selected(games) if sum(q > 0 for q in r['q']) < 6]
+    indexed = {identity(r):r for r in predictions}
+    llm = [{**r,'probability':indexed[identity(r)]['prediction']['probability'],
+            'non_self_log_probability':indexed[identity(r)]['prediction']['non_self_log_probability']} for r in refs]
+    return refs,llm
+
+
 def paired_extras(reference, predictions, games, result):
     cells = result['cells']
     indices = (reference.bootstrap_indices if tuple(games) == reference.game_ids else
@@ -63,10 +71,7 @@ def paired_extras(reference, predictions, games, result):
     nu_games = result['nu_game_ids']
     if not nu_games:
         return {'Delta_TV':tv,'Delta_Top1_NU':None}
-    refs = [r for r in reference.selected(games) if sum(q > 0 for q in r['q']) < 6]
-    indexed = {identity(r):r for r in predictions}
-    llm = [{**r,'probability':indexed[identity(r)]['prediction']['probability'],
-            'non_self_log_probability':indexed[identity(r)]['prediction']['non_self_log_probability']} for r in refs]
+    refs,llm = nonuniform_prediction_rows(reference,predictions,games)
     _, left = score_prediction_rows(llm,nu_games)
     _, right = score_prediction_rows(refs,nu_games)
     nu_indices = bootstrap_indices(nu_games,POLICY['bootstrap']['replicates'],POLICY['bootstrap']['seed'])
