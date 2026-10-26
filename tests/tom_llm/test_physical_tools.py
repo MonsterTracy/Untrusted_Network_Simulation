@@ -38,7 +38,7 @@ def native_suites():
 def model_record(key,suites):
     spec=ModelSpec(key)
     return {'schema_version':dep.VERSION,'key':key,'model_spec':spec.record(),'source':mm.source_identity(),
-        'profile':dep.profile(spec,gpu_uuid='GPU-unit-only'),'model':{'evidence_kind':'SYNTHETIC_UNIT_FIXTURE'},
+        'profile':dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel'/spec.key/'unit-candidate'),'model':{'evidence_kind':'SYNTHETIC_UNIT_FIXTURE'},
         'environment':{'evidence_kind':'SYNTHETIC_UNIT_FIXTURE'},'suite':suites[key],'budget':{},
         'upstream_receipts':{},'purpose':'synthetic_gpu_qualification_only','physical_gpu_admission':False}
 
@@ -47,7 +47,7 @@ def candidate_artifact(tmp_path,record):
     spec=ModelSpec(record['key'])
     return publish_artifact(tmp_path/'deployment',manifest_fields={'artifact_type':'mm_deployment_candidate','schema_version':dep.VERSION,
         'deployment_digest':digest(record),'model_spec_digest':spec.digest,'gpu_qualification_passed':False},
-        files={'deployment.json':canonical_json_bytes(record),'vllm.json':canonical_json_bytes(record['profile']['argv_options']),
+        files={'deployment.json':canonical_json_bytes(record),'vllm.yaml':dep.vllm_config_bytes(record['profile']['argv_options']),
                'chat_template.jinja':dep.template_bytes(spec)})
 
 
@@ -184,14 +184,14 @@ def test_native_sampling_eos_schema_and_parameters_are_strict(native_suites,key)
 
 
 def test_profiles_are_disjoint_and_cache_scoped():
-    profiles=[dep.profile(ModelSpec(k),gpu_uuid='GPU-unit-only') for k in KEYS]
+    profiles=[dep.profile(ModelSpec(k),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel'/k/'unit-candidate') for k in KEYS]
     assert len({p['root'] for p in profiles})==len({p['argv_options']['port'] for p in profiles})==3
     for p in profiles:
         for k,v in p['environment_requirements'].items():
             if k.endswith('_DIR') or k in ('HF_HOME','XDG_CACHE_HOME','TORCH_HOME','VLLM_CACHE_ROOT','FLASHINFER_WORKSPACE_BASE','TMPDIR'):
                 assert Path(v).is_relative_to(Path(p['root']))
         assert p['argv_options']['trust-request-chat-template'] is False
-        with pytest.raises(ValueError):dep.profile(ModelSpec(p['key']),gpu_uuid='GPU-unit-only',model_directory='/outside/model')
+        with pytest.raises(ValueError):dep.profile(ModelSpec(p['key']),gpu_uuid='GPU-unit-only',candidate_root=p['root'],model_directory='/outside/model')
 
 
 @pytest.mark.parametrize('key',KEYS)
@@ -281,7 +281,7 @@ def test_full_queue_budget_no_truncation_or_model_filtering(native_suites):
 
 
 def test_probe_launch_effective_options_and_mac_gpu_guard(tmp_path,monkeypatch):
-    p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only')
+    p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/qwen3/unit-candidate')
     args=NS(**{k.replace('-','_'):v for k,v in p['argv_options'].items()},quantization=None,reasoning_parser=None)
     validate_launch_args(args,p);args.max_model_len=4096
     with pytest.raises(ValueError):validate_launch_args(args,p)
@@ -416,7 +416,7 @@ def test_cohort_export_builds_public_tasks_before_opening_reference(tmp_path,mon
 
 
 def test_cache_and_engine_log_symlinks_cannot_escape_model_directory(tmp_path):
-    profile=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only')
+    profile=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/qwen3/unit-candidate')
     profile['root']=str(tmp_path/'model')
     for name in dep.CACHE_VARIABLES:profile['environment_requirements'][name]=str(tmp_path/'model/cache'/name)
     dep.validate_cache_paths(profile)
@@ -434,7 +434,108 @@ def test_cache_and_engine_log_symlinks_cannot_escape_model_directory(tmp_path):
 
 @pytest.mark.parametrize('key',['CUDA_LAUNCH_BLOCKING','TORCH_ALLOW_TF32_CUBLAS_OVERRIDE','FLASHINFER_UNDECLARED','LD_PRELOAD'])
 def test_process_environment_rejects_undeclared_runtime_overrides(key):
-    p=dep.profile(ModelSpec('yi'),gpu_uuid='GPU-unit-only')
+    p=dep.profile(ModelSpec('yi'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/yi/unit-candidate')
     values=dict(p['environment_requirements']);dep.validate_process_environment(p,values)
     values[key]='UNIT_OVERRIDE'
     with pytest.raises(ValueError):dep.validate_process_environment(p,values)
+
+
+@pytest.fixture
+def vllm027_parser(monkeypatch):
+    """Exact official CPU parser module; no vLLM engine/package import."""
+    import importlib.util,logging,sys,types
+    location=os.environ.get('UNS_VLLM027_ARGPARSE_SOURCE')
+    if not location:pytest.skip('NOT_RUN: official vLLM0.27 argparse source not supplied')
+    raw=Path(location).read_bytes()
+    assert hashlib.sha256(raw).hexdigest()=='e00efebd4e4f459391769ab8a46af9401e830e3be5226abcacfdfd09a77c6a4d'
+    logger=types.ModuleType('vllm.logger');logger.init_logger=lambda _:logging.getLogger('unit-vllm-parser')
+    package=types.ModuleType('vllm');package.__path__=[]
+    monkeypatch.setitem(sys.modules,'vllm',package);monkeypatch.setitem(sys.modules,'vllm.logger',logger)
+    spec=importlib.util.spec_from_file_location('unit_vllm027_argparse',location)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module.FlexibleArgumentParser
+
+
+@pytest.mark.parametrize('key',KEYS)
+@pytest.mark.parametrize('stage',['qualification','formal'])
+def test_native_vllm_yaml_config_keeps_effective_parameters(tmp_path,vllm027_parser,key,stage):
+    import argparse
+    from werewolf.tom_llm.live_admission import service_profile
+    spec=ModelSpec(key)
+    p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel'/key/'candidate-yaml-unit')
+    if stage=='formal':
+        qualified=p;p=service_profile(dep.BASE/'experiments/unit-run',spec,{'profile':qualified})
+        assert p['environment_prefix']==qualified['environment_prefix']
+        for name in ('PATH','CUDA_HOME'):assert p['environment_requirements'][name]==qualified['environment_requirements'][name]
+        for name in dep.CACHE_VARIABLES:assert Path(p['environment_requirements'][name]).is_relative_to(p['root'])
+    parser=vllm027_parser();parser.add_argument('--config')
+    for name,value in p['argv_options'].items():
+        if type(value) is bool:parser.add_argument('--'+name,action=argparse.BooleanOptionalAction,default=None)
+        elif type(value) is dict:parser.add_argument('--'+name,type=json.loads)
+        elif type(value) is list:parser.add_argument('--'+name,nargs='+')
+        else:parser.add_argument('--'+name,type=type(value))
+    parser.set_defaults(quantization=None,reasoning_parser=None)
+    config=tmp_path/'vllm.yaml';config.write_bytes(dep.vllm_config_bytes(p['argv_options']))
+    parsed=parser.parse_args(['--config',str(config)]);validate_launch_args(parsed,p)
+    assert parsed.served_model_name==[spec.record()['model']]
+    assert parsed.enable_prefix_caching is False and parsed.trust_request_chat_template is False
+    assert parsed.structured_outputs_config=={'backend':'xgrammar'}
+    bad=tmp_path/'vllm.json';bad.write_bytes(config.read_bytes())
+    with pytest.raises(ValueError,match='yaml/yml type'):parser.parse_args(['--config',str(bad)])
+    plain=tmp_path/'false-omitted.yaml';plain.write_bytes(canonical_json_bytes(p['argv_options']))
+    assert parser.parse_args(['--config',str(plain)]).enable_prefix_caching is None
+    with pytest.raises(ValueError):validate_launch_args(parser.parse_args(['--config',str(plain)]),p)
+    with pytest.raises(ValueError):validate_launch_args(parser.parse_args(['--config',str(config),'--enable-prefix-caching']),p)
+
+
+def test_deployment_uses_new_output_root_and_keeps_old_assets(tmp_path,native_suites,monkeypatch):
+    base=tmp_path/'baseline';monkeypatch.setattr(dep,'BASE',base)
+    spec=ModelSpec('qwen3');old=base/'multimodel/qwen3/candidate-v1'
+    sealed=old/'deployment/sealed-original';sealed.parent.mkdir(parents=True);sealed.write_bytes(b'UNCHANGED_OLD_CANDIDATE')
+    model=old/'model';env=old/'env';destination=base/'multimodel/qwen3/candidate-yaml-v1/deployment'
+    monkeypatch.setattr(dep,'read_receipt',lambda path,kind,expected:{'directory':str(model)} if kind=='model' else {'prefix':str(env)})
+    monkeypatch.setattr(dep,'open_suite',lambda *a:native_suites['qwen3'])
+    monkeypatch.setattr(dep,'open_budget',lambda *a:{'UNIT_ONLY':'budget'})
+    checked=[];monkeypatch.setattr(dep,'verify_cpu_binding',lambda record,spec:checked.append(record))
+    args=dict(gpu_uuid='GPU-unit-only',model_root=model,model_receipt=tmp_path,expected_model='a'*64,
+        environment_root=env,environment_receipt=tmp_path,expected_environment='b'*64,
+        suite_root=tmp_path,expected_suite='c'*64,budget_root=tmp_path,expected_budget='d'*64)
+    artifact=dep.prepare_deployment(destination,spec,**args)
+    _,record=dep.open_deployment(artifact.path,artifact.manifest_digest)
+    p=record['profile'];assert p['root']==str(destination.parent) and len(checked)==1
+    assert p['argv_options']['model']==str(model) and p['environment_prefix']==str(env)
+    assert Path(p['argv_options']['chat-template'])==artifact.path/'chat_template.jinja'
+    assert set(artifact.manifest['file_table'])=={'deployment.json','vllm.yaml','chat_template.jinja'}
+    assert sealed.read_bytes()==b'UNCHANGED_OLD_CANDIDATE'
+    assert not (old/'cache').exists()
+    for key in dep.CACHE_VARIABLES:assert Path(p['environment_requirements'][key]).is_relative_to(destination.parent)
+    with pytest.raises(ValueError,match='new ROOT/deployment'):dep.prepare_deployment(destination,spec,**args)
+    with pytest.raises(ValueError,match='new ROOT/deployment'):dep.prepare_deployment(old/'deployment',spec,**args)
+    assert sealed.read_bytes()==b'UNCHANGED_OLD_CANDIDATE'
+
+
+def test_qualification_start_is_foreground_exec_with_bound_environment(tmp_path,monkeypatch):
+    from werewolf.tom_llm import gpu_probe
+    base=tmp_path/'base';monkeypatch.setattr(dep,'BASE',base)
+    p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel/qwen3/new-candidate')
+    artifact=NS(path=Path(p['root'])/'deployment');seen={}
+    monkeypatch.setattr(gpu_probe,'sys',NS(platform='linux'))
+    monkeypatch.setattr(gpu_probe,'open_deployment',lambda *a,**kw:(artifact,{'profile':p,'source':{'source_inventory_clean':True}}))
+    monkeypatch.setattr(gpu_probe.os,'chdir',lambda path:seen.update(cwd=str(path)))
+    class Executed(BaseException):pass
+    def execute(binary,argv,env):seen.update(binary=binary,argv=argv,env=env);raise Executed()
+    monkeypatch.setattr(gpu_probe.os,'execve',execute)
+    with pytest.raises(ValueError,match='authorized Linux'):gpu_probe.start_deployment(artifact.path,'a'*64)
+    assert not Path(p['root']).exists()
+    monkeypatch.setenv('HTTP_PROXY','UNIT_PROXY_MUST_NOT_LEAK');monkeypatch.setenv('VLLM_UNIT_OVERRIDE','MUST_NOT_LEAK')
+    with pytest.raises(Executed):gpu_probe.start_deployment(artifact.path,'a'*64,execute=True)
+    assert seen['binary']==p['environment_prefix']+'/bin/python'
+    assert seen['argv']==[seen['binary'],'-m','werewolf.tom_llm.gpu_probe','--deployment',str(artifact.path),
+        '--expected-deployment','a'*64,'--execute-synthetic-gpu-qualification']
+    assert seen['cwd']==str(dep.ROOT)
+    dep.validate_process_environment(p,seen['env']);dep.validate_cache_paths(p,require_existing=True)
+    assert 'HTTP_PROXY' not in seen['env'] and 'VLLM_UNIT_OVERRIDE' not in seen['env']
+    from scripts import tom_multimodel_admission as cli
+    monkeypatch.setattr(cli.sys,'argv',['tool','start','--deployment',str(artifact.path),
+        '--expected-deployment','a'*64,'--execute-synthetic-gpu-qualification'])
+    with pytest.raises(Executed):cli.main()

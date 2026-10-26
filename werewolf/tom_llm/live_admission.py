@@ -11,7 +11,7 @@ from werewolf.tom_llm.experiment import VERSION, open_run, source_v3, safe_path
 from werewolf.tom_llm.model_spec import ROOT, ModelSpec, template_bytes, load_cpu_tokenizer
 from werewolf.tom_llm.physical_admission import open_round, ADMISSION_VERSION
 from werewolf.tom_llm.deployment import (BASE, open_deployment, profile, validate_process_environment,
-    gpu_snapshot, driver_version)
+    gpu_snapshot, driver_version, vllm_config_bytes, CACHE_VARIABLES)
 from werewolf.tom_llm.qualification_evidence import validate_qualification
 from werewolf.tom_llm.qualification_inputs import open_budget
 
@@ -63,10 +63,11 @@ print(json.dumps(capture_environment(sys.argv[3],prior_audit_digest=sys.argv[4])
 
 def service_profile(root, spec, qualified):
     old=qualified['profile']
-    p=profile(spec,gpu_uuid=old['gpu']['uuid'],model_directory=old['argv_options']['model'],environment_prefix=old['environment_prefix'])
+    p=profile(spec,gpu_uuid=old['gpu']['uuid'],candidate_root=old['root'],model_directory=old['argv_options']['model'],environment_prefix=old['environment_prefix'])
     service=Path(root)/'models'/spec.key/'service'
     original=p['root'];p['root']=str(service)
-    p['environment_requirements']={k:v.replace(original,str(service)) for k,v in p['environment_requirements'].items()}
+    p['environment_requirements']={k:(v.replace(original,str(service)) if k in CACHE_VARIABLES else v)
+        for k,v in p['environment_requirements'].items()}
     p['environment_requirements']['PYTHONPATH']=str(ROOT)
     p['argv_options']['chat-template']=str(Path(root)/'models'/spec.key/'permit/chat_template.jinja')
     p['engine_log_root']=str(service/'engine');p['qualification_only']=False
@@ -92,7 +93,7 @@ def publish_permit(root, key, *, qualification, expected_qualification, tokenize
     dest=Path(root)/'models'/key/'permit';require(not dest.exists(),'permit exists')
     return publish_artifact(dest,manifest_fields={'artifact_type':'mm_live_execution_permit','schema_version':VERSION,
         'record_digest':digest(record)},files={'permit.json':canonical_json_bytes(record),
-        'vllm.json':canonical_json_bytes(p['argv_options']),'chat_template.jinja':template_bytes(spec)})
+        'vllm.yaml':vllm_config_bytes(p['argv_options']),'chat_template.jinja':template_bytes(spec)})
 
 
 def qualification_runtime(root):
@@ -104,13 +105,13 @@ def qualification_runtime(root):
 def open_permit(root, key, expected, *, physical=True):
     a,run,tasks=open_run(root);spec=ModelSpec(key)
     p=verify_artifact(Path(root)/'models'/key/'permit',expected_artifact_type='mm_live_execution_permit',expected_schema_version=VERSION)
-    require(p.manifest_digest==expected and set(p.manifest['file_table'])=={'permit.json','vllm.json','chat_template.jinja'},'execution permit anchor/inventory drift')
+    require(p.manifest_digest==expected and set(p.manifest['file_table'])=={'permit.json','vllm.yaml','chat_template.jinja'},'execution permit anchor/inventory drift')
     r=strict_json((p.path/'permit.json').read_bytes())
     require(digest(r)==p.manifest['record_digest'] and r['run_digest']==a.manifest_digest and r['model']==key
             and r['model_spec_digest']==spec.digest and r['source']==run['source']==source_v3()
             and r['evidence_kind']=='physical_execution_binding' and run['mode'] in ('formal','technical'), 'live permit/source/model drift')
     require((p.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
-            and (p.path/'vllm.json').read_bytes()==canonical_json_bytes(r['profile']['argv_options']), 'live template/config drift')
+            and (p.path/'vllm.yaml').read_bytes()==vllm_config_bytes(r['profile']['argv_options']), 'live template/config drift')
     if physical:
         require(sys.platform=='linux' and run['source']['source_inventory_clean'] and safe_path(root).is_relative_to(BASE), 'live physical platform/source/path gate')
         q=qualified_offline(r['qualification_root'],r['qualification_digest'],spec)

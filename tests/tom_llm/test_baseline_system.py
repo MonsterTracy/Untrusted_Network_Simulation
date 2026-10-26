@@ -432,6 +432,7 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     args={'qualification':tmp_path/'sealed-qualification','expected_qualification':'d'*64,
         'tokenizer_assets':tmp_path/'small-assets','budget_root':tmp_path/'budget'}
     artifact=admission.publish_permit(root,key,**args)
+    assert set(artifact.manifest['file_table'])=={'permit.json','vllm.yaml','chat_template.jinja'}
     _,record=admission.open_permit(root,key,artifact.manifest_digest)
     assert set(record)=={'run_root','run_digest','model','model_spec_digest','source','qualified_runtime','profile',
         'qualification_root','qualification_digest','budget_root','tokenizer_assets','evidence_kind'}

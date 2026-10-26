@@ -24,9 +24,18 @@ def recipe():
     return strict_json(raw)
 
 
-def profile(spec, *, gpu_uuid, model_directory=None, environment_prefix=None):
+def vllm_config_bytes(options):
+    """Canonical flow-style YAML; vLLM drops false values, so use explicit negation."""
+    return canonical_json_bytes({('no-'+key if value is False else key):
+        (True if value is False else value) for key,value in options.items()})
+
+
+def profile(spec, *, gpu_uuid, candidate_root, model_directory=None, environment_prefix=None):
     require(type(spec) is ModelSpec and type(gpu_uuid) is str and gpu_uuid.startswith('GPU-'), 'explicit model/GPU identity required')
-    row = spec.record(); root = BASE/'multimodel'/spec.key/'candidate-v1'
+    row = spec.record(); root = Path(candidate_root)
+    require(root.is_absolute() and root.is_relative_to(BASE/'multimodel'/spec.key)
+            and root != BASE/'multimodel'/spec.key and '..' not in root.parts
+            and not any(p.is_symlink() for p in (root,*root.parents)), 'isolated candidate root required')
     model = Path(model_directory) if model_directory else root/'model'
     env = Path(environment_prefix) if environment_prefix else root/'env'
     require(model.is_absolute() and env.is_absolute() and model.is_relative_to(BASE) and env.is_relative_to(BASE)
@@ -40,11 +49,11 @@ def profile(spec, *, gpu_uuid, model_directory=None, environment_prefix=None):
         'PATH':str(env/'bin')+':/usr/bin:/bin','CUDA_VISIBLE_DEVICES':'0','PYTHONNOUSERSITE':'1','PYTHONDONTWRITEBYTECODE':'1','HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1',
         'VLLM_NO_USAGE_STATS':'1','DO_NOT_TRACK':'1','CUDA_HOME':str(env/'lib/python3.12/site-packages/nvidia/cu13')})
     args = {'model':str(model),'tokenizer':str(model),'revision':row['revision'],
-        'tokenizer-revision':row['tokenizer_revision'],'tokenizer-mode':'auto','served-model-name':row['model'],
+        'tokenizer-revision':row['tokenizer_revision'],'tokenizer-mode':'auto','served-model-name':[row['model']],
         'dtype':'bfloat16','generation-config':'auto','host':'127.0.0.1','port':{'qwen3':18581,'yi':18582,'mistral':18583}[spec.key],
         'max-model-len':8192,'max-num-seqs':1,'gpu-memory-utilization':.9,'seed':20261014,
         'enable-prefix-caching':False,'trust-request-chat-template':False,'chat-template-content-format':'string',
-        'chat-template':str(root/'template/chat_template.jinja'),'structured-outputs-config':{'backend':'xgrammar'}}
+        'chat-template':str(root/'deployment/chat_template.jinja'),'structured-outputs-config':{'backend':'xgrammar'}}
     return {'schema_version':VERSION+'_profile','key':spec.key,'model_spec_digest':spec.digest,'root':str(root),
         'environment_prefix':str(env),'environment_requirements':variables,'argv_options':args,
         'gpu':{'uuid':gpu_uuid,'name':'NVIDIA GeForce RTX 3090','memory_total_mib':24576},
@@ -82,7 +91,7 @@ def verify_cpu_binding(record,spec):
     require(record['model_spec']==spec.record() and record['source']==source_identity(), 'deployment source/ModelSpec drift')
     p = record['profile']
     validate_cache_paths(p)
-    require(p==profile(spec,gpu_uuid=p['gpu']['uuid'],model_directory=p['argv_options']['model'],
+    require(p==profile(spec,gpu_uuid=p['gpu']['uuid'],candidate_root=p['root'],model_directory=p['argv_options']['model'],
                       environment_prefix=p['environment_prefix']), 'deployment profile/parameters drift')
     require(record['model']==verify_model(spec,record['model']['directory']), 'physical model changed after receipt')
     require(record['environment']==capture_environment(p['environment_prefix'],
@@ -94,7 +103,10 @@ def verify_cpu_binding(record,spec):
 def prepare_deployment(destination,spec,*,gpu_uuid,model_root,model_receipt,expected_model,
                        environment_root,environment_receipt,expected_environment,
                        suite_root,expected_suite,budget_root,expected_budget):
-    p = profile(spec,gpu_uuid=gpu_uuid,model_directory=model_root,environment_prefix=environment_root)
+    destination = Path(destination).absolute()
+    require(destination.name=='deployment' and not destination.exists(), 'new ROOT/deployment destination required')
+    p = profile(spec,gpu_uuid=gpu_uuid,candidate_root=destination.parent,
+        model_directory=model_root,environment_prefix=environment_root)
     model = read_receipt(model_receipt,'model',expected_model)
     environment = read_receipt(environment_receipt,'environment',expected_environment)
     suite = open_suite(suite_root,spec,expected_suite); budget = open_budget(budget_root,spec,expected_budget)
@@ -105,14 +117,14 @@ def prepare_deployment(destination,spec,*,gpu_uuid,model_root,model_receipt,expe
     verify_cpu_binding(record,spec)
     return publish_artifact(destination,manifest_fields={'artifact_type':'mm_deployment_candidate','schema_version':VERSION,
         'deployment_digest':digest(record),'model_spec_digest':spec.digest,'gpu_qualification_passed':False},
-        files={'deployment.json':canonical_json_bytes(record),'vllm.json':canonical_json_bytes(p['argv_options']),
+        files={'deployment.json':canonical_json_bytes(record),'vllm.yaml':vllm_config_bytes(p['argv_options']),
                'chat_template.jinja':template_bytes(spec)})
 
 
 def open_deployment(root,expected_digest,*,physical_recheck=False):
     require_digest(expected_digest)
     a = verify_artifact(root,expected_artifact_type='mm_deployment_candidate',expected_schema_version=VERSION)
-    require(a.manifest_digest==expected_digest and set(a.manifest['file_table'])=={'deployment.json','vllm.json','chat_template.jinja'},
+    require(a.manifest_digest==expected_digest and set(a.manifest['file_table'])=={'deployment.json','vllm.yaml','chat_template.jinja'},
             'new deployment artifact identity/inventory required; no W5/mock upgrade')
     r = strict_json((a.path/'deployment.json').read_bytes());spec = ModelSpec(r['key'])
     require(r['schema_version']==VERSION and r['model_spec']==spec.record() and r['source']==source_identity()
@@ -120,9 +132,9 @@ def open_deployment(root,expected_digest,*,physical_recheck=False):
             and r['purpose']=='synthetic_gpu_qualification_only' and r['physical_gpu_admission'] is False,
             'deployment execution identity/domain drift')
     p=r['profile']
-    require(p==profile(spec,gpu_uuid=p['gpu']['uuid'],model_directory=p['argv_options']['model'],
+    require(p==profile(spec,gpu_uuid=p['gpu']['uuid'],candidate_root=p['root'],model_directory=p['argv_options']['model'],
                       environment_prefix=p['environment_prefix']) and (a.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
-            and (a.path/'vllm.json').read_bytes()==canonical_json_bytes(p['argv_options']), 'deployment template/config drift')
+            and (a.path/'vllm.yaml').read_bytes()==vllm_config_bytes(p['argv_options']), 'deployment template/config drift')
     from werewolf.tom_llm.qualification_inputs import validate_suite
     validate_suite(r['suite'],spec)
     if physical_recheck:verify_cpu_binding(r,spec)

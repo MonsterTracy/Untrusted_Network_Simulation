@@ -26,6 +26,7 @@ def main():
     p.add_argument('--model-directory',required=True);p.add_argument('--environment-prefix',required=True)
     for n in ('assets','environment','suite','budget'):upstream(p,n)
     p=sub.add_parser('bundle');output(p);upstream(p,'deployment')
+    p=sub.add_parser('start');upstream(p,'deployment');p.add_argument('--execute-synthetic-gpu-qualification',action='store_true')
     p=sub.add_parser('round');output(p);upstream(p,'deployment');p.add_argument('--pid',type=int,required=True)
     p.add_argument('--run',type=int,choices=[0,1],required=True);p.add_argument('--execute-synthetic-gpu-qualification',action='store_true')
     p=sub.add_parser('admit');output(p);upstream(p,'deployment')
@@ -75,6 +76,9 @@ def main():
     elif args.command=='bundle':
         from werewolf.tom_llm.deployment import publish_bundle
         result=publish_bundle(args.output,args.deployment,args.expected_deployment)
+    elif args.command=='start':
+        from werewolf.tom_llm.gpu_probe import start_deployment
+        return start_deployment(args.deployment,args.expected_deployment,execute=args.execute_synthetic_gpu_qualification)
     elif args.command=='round':
         from werewolf.tom_llm.candidate_client import collect_physical_round
         result=collect_physical_round(args.output,args.deployment,args.expected_deployment,pid=args.pid,run=args.run,

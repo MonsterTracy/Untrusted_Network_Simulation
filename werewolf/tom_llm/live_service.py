@@ -75,7 +75,7 @@ def main():
     from vllm.entrypoints.openai import api_server
     import uvloop
     api_server.cli_env_setup()
-    args=api_server.make_arg_parser(api_server.FlexibleArgumentParser()).parse_args(['--config',str(permit.path/'vllm.json')])
+    args=api_server.make_arg_parser(api_server.FlexibleArgumentParser()).parse_args(['--config',str(permit.path/'vllm.yaml')])
     api_server.validate_parsed_serve_args(args);validate_launch_args(args,profile)
     process=lifetime();sink=JsonlSink(Path(profile['engine_log_root'])/digest(process)/'engine-events.jsonl')
     original=api_server.init_app_state

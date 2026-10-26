@@ -35,11 +35,11 @@ Use independent roots:
 
 | model key | root | loopback port |
 |---|---|---:|
-| qwen3 | /data/yuxiao/tom-llm-reasoner-b2/multimodel/qwen3/candidate-v1 | 18581 |
-| yi | /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/candidate-v1 | 18582 |
-| mistral | /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/candidate-v1 | 18583 |
+| qwen3 | /data/yuxiao/tom-llm-reasoner-b2/multimodel/qwen3/NEW_CANDIDATE | 18581 |
+| yi | /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/NEW_CANDIDATE | 18582 |
+| mistral | /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/NEW_CANDIDATE | 18583 |
 
-All writes stay inside /data/yuxiao/tom-llm-reasoner-b2. Old W5 directories and services are not deployment targets. Approved existing Qwen model/environment directories may be reused READ-ONLY after complete new binding. Different models have separate deployment, cache, trace, response and admission roots; a shared environment is allowed only as an explicit immutable read-only physical asset with separate per-model receipts/bindings. Never clone/reinstall Conda automatically.
+The existing `--output "$ROOT/deployment"` defines the candidate root; choose a NEW label such as `candidate-yaml-v1`, never overwrite the old `candidate-v1`. There is no hardcoded candidate version. All writes stay inside /data/yuxiao/tom-llm-reasoner-b2. Old W5 directories and services are not deployment targets. Approved existing Qwen model/environment directories may be reused READ-ONLY after complete new binding. Different models have separate deployment, cache, trace, response and admission roots; a shared environment is allowed only as an explicit immutable read-only physical asset with separate per-model receipts/bindings. Never clone/reinstall Conda automatically.
 
 In the commands below, replace every uppercase placeholder using reviewed absolute paths/digests. TOOL is the approved checkout's scripts/tom_multimodel_admission.py; PY is the chosen isolated environment/bin/python. Do not point TOOL at W5. Every publisher uses a NEW destination and fails on conflict; never delete/overwrite an old artifact to retry.
 
@@ -98,7 +98,7 @@ Expected: identical cohort/Selection/Reference/row identity/count, with separate
   --budget "$ROOT/receipts/budget" --expected-budget "$BUDGET_MANIFEST" --output "$ROOT/deployment"
 ```
 
-The receipt rechecks actual model and environment bytes. Source can still be a candidate during local development, but physical startup requires committed clean runtime Source. Profiles bind BF16, no quantization/reasoning parser,8192/512,T0,seed,one sequence, fixed native template, xgrammar backend, prefix caching off, generation_config auto, no request-level template and no proxies/retries. Qwen Wire v2 is untouched. Auto tokenizer mode is only accepted if its actual final input_ids match the approved native suite; no fallback to another tokenizer/template is allowed.
+The Artifact contains `deployment.json` (identity metadata), `vllm.yaml` (native vLLM configuration), and the frozen template. The template is used directly from this immutable Artifact; no second installed copy is required. The receipt rechecks actual model and environment bytes. Source can still be a candidate during local development, but physical startup requires committed clean runtime Source. Profiles bind BF16, no quantization/reasoning parser,8192/512,T0,seed,one sequence, fixed native template, xgrammar backend, prefix caching off, generation_config auto, no request-level template and no proxies/retries. Qwen Wire v2 is untouched. Auto tokenizer mode is only accepted if its actual final input_ids match the approved native suite; no fallback to another tokenizer/template is allowed.
 
 CUDA/TVM-FFI/FlashInfer/Torch/Numba/Triton/vLLM/HF/XDG caches and TMPDIR are scoped to the model root. PYTHONDONTWRITEBYTECODE=1 avoids writing into reused source/environment trees. The environment prefix itself is not modified.
 
@@ -106,14 +106,14 @@ CUDA/TVM-FFI/FlashInfer/Torch/Numba/Triton/vLLM/HF/XDG caches and TMPDIR are sco
 
 Do not execute this section merely because CPU checks passed or the GPU is idle. The user first reviews CPU results and explicitly authorizes a dedicated GPU window. No existing collection service may be stopped/restarted/retuned. The launcher refuses a non-idle or mismatched single RTX3090/24GiB window.
 
-Run only one model at a time. In a foreground terminal, launch the approved env/bin/python with exactly:
+Run only one model at a time. After explicit GPU-window authorization, use the existing CLI in a foreground terminal:
 
-```text
-ENV_PREFIX/bin/python -m werewolf.tom_llm.gpu_probe --deployment ROOT/deployment \
-  --expected-deployment DEPLOYMENT_MANIFEST --execute-synthetic-gpu-qualification
+```bash
+"$PY" -B "$TOOL" start --deployment "$ROOT/deployment" \
+  --expected-deployment "$DEPLOYMENT_MANIFEST" --execute-synthetic-gpu-qualification
 ```
 
-Before launching, manually supply precisely deployment.json profile.environment_requirements to this child process; remove proxy variables and undeclared VLLM_* overrides from that child environment. Work in the approved source checkout under ROOT/source/Untrusted_Network_Simulation. Do not use a request-level chat template. The fixed template file at ROOT/template/chat_template.jinja must match the candidate artifact; copying it is a reviewed NEW-path deployment step, never overwriting an old template.
+`start` verifies the immutable Deployment, creates only its declared cache/TMPDIR directories, builds a clean child environment from the bound profile and foreground-execs the existing `gpu_probe` with the model prefix's Python. It does not supervise, restart or issue prediction calls. The actual probe rechecks physical model/environment identities and idle GPU before vLLM import; no check is bypassed. Each separately authorized restart uses the same command and produces a new process lifetime/log. Existing low-level `python -m werewolf.tom_llm.gpu_probe` remains available when the user supplies exactly the declared environment and cache layout.
 
 The launcher rechecks Source, model, environment, cache config, template and idle GPU BEFORE vLLM import/start. It validates actual parsed serve arguments and instruments the pinned vLLM final EngineCoreRequest seam. Unsupported argument names/private API/JSON backend fail closed; CPU tests do not prove vLLM0.27, FlashInfer/JIT or RTX3090 compatibility. Do not modify the protocol to bypass a failure.
 
@@ -142,7 +142,7 @@ Finally, while the second instance remains active:
   --expected-admission "$ADMISSION_MANIFEST" --expected-deployment "$DEPLOYMENT_MANIFEST"
 ```
 
-Expected only after actual physical success: a NEW synthetic-only physical Admission, whose reader revalidates raw durable chains, both rounds, CPU identities and the active second instance. Mac and Mock cannot publish it. W5/mock/other-model artifact domains are rejected. Formal execution remains unauthorized and unimplemented; do not send the150-game cohort to this synthetic-only service.
+Expected only after actual physical success: a NEW synthetic-only physical Admission, whose reader revalidates raw durable chains, both rounds, CPU identities and the active second instance. Mac and Mock cannot publish it. W5/mock/other-model artifact domains are rejected. This synthetic Admission does not execute or authorize the formal cohort; use the separate Baseline Runner and its `--manage-services` path for an independently authorized formal experiment.
 
 ## What remains NOT_RUN after local tests
 
@@ -150,26 +150,14 @@ Full physical model/environment/CPU150 admission on Ubuntu; actual budget totals
 
 Cache and log parents must not be symlinks. PATH is fixed to ENV_PREFIX/bin:/usr/bin:/bin. Undeclared CUDA/Torch/FlashInfer/TVM/Triton/Numba/NCCL/CUBLAS/HF/Transformers backend variables and loader/proxy overrides are rejected; do not silently delete a required setting to bypass the gate. Submit a new reviewed profile if the real environment needs one. GPU receipts record actual driver and kernel identities and require both restarts to agree. Compiler/JIT execution compatibility remains an actual GPU test, not an assertion from package metadata.
 
-After validating the CPU Deployment and before authorizing a GPU launch, the user must prepare all declared cache/TMPDIR directories and the fixed template at NEW owned paths. The launcher requires the directories to exist and be writable: a nonexistent TMPDIR could otherwise make Python/JIT fall back to system /tmp. This local implementation does not create server directories. Example manual Ubuntu layout preparation, after replacing the placeholders and reviewing the Deployment digest:
+## Configuration-format repair and artifact reuse
 
-```bash
-"$PY" -B - "$ROOT/deployment" "$DEPLOYMENT_MANIFEST" <<'PY'
-import sys
-from pathlib import Path
-from werewolf.tom_llm.deployment import open_deployment, validate_cache_paths, CACHE_VARIABLES
-artifact, record = open_deployment(sys.argv[1], sys.argv[2], physical_recheck=True)
-p = record['profile']
-validate_cache_paths(p)
-for key in CACHE_VARIABLES:
-    Path(p['environment_requirements'][key]).mkdir(parents=True, exist_ok=True)
-validate_cache_paths(p, require_existing=True)
-target = Path(p['argv_options']['chat-template'])
-assert not any(v.is_symlink() for v in (target, *target.parents))
-target.parent.mkdir(parents=True, exist_ok=True)
-with target.open('xb') as stream:  # fail if already present; do not overwrite
-    stream.write((artifact.path/'chat_template.jinja').read_bytes())
-print('layout prepared; no GPU or service started')
-PY
-```
+Both Qualification and the real Baseline service use `vllm.yaml`; do not rename/edit any already sealed `vllm.json`. Canonical JSON flow mappings are valid YAML, but vLLM0.27 rejects a `.json` filename. Its YAML loader also omits boolean false values: generated YAML therefore uses the native `no-enable-prefix-caching: true` and `no-trust-request-chat-template: true` switches. The declared profile remains false for both; parsed values are strictly checked. `served-model-name` is a one-element list as expected by the native parser, with the same frozen API model name. No model, decoding, Prompt or sampling setting changes.
 
-If this step encounters an existing template, conflicting artifact, permissions problem or symlink, stop and compare identities. Do not remove an existing path to force preparation to pass.
+A source edit changes Source v2/v3. Keep all prior Artifacts and the failed startup log. Existing physical weights, environment, official tokenizer files, native Suite, Publication/Prepared/OOF Reference, Selection and source-independent model/environment receipts can be reused read-only after their existing strict checks. Preserve the nine disclosed RECORD deviations; this repair neither installs nor repairs packages.
+
+The current Cohort reader requires exact Source identity; therefore old-source Cohort and dependent Budget/Deployment/bundle/Run/Permit cannot be reused by simply changing a filename or digest. After source integration is separately approved, regenerate the common Cohort and per-model CPU Budget using the same published Selection, then publish a NEW Deployment root reusing old model/environment/Suite receipts. Require the same 150 games, 10,714 requests (when confirmed by actual source data), ordered request identities and token counts as before. Stop on any mismatch; do not filter or resample. No new games, training, weight download or package installation is required. This is existing identity validation, not a new compatibility exception.
+
+Old Qualification rounds/Admission remain historical evidence; do not re-sign them. The failed extension check occurred before model loading and generated no qualification predictions. New Qualification has not passed until the two authorized instances and76 calls complete under the new source. `start` creates no cache outside its new root; conflicting immutable output, symlink or identity mismatch stops instead of cleaning old paths.
+
+Local parser tests can use `UNS_VLLM027_ARGPARSE_SOURCE` pointing to the exact official v0.27.0 `utils/argparse_utils.py`, SHA-256 `e00efebd4e4f459391769ab8a46af9401e830e3be5226abcacfdfd09a77c6a4d`. Only its logger is stubbed to avoid importing the engine; native config parsing and BooleanOptionalAction conversion run on CPU. Missing supplied source is NOT_RUN/skipped; this is not a full vLLM server/GPU pass.

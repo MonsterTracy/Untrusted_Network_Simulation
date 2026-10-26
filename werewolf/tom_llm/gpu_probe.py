@@ -12,7 +12,7 @@ import sys
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.deployment import open_deployment, require_idle_gpu, validate_process_environment, validate_cache_paths
-from werewolf.tom_llm.model_spec import ModelSpec
+from werewolf.tom_llm.model_spec import ROOT, ModelSpec
 from werewolf.tom_llm.qualification_evidence import validate_sampling, CAPTURE_SITE
 from werewolf.tom_llm.qualification_inputs import SCHEDULE, validate_suite
 
@@ -111,6 +111,25 @@ def validate_launch_args(parsed,profile):
     require(parsed.quantization is None and parsed.reasoning_parser is None,'undeclared quantization/reasoning parser')
 
 
+def start_deployment(root, expected, *, execute=False):
+    """Foreground exec of the existing probe, with its exact scoped environment."""
+    require(execute and sys.platform=='linux','separately authorized Linux GPU operation required')
+    artifact,record=open_deployment(root,expected)
+    p=record['profile']
+    require(artifact.path==Path(p['root'])/'deployment' and record['source']['source_inventory_clean'],
+            'committed Source and isolated deployment path required')
+    validate_cache_paths(p)
+    from werewolf.tom_llm.deployment import CACHE_VARIABLES
+    for key in CACHE_VARIABLES:Path(p['environment_requirements'][key]).mkdir(parents=True,exist_ok=True)
+    validate_cache_paths(p,require_existing=True)
+    env={key:os.environ[key] for key in ('HOME','USER','LANG','LC_ALL') if key in os.environ}
+    env.update(p['environment_requirements'])
+    python=p['environment_prefix']+'/bin/python'
+    os.chdir(ROOT)
+    os.execve(python,[python,'-m','werewolf.tom_llm.gpu_probe','--deployment',str(artifact.path),
+        '--expected-deployment',expected,'--execute-synthetic-gpu-qualification'],env)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--deployment',required=True);parser.add_argument('--expected-deployment',required=True)
@@ -128,7 +147,7 @@ def main():
     from vllm.entrypoints.openai import api_server
     import uvloop
     api_server.cli_env_setup()
-    parsed=api_server.make_arg_parser(api_server.FlexibleArgumentParser()).parse_args(['--config',str(artifact.path/'vllm.json')])
+    parsed=api_server.make_arg_parser(api_server.FlexibleArgumentParser()).parse_args(['--config',str(artifact.path/'vllm.yaml')])
     api_server.validate_parsed_serve_args(parsed);validate_launch_args(parsed,p)
     process=lifetime();sink=JsonlSink(Path(p['engine_log_root'])/digest(process)/'engine-events.jsonl')
     original=api_server.init_app_state
