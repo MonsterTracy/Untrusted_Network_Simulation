@@ -138,14 +138,26 @@ def run_root(args,c):
     return safe_path(c['output_root'])/args.run_id
 
 
+def check_environment_binding(item,profile):
+    # Editing YAML cannot move old physical GPU evidence to a different prefix.
+    if item.get('environment_prefix'):
+        require(str(safe_path(item['environment_prefix']))==profile['environment_prefix'],
+                'configured environment differs from sealed binding; new Deployment and GPU Admission required')
+
+
 def service(args,c,key):
     from werewolf.tom_llm.service_manager import Service
     if args.purpose=='qualification':
         d=anchor(c['models'][key]['deployment'])
-        return Service(d.path,key,d.manifest_digest,qualification=True)
-    root=run_root(args,c)
-    p=verify_artifact(root/'models'/key/'permit',expected_artifact_type='mm_live_execution_permit',expected_schema_version=EXPERIMENT_VERSION)
-    return Service(root,key,p.manifest_digest)
+        manager=Service(d.path,key,d.manifest_digest,qualification=True)
+    else:
+        root=run_root(args,c)
+        p=verify_artifact(root/'models'/key/'permit',expected_artifact_type='mm_live_execution_permit',expected_schema_version=EXPERIMENT_VERSION)
+        manager=Service(root,key,p.manifest_digest)
+    # Status/logs/stop must remain usable for an already owned historical service.
+    if getattr(args,'operation',None)=='qualify' or getattr(args,'service_action',None)=='start':
+        check_environment_binding(c['models'][key],manager.binding()[1]['profile'])
+    return manager
 
 
 def prepare_model(c,key):
@@ -249,6 +261,7 @@ def dispatch(args):
             claimed=strict_json((admission.path/'admission.json').read_bytes())
             require(claimed['deployment_manifest_digest']==d.manifest_digest,'configured Admission/Deployment mismatch')
             _,record=open_deployment(d.path,d.manifest_digest,current_source=False)
+            check_environment_binding(item,record['profile'])
             budget=anchor(item['budget'])
             require(budget.manifest_digest==record['upstream_receipts']['budget'],'configured qualified budget drift')
             result[key]=ref(publish_permit(root,key,qualification=admission.path,expected_qualification=admission.manifest_digest,
@@ -310,6 +323,9 @@ def dispatch(args):
         require(args.execute_live and sys.platform=='linux','explicit --execute-live on Ubuntu required')
         for key in keys:
             p=verify_artifact(root/'models'/key/'permit',expected_artifact_type='mm_live_execution_permit',expected_schema_version=EXPERIMENT_VERSION)
+            from werewolf.tom_llm.live_admission import open_permit
+            _,record=open_permit(root,key,p.manifest_digest,physical=False)
+            check_environment_binding(c['models'][key],record['profile'])
             permits.append(key+'='+p.manifest_digest)
             if not args.manage_services:
                 manager=service(SimpleNamespace(purpose='run',run_id=args.run_id),c,key)

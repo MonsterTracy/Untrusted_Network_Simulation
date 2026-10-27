@@ -34,6 +34,128 @@ def test_yaml_and_json_share_configuration_and_frozen_model_registry(tmp_path,ca
     with pytest.raises(ValueError,match='override'):ops.load_config(y)
 
 
+def test_three_models_share_explicit_environment_but_not_candidate_assets():
+    c=ops.load_config(ROOT/'configs/paper/tom-llm-operations.example.yaml')
+    shared='/data/yuxiao/envs/untrusted-network-simulation-tom-baseline'
+    profiles=[]
+    for key,item in c['models'].items():
+        assert item['environment_prefix']==shared
+        p=dep.profile(ModelSpec(key),gpu_uuid='GPU-UNIT',candidate_root=item['candidate_root'],
+            model_directory=item['model_directory'],environment_prefix=shared)
+        assert p['environment_prefix']==shared
+        assert p['environment_requirements']['PATH'].startswith(shared+'/bin:')
+        assert p['environment_requirements']['CUDA_HOME']==shared+'/lib/python3.12/site-packages/nvidia/cu13'
+        dep.validate_cache_paths(p)
+        profiles.append(p)
+    for path in ('root','engine_log_root'):
+        assert len({p[path] for p in profiles})==3
+    assert len({p['argv_options']['model'] for p in profiles})==3
+    assert len({p['argv_options']['chat-template'] for p in profiles})==3
+    assert len({p['model_spec_digest'] for p in profiles})==3
+
+
+@pytest.mark.parametrize('prefix',['/data/yuxiao/envs','/data/yuxiao/envs/nested/env',
+    '/data/yuxiao/envs/../foreign','/tmp/foreign','relative-env'])
+def test_shared_environment_does_not_allow_arbitrary_external_paths(prefix):
+    with pytest.raises(ValueError,match='environment'):
+        dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-UNIT',candidate_root=dep.BASE/'multimodel/qwen3/new',
+            environment_prefix=prefix)
+
+
+def test_shared_environment_symlink_is_rejected_and_legacy_profile_is_preserved(tmp_path,monkeypatch):
+    monkeypatch.setattr(dep,'ENV_BASE',tmp_path)
+    (tmp_path/'real').mkdir();(tmp_path/'alias').symlink_to(tmp_path/'real',target_is_directory=True)
+    with pytest.raises(ValueError,match='symlinks'):
+        dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-UNIT',candidate_root=dep.BASE/'multimodel/qwen3/new',
+            environment_prefix=tmp_path/'alias')
+    root=dep.BASE/'multimodel/qwen3/candidate-v4'
+    default=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-UNIT',candidate_root=root)
+    assert default==dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-UNIT',candidate_root=root,
+        model_directory=root/'model',environment_prefix=root/'env')
+    assert default['environment_prefix']==str(root/'env')
+
+
+def test_shared_prefix_still_requires_exact_physical_environment_receipt(native_suites,monkeypatch):
+    from werewolf.tom_llm import live_admission as live
+    record=fixtures.model_record('qwen3',native_suites)
+    shared='/data/yuxiao/envs/untrusted-network-simulation-tom-baseline'
+    record['profile']=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',
+        candidate_root=record['profile']['root'],environment_prefix=shared)
+    record['model']['directory']=record['profile']['argv_options']['model']
+    record['environment']={'prefix':shared,'prior_audit_digest':'a'*64,'UNIT_version':'original'}
+    monkeypatch.setattr(dep,'verify_model',lambda *a:record['model'])
+    observed=[]
+    def capture(prefix,audit):observed.append((prefix,audit));return deepcopy(record['environment'])
+    monkeypatch.setattr(live,'capture_bound_environment',capture)
+    dep.verify_cpu_binding(record,ModelSpec('qwen3'))
+    assert observed==[(shared,'a'*64)]
+    monkeypatch.setattr(live,'capture_bound_environment',lambda *a:{**record['environment'],'UNIT_version':'changed'})
+    with pytest.raises(ValueError,match='physical environment changed'):
+        dep.verify_cpu_binding(record,ModelSpec('qwen3'))
+
+
+@pytest.mark.parametrize('operation,action,refused',[
+    ('serve','start',True),('qualify',None,True),('serve','status',False),
+    ('serve','logs',False),('serve','stop',False)])
+def test_new_yaml_environment_cannot_start_or_qualify_old_candidate_but_allows_inspection(monkeypatch,operation,action,refused):
+    from werewolf.tom_llm import service_manager
+    old='/data/yuxiao/tom-llm-reasoner-b2/env'
+    manager=NS(binding=lambda:(None,{'profile':{'environment_prefix':old}},None))
+    monkeypatch.setattr(service_manager,'Service',lambda *a,**kw:manager)
+    monkeypatch.setattr(ops,'anchor',lambda r:NS(path=Path(r['path']),manifest_digest=r['digest']))
+    c={'models':{'qwen3':{'environment_prefix':'/data/yuxiao/envs/untrusted-network-simulation-tom-baseline',
+        'deployment':{'path':'/UNIT/deployment','digest':'a'*64}}}}
+    args=NS(operation=operation,service_action=action,purpose='qualification')
+    if refused:
+        with pytest.raises(ValueError,match='new Deployment and GPU Admission'):ops.service(args,c,'qwen3')
+    else:assert ops.service(args,c,'qwen3') is manager
+
+
+@pytest.mark.parametrize('operation',['permit','run'])
+def test_new_environment_refuses_old_admission_or_permit_before_execution(tmp_path,monkeypatch,operation):
+    from werewolf.tom_llm import live_admission as live,experiment,baseline_cli
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'));monkeypatch.setattr(dep,'BASE',tmp_path)
+    root=tmp_path/'deployment';root.mkdir()
+    (root/'admission.json').write_text(json.dumps({'deployment_manifest_digest':'a'*64}))
+    old_profile={'environment_prefix':'/data/yuxiao/tom-llm-reasoner-b2/env'}
+    monkeypatch.setattr(ops,'anchor',lambda r:NS(path=Path(r['path']),manifest_digest=r['digest']))
+    monkeypatch.setattr(dep,'open_deployment',lambda *a,**kw:(None,{'profile':old_profile}))
+    monkeypatch.setattr(live,'publish_permit',lambda *a,**kw:pytest.fail('old environment must not grant Permit'))
+    monkeypatch.setattr(live,'open_permit',lambda *a,**kw:(None,{'profile':old_profile}))
+    monkeypatch.setattr(experiment,'open_run',lambda *a:(None,{'mode':'formal','model_order':['qwen3']},[]))
+    monkeypatch.setattr(ops,'verify_artifact',lambda *a,**kw:NS(manifest_digest='p'*64))
+    monkeypatch.setattr(baseline_cli,'execute',lambda *a:pytest.fail('old environment must not execute'))
+    item={'environment_prefix':'/data/yuxiao/envs/untrusted-network-simulation-tom-baseline',
+        'deployment':{'path':str(root),'digest':'a'*64},'admission':{'path':str(root),'digest':'b'*64}}
+    cfg=tmp_path/'ops.json';cfg.write_text(json.dumps({'models':{'qwen3':item},'output_root':str(tmp_path/'runs')}))
+    command=['prepare','--stage','permit'] if operation=='permit' else ['run','--execute-live','--manage-services']
+    with pytest.raises(ValueError,match='new Deployment and GPU Admission'):
+        main(['tom-llm','--config',str(cfg),*command,'--run-id','unit','--models','qwen3'])
+
+
+def test_shared_environment_lock_has_exact_official_binary_hashes_and_runtime_pins():
+    import re
+    from urllib.parse import unquote,urlsplit
+    from packaging.utils import parse_wheel_filename
+    raw=(ROOT/'configs/paper/tom-llm-environment-linux-py312-v1.txt').read_text()
+    versions={}
+    for line in raw.splitlines():
+        if not line or line.startswith('#'):continue
+        name,url=line.split(' @ ');parsed=urlsplit(url)
+        assert parsed.scheme=='https' and parsed.hostname in ('files.pythonhosted.org','github.com')
+        assert re.fullmatch('sha256=[0-9a-f]{64}',parsed.fragment)
+        filename=unquote(parsed.path.rsplit('/',1)[-1])
+        _,version,_,tags=parse_wheel_filename(filename)
+        assert name not in versions
+        versions[name]=str(version)
+        assert any(t.platform=='any' or 'x86_64' in t.platform for t in tags)
+    assert len(versions)==213
+    assert {name:versions[name] for name in ('vllm','torch','transformers','tokenizers','triton','flashinfer-python',
+        'apache-tvm-ffi','nvidia-cuda-runtime','nvidia-cuda-nvcc')}=={
+        'vllm':'0.27.0','torch':'2.13.0','transformers':'5.14.1','tokenizers':'0.22.2','triton':'3.7.1',
+        'flashinfer-python':'0.6.16.post3','apache-tvm-ffi':'0.1.11','nvidia-cuda-runtime':'13.0.96','nvidia-cuda-nvcc':'13.0.88'}
+
+
 def test_qualification_reuse_checks_bytes_not_head_and_unknown_files_fail(monkeypatch):
     now=deepcopy(dep.source_identity());now['source_inventory_clean']=True
     monkeypatch.setattr(dep,'source_identity',lambda:now)

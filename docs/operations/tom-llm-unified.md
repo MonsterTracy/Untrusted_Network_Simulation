@@ -19,8 +19,9 @@ Changing those frozen values is a new protocol, not an operations setting.
 
 All commands below are **future Ubuntu manual operations after review and separate
 authorization**. They have not been executed by this refactor. Use a committed
-checkout and existing controller dependencies (including the optional ToM/LLM
-dependencies); each model retains its own immutable Python3.12/vLLM prefix.
+checkout and controller dependencies (including the optional ToM/LLM
+dependencies). Models may share the explicitly configured read-only
+Python3.12/vLLM prefix `/data/yuxiao/envs/untrusted-network-simulation-tom-baseline`.
 The controller calls a prefix's own CPU interpreter for environment inspection.
 The original synthetic client also runs in that prefix. No environment is edited.
 
@@ -42,6 +43,137 @@ It prints path/digest pairs; optionally persist them with `--save-config`. A mis
 an existing input is an error, never an inferred external approval. A preexisting
 Deployment stops preparation before hashing or writing. Interrupted preparation
 is preserved; it is not overwritten or automatically cleaned/resumed.
+
+### Shared Conda environment: manual installation and CPU acceptance
+
+The supplied YAML uses one `environment_prefix` via YAML anchors for all three
+models. A prefix must be inside the historical baseline root, or be a direct,
+non-symlink child of `/data/yuxiao/envs/`. The parent directory itself, nested
+external prefixes and `..` paths are rejected. This exception is for a read-only
+environment asset only: models, caches, temporary files, logs, candidates and
+results still use separate paths inside `/data/yuxiao/tom-llm-reasoner-b2`.
+No Conda activation/discovery, registration or automatic installation is added.
+The selected interpreter is always the prefix's own `bin/python`.
+
+The new prefix **has no GPU qualification**, even if the wheels match the old
+environment. Keep Candidate-v4 and its Admission/config as historical evidence.
+Use a NEW per-model candidate root (the example uses `candidate-shared-env-v1`)
+and new environment receipts. Do not pin old `environment`, `deployment` or
+`admission` references into the new config. Existing official weights, tokenizer,
+Suite, common Cohort and Budget may be reused after their existing strict checks;
+do not move them, republish Selection, or create a different request population.
+Each model needs its own two-round physical Qualification and Admission on this
+prefix before a new Permit. Changing the YAML prefix alone cannot retarget an old
+Deployment or Permit: prepare-permit, start, qualify and run reject the mismatch.
+Historical reads, logs and an explicit owned-service stop remain available.
+
+`configs/paper/tom-llm-environment-linux-py312-v1.txt` pins 213 official binary
+wheel URLs and SHA-256 values for CPython 3.12/Linux x86_64/glibc >= 2.35. Core
+versions are vLLM 0.27.0, Torch 2.13.0, Transformers 5.14.1, Tokenizers 0.22.2,
+Triton 3.7.1, FlashInfer 0.6.16.post3 and TVM-FFI 0.1.11. CUDA toolkit 13.0.3.0,
+NVCC/CRT/NVRTC 13.0.88, runtime 13.0.96 and the official cu130 FlashInfer JIT
+cache are included. These match the previously verified release combination;
+they do not copy its environment identity or RECORD findings. vLLM's official
+[CUDA requirements](https://github.com/vllm-project/vllm/blob/v0.27.0/requirements/cuda.txt)
+and [published metadata](https://pypi.org/pypi/vllm/0.27.0/json) specify the
+Torch/FlashInfer/TVM dependencies. Do not independently upgrade Torch,
+Transformers, CUDA or install a second cu12 family. The driver is NOT installed
+by this lock. Driver/3090/JIT compatibility still requires physical qualification.
+
+The lock was resolved on Mac for the Linux/Python3.12 target using uv 0.11.8,
+without overrides; wheels were selected by compatible tags and physical hashes.
+This is dependency-resolution evidence, **not** an installed Linux `pip check`
+or GPU PASS. The 198 historical wheel references are retained, and the remaining
+controller/report/test dependencies are also pinned. The precompiled cu130 JIT
+wheel retains its separate official release SHA. Regenerating dependencies is a
+reviewed lock update, not a step to repeat during each deployment.
+
+The following commands are for the **user's Ubuntu terminal only**, after
+reviewing the new source commit. They install packages only into the already
+created, unqualified prefix; they neither create a Conda environment nor modify
+`/home/dell/.conda/environments.txt`. Replace SOURCE with the independently
+deployed checkout, never Candidate-v4's source. Stop on any error. If this prefix
+already serves a task or has a receipt/qualification, do not install into it.
+If it already contains packages beyond the newly created Conda Python/pip
+bootstrap, first compare `pip freeze --all` with the lock and stop on unexplained
+differences; do not use this sequence as an environment repair/cleanup procedure.
+
+```bash
+set -euo pipefail
+ENV_PREFIX=/data/yuxiao/envs/untrusted-network-simulation-tom-baseline
+SOURCE=/REPLACE/INDEPENDENT/COMMITTED/CHECKOUT
+PREP=/data/yuxiao/tom-llm-reasoner-b2/deployment-prep/shared-env-v1
+test -x "$ENV_PREFIX/bin/python"
+test ! -e "$PREP"
+test -f "$SOURCE/configs/paper/tom-llm-environment-linux-py312-v1.txt"
+"$ENV_PREFIX/bin/python" -I -B - "$ENV_PREFIX" <<'PY'
+from pathlib import Path
+import platform,sys
+p=Path(sys.argv[1])
+assert p.is_absolute() and p.parent==Path('/data/yuxiao/envs')
+assert not any(x.is_symlink() for x in (p,*p.parents))
+assert Path(sys.prefix).resolve()==p and sys.version_info[:2]==(3,12)
+assert Path(sys.executable).resolve().is_relative_to(p)
+assert sys.platform=='linux' and platform.machine()=='x86_64'
+libc,version=platform.libc_ver()
+assert libc=='glibc' and tuple(map(int,version.split('.'))) >= (2,35)
+print(sys.version,libc,version)
+PY
+mkdir -p "$(dirname "$PREP")"
+mkdir "$PREP"
+export PIP_CACHE_DIR="$PREP/pip-cache" TMPDIR="$PREP/tmp"
+export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 CUDA_VISIBLE_DEVICES=''
+mkdir "$TMPDIR"
+cd "$SOURCE"
+git rev-parse HEAD > "$PREP/source-revision.txt"
+sha256sum configs/paper/tom-llm-environment-linux-py312-v1.txt > "$PREP/lock.sha256"
+"$ENV_PREFIX/bin/python" -I -B -m pip freeze --all > "$PREP/pip-before.txt"
+"$ENV_PREFIX/bin/python" -I -B -m pip --isolated install --prefix "$ENV_PREFIX" \
+  --cache-dir "$PIP_CACHE_DIR" --require-hashes --only-binary=:all: \
+  --report "$PREP/install-report.json" -r configs/paper/tom-llm-environment-linux-py312-v1.txt
+"$ENV_PREFIX/bin/python" -I -B -m pip --isolated install --prefix "$ENV_PREFIX" \
+  --cache-dir "$PIP_CACHE_DIR" --no-deps --no-build-isolation \
+  --report "$PREP/project-install-report.json" -e .
+"$ENV_PREFIX/bin/python" -I -B -m pip check > "$PREP/pip-check.txt"
+cat "$PREP/pip-check.txt"
+"$ENV_PREFIX/bin/python" -I -B -m pip freeze --all > "$PREP/pip-freeze.txt"
+"$ENV_PREFIX/bin/python" -I -B -m pip inspect > "$PREP/pip-inspect.json"
+conda list --explicit -p "$ENV_PREFIX" > "$PREP/conda-explicit.txt"
+```
+
+Expected `pip check`: `No broken requirements found.` A failure stops acceptance;
+do not use `--no-deps` for the locked dependencies, override metadata, edit RECORD
+or reinstall an old qualified environment. The application's separate `--no-deps`
+install only exposes `uns` after the complete dependency lock has been installed;
+the following `pip check` checks the application's requirements too. The editable
+install is necessary: runtime Source verification must resolve the committed Git
+checkout, not an untracked copy of the package under site-packages. Installation
+is rerunnable with identical inputs in an unqualified prefix, but each attempt
+uses a NEW PREP directory and preserves earlier reports. Inspect the source Git
+status after packaging; do not erase an unexpected change. No command imports
+vLLM/Torch or executes a forward pass here.
+
+Before `prepare --stage model`, perform the existing environment audit on this
+new prefix and pin its actual report SHA as `prior_audit_digest`. Historical nine
+RECORD deviations remain in their original reports; do not present that old SHA
+as an audit of this prefix. Any new deviations must be disclosed for review.
+`capture_environment` still requires pip check, pinned vLLM seam bytes, package
+METADATA/RECORD and critical-file hashes; a shared prefix does not waive them.
+After CPU acceptance, keep the prefix unchanged across all three models. An
+installation change invalidates the corresponding physical binding. Sharing an
+environment is not sharing model Qualification.
+
+With a separately reviewed YAML and its actual new audit digest:
+
+```bash
+"$ENV_PREFIX/bin/uns" tom-llm --config /data/yuxiao/tom-llm-reasoner-b2/tom-llm.yaml status
+"$ENV_PREFIX/bin/uns" tom-llm --config /data/yuxiao/tom-llm-reasoner-b2/tom-llm.yaml prepare --stage model --models qwen3 --save-config
+```
+
+Repeat model preparation separately for Yi/Mistral when their full local assets
+exist. It publishes only new per-model CPU receipts and Deployment; no service
+is started. The 76-call two-instance Qualification commands below require a
+separate GPU authorization for each new model/environment binding.
 
 ### CPU inputs before weight acquisition
 
@@ -155,8 +287,11 @@ Ten games is a recommended integration example, not a prerequisite. Any legal
 technical N uses the existing deterministic whole-game rule. Formal means the
 full frozen 150 games (currently 10,714 public observer tasks per model).
 
-For an already-qualified Qwen, pin the original Candidate-v4 Deployment,
-Admission and budget in YAML. Do **not** prepare over it or re-run its rounds.
+The following run examples require an Admission for the configured environment.
+Keep the original Candidate-v4 Deployment, Admission and budget unchanged. Its
+qualification binds the old prefix; use it for offline history, not to authorize
+the new shared prefix. Publish new Run/Permit outputs only after the new physical
+qualification has passed. Do not migrate an old/incomplete Run to this prefix.
 
 ```bash
 uns tom-llm --config tom-llm.yaml prepare --stage run --run-id qwen-tech --models qwen3 --games 10 --mode technical
@@ -228,13 +363,14 @@ are not substituted for formal efficiency measurements.
   The new Permit records the compatibility policy, both Source digests and the
   compared inference inventory digest. Changed inference code requires a new
   candidate and two-round GPU qualification, with separate user authorization.
-  Physical model SHA, prefix environment (including all nine disclosed RECORD
-  deviations), full budget and active GPU/driver/kernel/process/input evidence
+  Physical model SHA, exact prefix environment (with its own audit evidence),
+  full budget and active GPU/driver/kernel/process/input evidence
   are revalidated independently. No recorded deviation is repaired or waived.
 
-Yi and Mistral use the same operations with their own candidate, prefix,
+Yi and Mistral use the same operations with their own candidate and independent
 ModelSpec, native suite, budget, service port, rounds, Admission and Permit. No
-Qwen physical result is reused for those models. All server actions remain manual.
+Qwen physical result is reused for those models. Their explicitly selected prefix
+may be shared read-only. All server actions remain manual.
 
 ## Supported, proposed and still unverified
 
@@ -286,8 +422,9 @@ GPU authorization where needed, are:
   kill or signal unrelated processes. Failed/unknown generation stays blocked
   without resend. Fault injection must never touch collection jobs or sealed
   Qwen rounds.
-* Read the original Qwen Candidate-v4 Admission OFFLINE and check v2 compatibility
-  for the new committed Source. Do not re-run Qwen's sealed 76 calls for these
-  checks. Actual v4 bytes have not been read by these Mac tests. Yi/Mistral still
+* Read the original Qwen Candidate-v4 Admission OFFLINE and check v2 Source
+  compatibility without retargeting its environment. This is not qualification
+  for the new prefix. Do not re-run Qwen's sealed 76 calls in their old destinations.
+  Actual v4 bytes have not been read by these Mac tests. All three models still
   need their own physical assets, environment and two-round GPU evidence before
   formal execution; no Qwen evidence can authorize them.

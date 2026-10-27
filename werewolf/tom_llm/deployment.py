@@ -14,6 +14,7 @@ from werewolf.tom_llm.qualification_inputs import open_suite, open_budget
 
 VERSION = 'classic7_multimodel_deployment_v1'
 BASE = Path('/data/yuxiao/tom-llm-reasoner-b2')
+ENV_BASE = Path('/data/yuxiao/envs')
 RECIPE = ROOT/'configs/paper/tom-llm-qualification-recipe-v1.json'
 RECIPE_SHA = '8b664c3cceede49cc9083c64cb2a4207e8e5853352ddb51501bec20712a97aaa'
 
@@ -109,8 +110,13 @@ def profile(spec, *, gpu_uuid, candidate_root, model_directory=None, environment
             and not any(p.is_symlink() for p in (root,*root.parents)), 'isolated candidate root required')
     model = Path(model_directory) if model_directory else root/'model'
     env = Path(environment_prefix) if environment_prefix else root/'env'
-    require(model.is_absolute() and env.is_absolute() and model.is_relative_to(BASE) and env.is_relative_to(BASE)
-            and '..' not in model.parts and '..' not in env.parts, 'physical paths must remain inside independent base')
+    require(model.is_absolute() and model.is_relative_to(BASE) and '..' not in model.parts,
+            'physical model path must remain inside independent base')
+    # An explicit shared Conda prefix is a read-only physical asset. Caches and
+    # every model's Deployment/round/Admission still belong to its candidate.
+    require(env.is_absolute() and (env.is_relative_to(BASE) or env.parent==ENV_BASE)
+            and '..' not in env.parts and not any(p.is_symlink() for p in (env,*env.parents)),
+            'environment must use independent base or a direct /data/yuxiao/envs prefix without symlinks')
     cache = root/'cache'
     variables = {k:str(cache/n) for k,n in {'HF_HOME':'huggingface','XDG_CACHE_HOME':'xdg',
         'TORCH_HOME':'torch','TRITON_CACHE_DIR':'triton','VLLM_CACHE_ROOT':'vllm','NUMBA_CACHE_DIR':'numba',

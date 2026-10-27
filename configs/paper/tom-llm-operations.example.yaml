@@ -16,31 +16,31 @@ cohort:
   digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
 models:
   qwen3:
-    # Existing Candidate-v4 is read as immutable historical evidence.
+    # NEW deployment for the shared environment. Keep Candidate-v4/history unchanged.
+    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/qwen3/candidate-shared-env-v1
+    model_directory: /data/yuxiao/tom-llm-reasoner-b2/models/qwen3
+    environment_prefix: &baseline_env /data/yuxiao/envs/untrusted-network-simulation-tom-baseline
+    prior_audit_digest: &baseline_audit REPLACE_WITH_NEW_ENVIRONMENT_AUDIT_DIGEST
     tokenizer_assets: /data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/qwen3
-    deployment:
-      path: /data/yuxiao/tom-llm-reasoner-b2/multimodel/qwen3/candidate-v4/deployment
-      digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
-    admission:
-      path: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_QWEN_ADMISSION
-      digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
+    # Existing model/Suite/Budget bytes may be reused READ-ONLY with verified digests.
+    # No old environment receipt, Deployment or GPU Admission grants the new prefix qualification.
     budget:
       path: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_QWEN_BUDGET
       digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
   yi:
     # CPU stages need only tokenizer_assets, this new output directory and cohort.
     cpu_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/cpu-v1
-    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/candidate-v1
+    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/candidate-shared-env-v1
     model_directory: /data/yuxiao/tom-llm-reasoner-b2/models/yi
-    environment_prefix: /data/yuxiao/tom-llm-reasoner-b2/envs/yi
+    environment_prefix: *baseline_env
     tokenizer_assets: /data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/yi
-    prior_audit_digest: REPLACE_WITH_ACTUAL_ENVIRONMENT_AUDIT_DIGEST
+    prior_audit_digest: *baseline_audit
     # --save-config explicitly fills generated suite/budget/deployment references.
     # Existing assets/environment/suite/budget receipts can also be pinned here.
   mistral:
     cpu_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/cpu-v1
-    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/candidate-v1
+    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/candidate-shared-env-v1
     model_directory: /data/yuxiao/tom-llm-reasoner-b2/models/mistral
-    environment_prefix: /data/yuxiao/tom-llm-reasoner-b2/envs/mistral
+    environment_prefix: *baseline_env
     tokenizer_assets: /data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/mistral
-    prior_audit_digest: REPLACE_WITH_ACTUAL_ENVIRONMENT_AUDIT_DIGEST
+    prior_audit_digest: *baseline_audit
