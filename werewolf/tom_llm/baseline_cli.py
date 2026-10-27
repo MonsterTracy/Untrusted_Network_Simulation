@@ -1,19 +1,14 @@
 """Unified preparation, admission, serial execution, recovery, and analysis CLI."""
 
 import argparse
-import fcntl
 import json
-import os
 from pathlib import Path
-import signal
-import subprocess
 import sys
-import time
-import uuid
 
 from werewolf.tom_llm.common import require, strict_json
 from werewolf.tom_llm.experiment import prepare_run, open_run, safe_path, choose_games
 from werewolf.tom_llm.model_spec import ModelSpec
+from werewolf.tom_llm.service_manager import owned_service
 from werewolf.tom_llm.live_runner import (HttpTransport,LiveTransport,run_model,run_lock,status,
     pending_tasks,finalize_received,read_predictions,seal_run)
 
@@ -32,7 +27,9 @@ def prepare(args,root):
     from werewolf.tom_llm.reference import open_reference
     from werewolf.tom_llm.multimodel_evaluation import reference_binding,validate_public_coverage
     require(args.config and not root.exists(),'prepare needs config and NEW run directory')
-    raw=safe_path(args.config).read_bytes();c=strict_json(raw)
+    raw=safe_path(args.config).read_bytes()
+    from werewolf.tom_llm.operations import load_config
+    c=load_config(args.config,raw=raw)
     models=args.models or list(c['models']);games=args.games if args.games is not None else 150
     mode=args.mode or 'technical'
     expected=strict_json(safe_path(c['expected_selection_json']).read_bytes())
@@ -50,12 +47,12 @@ def prepare(args,root):
         from werewolf.tom_llm.deployment import BASE
         require(root.is_relative_to(BASE),'Ubuntu writes must remain inside independent b2 root')
     if c.get('cohort'):
-        cohort,tasks=read_cohort(c['cohort']['path'],c['cohort']['digest'])
+        cohort,tasks=read_cohort(c['cohort']['path'],c['cohort']['digest'],current_source=False)
     else:
         cohort=export_cpu_cohort(root/'cohort',publication_root=c['publication'],evaluation_root=c['evaluation'],
             expected_reference=c['expected_reference'],selection_root=c['selection'],expected_selection=expected,
             selection_provenance=provenance,prepared_root=c['prepared'])
-        cohort,tasks=read_cohort(cohort.path,cohort.manifest_digest)
+        cohort,tasks=read_cohort(cohort.path,cohort.manifest_digest,current_source=False)
     selected=strict_json((selection_artifact.path/'selection.json').read_bytes())
     require(cohort.manifest['selection']=={**binding,'game_ids':selected['game_ids']},'configured Selection/Prepared/provenance differs from cohort')
     ref=open_reference(c['publication'],c['evaluation'],expected_seal_digest=c['expected_reference'])
@@ -75,45 +72,6 @@ def prepare(args,root):
         cohort_root=cohort.path,expected_cohort=cohort.manifest_digest,publication=c['publication'],evaluation=c['evaluation'],
         expected_reference=c['expected_reference'],configuration={'input_config':c,'input_sha256':sha256_bytes(raw),'budgets':budgets})
 
-
-def owned_service(root,key,expected):
-    """Only this Popen's new process group may be terminated. No discovery/kill of other jobs."""
-    from contextlib import contextmanager
-    from werewolf.tom_llm.live_admission import open_permit,capture_live_instance
-    from werewolf.tom_llm.deployment import CACHE_VARIABLES,validate_cache_paths,BASE
-    @contextmanager
-    def context():
-        permit,r=open_permit(root,key,expected);p=r['profile'];service=safe_path(p['root'])
-        service.mkdir(parents=True,exist_ok=True)
-        with (BASE/'baseline-gpu.lock').open('a+b') as gpu_lock:
-            fcntl.flock(gpu_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            for var in CACHE_VARIABLES:safe_path(p['environment_requirements'][var]).mkdir(parents=True,exist_ok=True)
-            validate_cache_paths(p,require_existing=True)
-            env={k:os.environ[k] for k in ('HOME','USER','LANG','LC_ALL') if k in os.environ}
-            env.update(p['environment_requirements'])
-            cmd=[p['environment_prefix']+'/bin/python','-m','werewolf.tom_llm.live_service','--run',str(Path(root).absolute()),
-                 '--model',key,'--expected-permit',expected,'--execute-live']
-            from werewolf.tom_llm.model_spec import ROOT
-            with (service/('stdout-'+uuid.uuid4().hex+'.log')).open('xb') as log:
-                proc=subprocess.Popen(cmd,cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-                try:
-                    deadline=time.monotonic()+900
-                    while True:
-                        require(proc.poll() is None,'owned service exited; retain stdout log')
-                        try:
-                            instance=capture_live_instance(permit,r,proc.pid)
-                            with Path(instance['engine_log']).open('rb') as audit:startup=strict_json(audit.readline())
-                            require(startup['kind']=='startup' and startup['permit_digest']==expected,'live engine startup not ready')
-                            break
-                        except (OSError,ValueError,KeyError):
-                            require(time.monotonic()<deadline,'service startup timeout; no model request sent');time.sleep(.25)
-                    yield proc.pid
-                finally:
-                    if proc.poll() is None:
-                        require(os.getpgid(proc.pid)==proc.pid,'owned process-group identity changed')
-                        os.killpg(proc.pid,signal.SIGTERM)
-                        proc.wait(timeout=60)  # No force kill or retry. Retain process/logs on failure.
-    return context()
 
 
 def execute(args,root):

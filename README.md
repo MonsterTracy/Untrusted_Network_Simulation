@@ -22,6 +22,7 @@ line; `main` remains the stable-release branch. See the
 |---|---|
 | Canonical Data | Collection/evidence audit, whole-game split, V1/V2 publication and release: [Data lifecycle](docs/research/data-acquisition-preprocessing.md) |
 | Observer-conditioned ToM | Public-only non-self suspicion modeling, training/recovery, OOF and sealed Final Fit lifecycles: [ToM contract](docs/tom_contract.md), [Qwen3 Final Fit](docs/qwen3-final-fit.md) |
+| ToM LLM Baselines | Qwen3/Yi/Mistral via `uns tom-llm`: independent CPU Tokenizer/Suite/full-150 Budget, guarded service/qualification/execution and sealed paired reports: [operations and current limits](docs/operations/tom-llm-unified.md), [YAML example](configs/paper/tom-llm-operations.example.yaml) |
 | Observer-DTRS D1–D4 | PRE features and conditional event estimation, `LossSpec`, conditional risks, derived thresholds and POS/BND/NEG; Capsule/Broker/Resident Service/Shadow/QUAL engineering: [D2](docs/research/observer-dtrs-v1-d2a-protocol.md), [D3](docs/research/observer-dtrs-v1-d3a-protocol.md), [D4](docs/research/observer-dtrs-v1-d4c2b2-resident-service.md) |
 | Contextual speech research | Opt-in contextual losses and strategy intents through existing Actor/Parser/verified speech, with three-condition synthetic comparisons: [prototype and evidence limits](docs/research/observer-dtrs-contextual-speech-prototype.md) |
 | Experiment A | Paired Qwen3 temporal conditions, continuous/competition-top1 Q and fixed-M3 development contrasts: [temporal contract](docs/adr/0005-isolate-direct-day-phase-features-in-temporal-ablation.md), [paired preparation](werewolf/tom/backbone_study.py), [mapper runner](scripts/run_phase2_mapper_study.py), [statistical consumer](scripts/experiment_a_mapper_contrasts.py) |
@@ -34,6 +35,14 @@ improvement. The speech prototype is not a frozen experiment or default game
 policy. Experiment A retains Execution Source
 `39f4ea25906808bf1ed28b05fdfb63865cc3ffb3` and Analysis Source
 `13ca742d7d98e41d5f68e5cb98ad5901f017115c` for the original study.
+
+The ToM LLM unified entry supports CPU Tokenizer/Suite/full-150 context checks
+before weights or a model environment are available, then explicit service,
+qualification and formal-experiment operations. Asset download and environment
+installation are **not implemented**; the pinned-revision acquisition proposal
+and remaining Linux/vLLM pidfd, lock-FD and worker-shutdown checks are listed in
+[the operations guide](docs/operations/tom-llm-unified.md). CPU/Mock tests do not
+establish physical Admission or completion of the 10,714-request formal run.
 
 Mapper/Experiment A tools and their tests additionally use the `mapper` optional
 dependency group in [setup.py](setup.py). The default CLI and collection flow

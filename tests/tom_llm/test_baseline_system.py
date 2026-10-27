@@ -104,15 +104,19 @@ def test_real_http_wire_and_durable_model_seal(study,fake_http,key):
     assert result['failures']['legal_uniform_rows']>0
 
 
-def test_complete_cli_three_model_analysis_reloads_seals(study,fake_http,tmp_path):
+def test_complete_cli_three_model_analysis_reloads_seals(study,fake_http,tmp_path,monkeypatch):
     root,tasks,ref=study;endpoint,state=fake_http
     args=['--run-id','test-run','--output-root',str(root.parent)]
     for k in ('qwen3','yi','mistral'):args+=['--fake-endpoint',k+'='+endpoint]
     response=main(args)
     assert len(state['requests'])==3*len(tasks)
+    original=ex.source_v3()
+    monkeypatch.setattr(ex,'source_v3',lambda:{**original,'source_revision':'f'*40})
+    with pytest.raises(ValueError,match='Source v3'):ex.open_run(root)
     report=main(['--run-id','test-run','--output-root',str(root.parent)],analysis=True)
     artifact=verify_artifact(report['path'],expected_artifact_type='mm_baseline_analysis',expected_schema_version=ex.VERSION)
     data=strict_json((artifact.path/'analysis.json').read_bytes())
+    assert data['source']==original and data['analysis_source']['source_revision']=='f'*40
     assert data['formal_result'] is False and len(data['llm_pairwise'])==3
     assert set(data['models'])=={'qwen3','yi','mistral'}
     for key in data['models']:
@@ -416,11 +420,13 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     root=tmp_path/'unit-run';spec=ModelSpec(key);source={**ex.source_v3(),'source_inventory_clean':True}
     contract=NS(manifest_digest='a'*64)
     run={'mode':mode,'source':source,'models':{key:spec.digest},'cohort_digest':'c'*64}
-    budget={'cohort_digest':run['cohort_digest']};qualified={'budget':budget,'upstream_receipts':{'budget':'b'*64}}
+    budget={'cohort_digest':run['cohort_digest']};qualified={'budget':budget,'upstream_receipts':{'budget':'b'*64},'source':source}
+    from werewolf.tom_llm import deployment
+    monkeypatch.setattr(deployment,'qualification_compatibility',lambda s:{'UNIT_ONLY':digest(s)})
     profile={'argv_options':{'UNIT_ONLY':'not_a_real_vllm_config'}};observed=[]
     monkeypatch.setattr(admission,'sys',NS(platform='linux'))
     monkeypatch.setattr(admission,'BASE',tmp_path)
-    monkeypatch.setattr(admission,'open_run',lambda *a:(contract,run,[]))
+    monkeypatch.setattr(admission,'open_run',lambda *a,**kw:(contract,run,[]))
     monkeypatch.setattr(admission,'source_v3',lambda:source)
     def physical_check(path,expected,model):
         observed.append((path,expected,model.key));return qualified
@@ -435,7 +441,7 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     assert set(artifact.manifest['file_table'])=={'permit.json','vllm.yaml','chat_template.jinja'}
     _,record=admission.open_permit(root,key,artifact.manifest_digest)
     assert set(record)=={'run_root','run_digest','model','model_spec_digest','source','qualified_runtime','profile',
-        'qualification_root','qualification_digest','budget_root','tokenizer_assets','evidence_kind'}
+        'qualification_root','qualification_digest','budget_root','tokenizer_assets','evidence_kind','qualification_compatibility'}
     assert record['run_digest']==contract.manifest_digest and record['model_spec_digest']==spec.digest
     assert record['source']==source and record['qualification_digest']=='d'*64 and record['profile']==profile
     assert record['evidence_kind']=='physical_execution_binding'
@@ -477,37 +483,16 @@ def test_cli_removes_old_approval_and_predecessor_options(tmp_path,monkeypatch):
         'tokenizer_assets':'UNIT_SMALL_ASSETS'}
 
 
-@pytest.mark.parametrize('group_matches',[True,False])
-def test_managed_lifecycle_only_signals_its_owned_group(tmp_path,monkeypatch,group_matches):
-    from werewolf.tom_llm import baseline_cli as cli,live_admission as admission,deployment
-    base=tmp_path/'base';base.mkdir();service=base/'service'
-    log=base/'engine-events.jsonl';permit='d'*64
-    log.write_text(json.dumps({'kind':'startup','permit_digest':permit})+'\n')
-    profile={'root':str(service),'environment_prefix':str(base/'env'),
-        'environment_requirements':{k:str(service/'cache'/k) for k in deployment.CACHE_VARIABLES}}
-    monkeypatch.setattr(deployment,'BASE',base)
-    monkeypatch.setattr(admission,'open_permit',lambda *a,**kw:(NS(manifest_digest=permit),{'profile':profile}))
-    monkeypatch.setattr(admission,'capture_live_instance',lambda *a,**kw:{'engine_log':str(log)})
+def test_managed_cli_reuses_persistent_service_manager(monkeypatch):
+    from werewolf.tom_llm import baseline_cli as cli,service_manager
     calls=[]
-    class Child:
-        pid=123456789;done=False
-        def poll(self):return 0 if self.done else None
-        def wait(self,timeout):self.done=True;return 0
-    child=Child()
-    def popen(command,**kwargs):
-        calls.append(('start',command,kwargs));return child
-    monkeypatch.setattr(cli.subprocess,'Popen',popen)
-    monkeypatch.setattr(cli.os,'getpgid',lambda pid:pid if group_matches else pid+1)
-    monkeypatch.setattr(cli.os,'killpg',lambda pid,sig:calls.append(('signal',pid,sig)))
-    if group_matches:
-        with cli.owned_service(base/'run','qwen3',permit) as pid:assert pid==child.pid
-        assert calls[-1][0:2]==('signal',child.pid) and child.done
-    else:
-        with pytest.raises(ValueError,match='group'):
-            with cli.owned_service(base/'run','qwen3',permit):pass
-        assert not any(c[0]=='signal' for c in calls)
-    assert calls[0][2]['start_new_session'] is True
-    assert calls[0][1][-1]=='--execute-live'
+    class Managed:
+        def __init__(self,*args):calls.append(('bind',args))
+        def start(self,**kw):calls.append(('start',kw));return {'pid':123}
+        def stop(self,**kw):calls.append(('stop',kw))
+    monkeypatch.setattr(service_manager,'Service',Managed)
+    with cli.owned_service('/UNIT/run','qwen3','d'*64) as pid:assert pid==123
+    assert calls==[('bind',('/UNIT/run','qwen3','d'*64)),('start',{'execute':True}),('stop',{'execute':True})]
 
 
 

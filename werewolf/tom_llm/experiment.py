@@ -44,6 +44,7 @@ def source_v3():
 
 def safe_path(path):
     p = Path(path).absolute()
+    require('..' not in p.parts, 'experiment path contains parent traversal')
     require(not any(q.is_symlink() for q in (p,*p.parents)), 'experiment path traverses symlink')
     return p
 
@@ -81,7 +82,7 @@ def prepare_run(destination, *, run_id, models, games, mode, cohort_root, expect
                 publication, evaluation, expected_reference, configuration=None):
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,79}',run_id) is not None, 'invalid run-id')
     require(models and len(set(models)) == len(models), 'empty/duplicate model list')
-    cohort,tasks = read_cohort(cohort_root,expected_cohort)
+    cohort,tasks = read_cohort(cohort_root,expected_cohort,current_source=False)
     selection = strict_json((Path(cohort.manifest['selection_root'])/'selection.json').read_bytes())
     selected = choose_games(selection,games,mode)
     tasks = [t for t in tasks if t['game_id'] in set(selected)]
@@ -100,7 +101,9 @@ def open_run(root, expected=None, *, current_source=True):
     a,r = read_record(Path(root)/'contract','mm_baseline_experiment',expected)
     require(r['protocol'] == protocol(), 'fixed metrics/protocol drift')
     if current_source: require(r['source'] == source_v3(), 'experiment Source v3 drift; rebuild, never re-sign')
-    c,tasks = read_cohort(r['cohort_root'],r['cohort_digest'])
+    from werewolf.tom_llm.deployment import validate_source_evidence
+    validate_source_evidence(r['source'])
+    c,tasks = read_cohort(r['cohort_root'],r['cohort_digest'],current_source=False)
     require(r['selection'] == c.manifest['selection'] and r['reference'] == c.manifest['reference'], 'common cohort anchors drift')
     selection = strict_json((Path(c.manifest['selection_root'])/'selection.json').read_bytes())
     require(r['games'] == choose_games(selection,r['game_count'],r['mode']), 'game selection drift')

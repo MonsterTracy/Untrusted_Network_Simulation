@@ -1,0 +1,46 @@
+# Copy outside the checkout as tom-llm.yaml. Fill actual paths/receipt digests.
+# This file locates frozen contracts; it does not override ModelSpec/decoding.
+output_root: /data/yuxiao/tom-llm-reasoner-b2/experiments
+gpu_uuid: GPU-REPLACE_WITH_ACTUAL_UUID
+publication: /data/yuxiao/Untrusted_Network_Simulation/publications/paper-development-qwen35-9b-1500-v1
+prepared: /data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-development-qwen35-9b-1500-v1-backbone-v1
+evaluation: /data/yuxiao/Untrusted_Network_Simulation/paper-studies/evaluations/0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956
+expected_reference: 66bd044bd072a8673d4761ad043d0af3a208ae55b809ebffded2228b0371f925
+selection: /data/yuxiao/tom-llm-reasoner-b2/selection-subset150-first-publication-v1/artifact
+expected_selection_json: /data/yuxiao/tom-llm-reasoner-b2/selection-subset150-first-publication-v1/bindings/selection-expected.json
+selection_provenance_json: /data/yuxiao/tom-llm-reasoner-b2/selection-subset150-first-publication-v1/bindings/selection-provenance.json
+pre_reference_evidence: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_HANDOFF/originals/tom-llm-phase3a-20261015/selection-before-reference.json
+reconciliation_evidence: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_HANDOFF/originals/tom-llm-phase3a-20261015/selection-identity-reconciliation.json
+cohort:
+  path: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_COHORT
+  digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
+models:
+  qwen3:
+    # Existing Candidate-v4 is read as immutable historical evidence.
+    tokenizer_assets: /data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/qwen3
+    deployment:
+      path: /data/yuxiao/tom-llm-reasoner-b2/multimodel/qwen3/candidate-v4/deployment
+      digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
+    admission:
+      path: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_QWEN_ADMISSION
+      digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
+    budget:
+      path: /data/yuxiao/tom-llm-reasoner-b2/REPLACE_QWEN_BUDGET
+      digest: REPLACE_WITH_ACTUAL_MANIFEST_DIGEST
+  yi:
+    # CPU stages need only tokenizer_assets, this new output directory and cohort.
+    cpu_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/cpu-v1
+    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/yi/candidate-v1
+    model_directory: /data/yuxiao/tom-llm-reasoner-b2/models/yi
+    environment_prefix: /data/yuxiao/tom-llm-reasoner-b2/envs/yi
+    tokenizer_assets: /data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/yi
+    prior_audit_digest: REPLACE_WITH_ACTUAL_ENVIRONMENT_AUDIT_DIGEST
+    # --save-config explicitly fills generated suite/budget/deployment references.
+    # Existing assets/environment/suite/budget receipts can also be pinned here.
+  mistral:
+    cpu_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/cpu-v1
+    candidate_root: /data/yuxiao/tom-llm-reasoner-b2/multimodel/mistral/candidate-v1
+    model_directory: /data/yuxiao/tom-llm-reasoner-b2/models/mistral
+    environment_prefix: /data/yuxiao/tom-llm-reasoner-b2/envs/mistral
+    tokenizer_assets: /data/yuxiao/tom-llm-reasoner-b2/tokenizer-assets/mistral
+    prior_audit_digest: REPLACE_WITH_ACTUAL_ENVIRONMENT_AUDIT_DIGEST

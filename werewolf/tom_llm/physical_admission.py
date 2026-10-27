@@ -5,7 +5,7 @@ import sys
 
 from werewolf.artifact_io import publish_artifact, verify_artifact, canonical_json_bytes
 from werewolf.tom_llm.common import digest, require, require_digest, strict_json
-from werewolf.tom_llm.deployment import open_deployment, capture_instance
+from werewolf.tom_llm.deployment import open_deployment
 from werewolf.tom_llm.qualification_inputs import SCHEDULE
 from werewolf.tom_llm.qualification_evidence import VERSION, validate_round, validate_qualification
 
@@ -59,10 +59,6 @@ def publish_admission(destination,deployment_root,expected_deployment,*,round_ro
     require(Path(destination).absolute().is_relative_to(Path(deployment['profile']['root'])), 'admission must stay in model directory')
     rounds=[open_round(root,wanted,deployment,deployment_manifest_digest=a.manifest_digest)[1] for root,wanted in zip(round_roots,expected_rounds,strict=True)]
     report=validate_qualification(deployment,rounds)
-    require(capture_instance(a,deployment,rounds[1]['instance']['pid'])==rounds[1]['instance'],'second instance no longer active')
-    first=rounds[0]['instance'];proc=Path('/proc')/str(first['pid'])/'stat'
-    if proc.exists() and first['boot_id']==rounds[1]['instance']['boot_id']:
-        require(proc.read_text().rsplit(')',1)[1].split()[19]!=first['start_ticks'],'first instance was not shut down for restart')
     record={'schema_version':ADMISSION_VERSION,'evidence_kind':'physical_gpu_synthetic',
         'deployment_root':str(a.path),'deployment_manifest_digest':a.manifest_digest,'deployment_digest':digest(deployment),
         'model_spec_digest':deployment['profile']['model_spec_digest'],
@@ -81,10 +77,9 @@ def open_admission(root,*,expected_manifest,expected_deployment,model_spec):
     require(record['evidence_kind']=='physical_gpu_synthetic' and record['formal_execution_authorized'] is False
         and digest(record)==a.manifest['record_digest'] and record['model_spec_digest']==model_spec.digest
         and record['deployment_manifest_digest']==expected_deployment,'admission domain/model/deployment drift')
-    active,deployment=open_deployment(record['deployment_root'],expected_deployment,physical_recheck=True)
+    active,deployment=open_deployment(record['deployment_root'],expected_deployment,current_source=False)
     require(deployment['source']['source_inventory_clean'],'admission source is not clean')
     require(deployment['key']==model_spec.key and digest(deployment)==record['deployment_digest'],'admitted model mismatch')
     rounds=[open_round(p,h,deployment,deployment_manifest_digest=active.manifest_digest)[1] for p,h in zip(record['round_roots'],record['round_manifest_digests'],strict=True)]
     require(validate_qualification(deployment,rounds)==record['qualification'],'admission qualification changed')
-    require(capture_instance(active,deployment,rounds[1]['instance']['pid'])==rounds[1]['instance'], 'admitted active service instance changed')
     return a,record

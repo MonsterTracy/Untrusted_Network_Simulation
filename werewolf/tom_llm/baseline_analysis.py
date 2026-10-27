@@ -24,7 +24,7 @@ from werewolf.tom_llm.policy import POLICY
 
 
 def performance(root,key,tasks,rows):
-    contract,_,_=open_run(root);attempts=Counter();durations=[]
+    contract,_,_=open_run(root,current_source=False);attempts=Counter();durations=[]
     for task in tasks:
         path=Path(root)/'models'/key/'requests'/digest(task)
         for i in (1,2):
@@ -121,7 +121,8 @@ def report_files(result):
         '', 'Game-macro metrics, paired game bootstrap, 95% percentile intervals. All three predeclared metrics and fallbacks are retained.',
         '', '| Model | Metric | Point | 95% CI |','|---|---|---:|---|']
     for r in metrics:lines.append(f"| {r['model']} | {r['metric']} | {r['point']} | [{r['ci95_low']}, {r['ci95_high']}] |")
-    lines+=['',f"Source: {result['source']['source_revision']} / {digest(result['source'])}",
+    lines+=['',f"Execution Source: {result['source']['source_revision']} / {digest(result['source'])}",
+        f"Analysis Source: {result['analysis_source']['source_revision']} / {digest(result['analysis_source'])}",
         f"Selection artifact: {result['selection']['selection_artifact_manifest_digest']}",
         f"Reference seal: {result['reference']['seal_digest']}",
         *[f"Model {key}: {spec['model']} @ {spec['revision']}" for key,spec in result['model_specs'].items()],
@@ -149,7 +150,7 @@ def report_files(result):
 
 
 def analyze(root,destination,*,expected_run_seal=None):
-    contract,run,tasks=open_run(root)
+    contract,run,tasks=open_run(root,current_source=False)
     seal,final=read_record(Path(root)/'seal','mm_baseline_run_seal',expected_run_seal)
     require(final['run_digest']==contract.manifest_digest and final['mode']==run['mode'] and final['source']==run['source']
             and set(final['models'])==set(run['models']),'run seal model/source/coverage drift')
@@ -158,6 +159,8 @@ def analyze(root,destination,*,expected_run_seal=None):
         a,rows=read_predictions(root,key,expected=wanted);predictions[key]=rows;anchors[key]=a.manifest_digest
     reference=open_reference(run['publication'],run['evaluation'],expected_seal_digest=run['reference']['seal_digest'])
     result=compute(reference,run,tasks,predictions);result['prediction_seals']=anchors
+    from werewolf.tom_llm.experiment import source_v3
+    result['analysis_source']=source_v3()
     result['experiment_configuration']=run;result['experiment_root']=str(Path(root).absolute())
     from werewolf.tom_llm.model_spec import ModelSpec
     result['model_specs']={key:ModelSpec(key).record() for key in run['models']}

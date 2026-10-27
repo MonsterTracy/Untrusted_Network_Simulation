@@ -9,13 +9,84 @@ from werewolf.artifact_io import publish_artifact, verify_artifact, canonical_js
 from werewolf.tom_llm.common import digest, require, require_digest, strict_json
 from werewolf.tom_llm.model_spec import ModelSpec, ROOT, template_bytes
 from werewolf.tom_llm.multimodel import source_identity
-from werewolf.tom_llm.physical import read_receipt, verify_model, capture_environment
+from werewolf.tom_llm.physical import read_receipt, verify_model
 from werewolf.tom_llm.qualification_inputs import open_suite, open_budget
 
 VERSION = 'classic7_multimodel_deployment_v1'
 BASE = Path('/data/yuxiao/tom-llm-reasoner-b2')
 RECIPE = ROOT/'configs/paper/tom-llm-qualification-recipe-v1.json'
 RECIPE_SHA = '8b664c3cceede49cc9083c64cb2a4207e8e5853352ddb51501bec20712a97aaa'
+
+# These control/readout modules do not implement the synthetic GPU inference path.
+# Unknown/new runtime files are NOT excluded. Changes outside this closed list
+# require new qualification, even when their author considers them harmless.
+CONTROL_FILES = {'werewolf/cli.py', *['werewolf/tom_llm/'+n+'.py' for n in (
+    'cli','operations','service_manager','baseline_cli','baseline_analysis',
+    'experiment','multimodel','deployment','physical_admission','live_admission')]}
+
+
+def _runner_inference_body(raw):
+    import ast
+    tree=ast.parse(raw)
+    # These functions ALSO participate in online sealing. Retain their entire
+    # AST, normalizing only the four reviewed read-mode keyword additions.
+    calls={
+        'read_predictions': [('open_run(root,current_source=False)','open_run(root)')],
+        'collect_rows': [('open_run(root,current_source=False)','open_run(root)'),
+                         ('open_permit(root,key,digest_anchor,physical=False)','open_permit(root,key,digest_anchor)')],
+        'status': [('open_run(root,current_source=False)','open_run(root)')],
+    }
+    for function in tree.body:
+        if not isinstance(function,ast.FunctionDef) or function.name not in calls:continue
+        replacements={ast.dump(ast.parse(old,mode='eval').body,include_attributes=False):new
+                      for old,new in calls[function.name]}
+        class ReadModes(ast.NodeTransformer):
+            def visit_Call(self,node):
+                replacement=replacements.get(ast.dump(node,include_attributes=False))
+                return ast.parse(replacement,mode='eval').body if replacement else self.generic_visit(node)
+        ReadModes().visit(function)
+    return digest(ast.dump(tree,include_attributes=False))
+
+
+def validate_source_evidence(source):
+    require(type(source) is dict and type(source.get('file_digests')) is dict
+            and source['file_digests'], 'missing recorded Source inventory')
+    for name,value in source['file_digests'].items():
+        require(type(name) is str and not Path(name).is_absolute() and '..' not in Path(name).parts,
+                'invalid recorded Source path')
+        require_digest(value)
+    require(source['implementation_digest']==digest(source['file_digests']), 'recorded Source digest drift')
+    require(type(source.get('source_inventory_clean')) is bool, 'missing recorded Source clean flag')
+
+
+def qualification_compatibility(source):
+    """Physical qualification inheritance, not permission to execute a new run.
+
+    Model/template/recipe/environment are checked independently. The entire old
+    runtime inventory, except the closed control/readout list, must match bytes.
+    The actual new Source is still bound in every run and execution permit.
+    """
+    current=source_identity()
+    for s in (source,current):
+        validate_source_evidence(s)
+        require(s['source_inventory_clean'], 'qualification reuse requires committed Source')
+    old={k:v for k,v in source['file_digests'].items() if k not in CONTROL_FILES}
+    new={k:v for k,v in current['file_digests'].items() if k not in CONTROL_FILES}
+    runner='werewolf/tom_llm/live_runner.py'
+    if runner in old and runner in new and old[runner]!=new[runner]:
+        import re
+        revision=source['source_revision']
+        require(type(revision) is str and re.fullmatch('[0-9a-f]{40}',revision),'invalid qualified Source revision')
+        try:previous=subprocess.check_output(['git','-C',str(ROOT),'show',revision+':'+runner],stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as error:
+            raise ValueError('qualified Runner source unavailable; cannot establish inheritance') from error
+        actual=(ROOT/runner).read_bytes()
+        require(sha256_bytes(previous)==old[runner] and sha256_bytes(actual)==new[runner], 'qualified/current Runner bytes drift')
+        old[runner]=_runner_inference_body(previous);new[runner]=_runner_inference_body(actual)
+    require(old==new, 'inference Source changed; new GPU qualification required')
+    return {'policy':'classic7_physical_inference_compatibility_v2',
+        'qualified_source_digest':digest(source),'execution_source_digest':digest(current),
+        'inference_inventory_digest':digest(old)}
 
 
 def recipe():
@@ -94,8 +165,9 @@ def verify_cpu_binding(record,spec):
     require(p==profile(spec,gpu_uuid=p['gpu']['uuid'],candidate_root=p['root'],model_directory=p['argv_options']['model'],
                       environment_prefix=p['environment_prefix']), 'deployment profile/parameters drift')
     require(record['model']==verify_model(spec,record['model']['directory']), 'physical model changed after receipt')
-    require(record['environment']==capture_environment(p['environment_prefix'],
-            prior_audit_digest=record['environment']['prior_audit_digest']), 'physical environment changed after receipt')
+    from werewolf.tom_llm.live_admission import capture_bound_environment
+    require(record['environment']==capture_bound_environment(p['environment_prefix'],
+            record['environment']['prior_audit_digest']), 'physical environment changed after receipt')
     require(record['model']['directory']==p['argv_options']['model']
             and record['environment']['prefix']==p['environment_prefix'], 'deployment physical path mismatch')
 
@@ -121,13 +193,15 @@ def prepare_deployment(destination,spec,*,gpu_uuid,model_root,model_receipt,expe
                'chat_template.jinja':template_bytes(spec)})
 
 
-def open_deployment(root,expected_digest,*,physical_recheck=False):
+def open_deployment(root,expected_digest,*,physical_recheck=False,current_source=True):
     require_digest(expected_digest)
     a = verify_artifact(root,expected_artifact_type='mm_deployment_candidate',expected_schema_version=VERSION)
     require(a.manifest_digest==expected_digest and set(a.manifest['file_table'])=={'deployment.json','vllm.yaml','chat_template.jinja'},
             'new deployment artifact identity/inventory required; no W5/mock upgrade')
     r = strict_json((a.path/'deployment.json').read_bytes());spec = ModelSpec(r['key'])
-    require(r['schema_version']==VERSION and r['model_spec']==spec.record() and r['source']==source_identity()
+    validate_source_evidence(r['source'])
+    require(not current_source or r['source']==source_identity(), 'deployment execution identity/domain drift')
+    require(r['schema_version']==VERSION and r['model_spec']==spec.record()
             and digest(r)==a.manifest['deployment_digest'] and a.manifest['model_spec_digest']==spec.digest
             and r['purpose']=='synthetic_gpu_qualification_only' and r['physical_gpu_admission'] is False,
             'deployment execution identity/domain drift')

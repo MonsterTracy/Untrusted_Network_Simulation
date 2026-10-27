@@ -313,6 +313,9 @@ def validate_artifact(path, runtime_config=None, final_experiment_path=None, exp
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.command == 'tom-llm':
+        from werewolf.tom_llm.operations import invoke
+        return invoke(args)
     if args.command == "check-llm-reasoner-config":
         from werewolf.tom_llm.cli import check_config
         print(json.dumps(check_config(args.config), sort_keys=True))

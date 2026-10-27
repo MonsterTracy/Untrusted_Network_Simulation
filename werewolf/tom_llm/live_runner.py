@@ -278,7 +278,7 @@ def run_model(root, key, transport, *, after_accepted=None):
 
 
 def read_predictions(root,key,*,expected=None,tokenizer=None):
-    contract,run,tasks=open_run(root)
+    contract,run,tasks=open_run(root,current_source=False)
     a,sealed=read_record(Path(root)/'models'/key/'seal','mm_baseline_predictions',expected)
     require(sealed['run_digest']==contract.manifest_digest and sealed['mode']==run['mode']
             and sealed['model']==key and sealed['model_spec_digest']==ModelSpec(key).digest,'prediction seal domain/model drift')
@@ -289,12 +289,12 @@ def read_predictions(root,key,*,expected=None,tokenizer=None):
 
 
 def collect_rows(root,key,*,tokenizer=None):
-    contract,run,tasks=open_run(root)
+    contract,run,tasks=open_run(root,current_source=False)
     if run['mode']!='fake' and tokenizer is None:
         from werewolf.tom_llm.live_admission import open_permit
         permit_path=Path(root)/'models'/key/'permit'
         digest_anchor=strict_json((permit_path/'manifest.json').read_bytes())['manifest_digest']
-        _,permit=open_permit(root,key,digest_anchor)
+        _,permit=open_permit(root,key,digest_anchor,physical=False)
         tokenizer=load_cpu_tokenizer(ModelSpec(key),permit['tokenizer_assets'])
     request_root=Path(root)/'models'/key/'requests'
     require(request_root.is_dir() and {p.name for p in request_root.iterdir()}==set(run['task_digests']),'missing/extra public task; no intersection')
@@ -354,7 +354,7 @@ def run_lock(root):
 
 
 def status(root):
-    contract,r,tasks=open_run(root);models={}
+    contract,r,tasks=open_run(root,current_source=False);models={}
     for key in r['models']:
         done=blocked=0;errors=[]
         for task in tasks:

@@ -44,13 +44,15 @@ def source_identity():
             'implementation_digest': digest(files), 'qualification': 'CPU_MOCK_ONLY_NOT_ADMITTED'}
 
 
-def read_cohort(root, expected_digest):
+def read_cohort(root, expected_digest, *, current_source=False):
     require_digest(expected_digest)
     artifact = verify_artifact(root, expected_artifact_type='llm_multimodel_public_cohort',
                                expected_schema_version=COHORT_VERSION)
     m = artifact.manifest
     require(artifact.manifest_digest == expected_digest and m['engineering_only'] is True
-            and m['source'] == source_identity() and m['task'] == task_binding(), 'cohort identity/source drift')
+            and (not current_source or m['source'] == source_identity()) and m['task'] == task_binding(), 'cohort identity/source drift')
+    from werewolf.tom_llm.deployment import validate_source_evidence
+    validate_source_evidence(m['source'])
     require(set(m['file_table']) == {'requests.jsonl'}, 'cohort file inventory drift')
     selection = verify_artifact(m['selection_root'], expected_artifact_type='llm_game_selection',
                                 expected_schema_version='classic7_llm_game_selection_v1')

@@ -9,10 +9,9 @@ from werewolf.artifact_io import publish_artifact, verify_artifact, canonical_js
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.experiment import VERSION, open_run, source_v3, safe_path
 from werewolf.tom_llm.model_spec import ROOT, ModelSpec, template_bytes, load_cpu_tokenizer
-from werewolf.tom_llm.physical_admission import open_round, ADMISSION_VERSION
+from werewolf.tom_llm.physical_admission import ADMISSION_VERSION
 from werewolf.tom_llm.deployment import (BASE, open_deployment, profile, validate_process_environment,
     gpu_snapshot, driver_version, vllm_config_bytes, CACHE_VARIABLES)
-from werewolf.tom_llm.qualification_evidence import validate_qualification
 from werewolf.tom_llm.qualification_inputs import open_budget
 
 
@@ -21,21 +20,20 @@ def qualified_offline(root, expected, spec):
 
     This is evidence of past synthetic qualification, never a live-service identity.
     """
-    a=verify_artifact(root,expected_artifact_type='mm_physical_gpu_admission',expected_schema_version=ADMISSION_VERSION)
-    require(a.manifest_digest==expected and set(a.manifest['file_table'])=={'admission.json'}, 'qualification anchor/domain drift')
-    r=strict_json((a.path/'admission.json').read_bytes())
-    require(digest(r)==a.manifest['record_digest'] and r['model_spec_digest']==spec.digest
-            and r['evidence_kind']=='physical_gpu_synthetic' and r['formal_execution_authorized'] is False,
-            'synthetic qualification record drift')
-    d,record=open_deployment(r['deployment_root'],r['deployment_manifest_digest'],physical_recheck=False)
+    from werewolf.tom_llm.physical_admission import open_admission
+    from werewolf.tom_llm.deployment import qualification_compatibility
+    # The external admission digest anchors its Deployment digest too.
+    anchor=verify_artifact(root,expected_artifact_type='mm_physical_gpu_admission',expected_schema_version=ADMISSION_VERSION)
+    require(anchor.manifest_digest==expected,'qualification anchor/domain drift')
+    claimed=strict_json((anchor.path/'admission.json').read_bytes())
+    _,r=open_admission(root,expected_manifest=expected,expected_deployment=claimed['deployment_manifest_digest'],model_spec=spec)
+    _,record=open_deployment(r['deployment_root'],r['deployment_manifest_digest'],current_source=False)
+    qualification_compatibility(record['source'])
     from werewolf.tom_llm.physical import verify_model
     require(record['model']==verify_model(spec,record['model']['directory']),'qualified physical model bytes drift')
     require(record['environment']==capture_bound_environment(record['profile']['environment_prefix'],
             record['environment']['prior_audit_digest']),'qualified physical environment drift')
     require(record['key']==spec.key and digest(record)==r['deployment_digest'],'qualification Deployment drift')
-    rounds=[open_round(p,h,record,deployment_manifest_digest=d.manifest_digest)[1]
-            for p,h in zip(r['round_roots'],r['round_manifest_digests'],strict=True)]
-    require(validate_qualification(record,rounds)==r['qualification'],'durable qualification drift')
     return record
 
 
@@ -71,6 +69,11 @@ def service_profile(root, spec, qualified):
     p['environment_requirements']['PYTHONPATH']=str(ROOT)
     p['argv_options']['chat-template']=str(Path(root)/'models'/spec.key/'permit/chat_template.jinja')
     p['engine_log_root']=str(service/'engine');p['qualification_only']=False
+    require({k:v for k,v in p['argv_options'].items() if k!='chat-template'}==
+            {k:v for k,v in old['argv_options'].items() if k!='chat-template'},'qualified inference arguments changed')
+    ignored=set(CACHE_VARIABLES)|{'PYTHONPATH'}
+    require({k:v for k,v in p['environment_requirements'].items() if k not in ignored}==
+            {k:v for k,v in old['environment_requirements'].items() if k not in ignored},'qualified inference environment changed')
     return p
 
 
@@ -90,6 +93,8 @@ def publish_permit(root, key, *, qualification, expected_qualification, tokenize
         'source':source_v3(),'qualified_runtime':qualification_runtime(qualification),'profile':p,'qualification_root':str(Path(qualification).absolute()),
         'qualification_digest':expected_qualification,'budget_root':str(safe_path(budget_root)),
         'tokenizer_assets':str(safe_path(tokenizer_assets)),'evidence_kind':'physical_execution_binding'}
+    from werewolf.tom_llm.deployment import qualification_compatibility
+    record['qualification_compatibility']=qualification_compatibility(qualified['source'])
     dest=Path(root)/'models'/key/'permit';require(not dest.exists(),'permit exists')
     return publish_artifact(dest,manifest_fields={'artifact_type':'mm_live_execution_permit','schema_version':VERSION,
         'record_digest':digest(record)},files={'permit.json':canonical_json_bytes(record),
@@ -103,18 +108,27 @@ def qualification_runtime(root):
 
 
 def open_permit(root, key, expected, *, physical=True):
-    a,run,tasks=open_run(root);spec=ModelSpec(key)
+    a,run,tasks=open_run(root,current_source=physical);spec=ModelSpec(key)
     p=verify_artifact(Path(root)/'models'/key/'permit',expected_artifact_type='mm_live_execution_permit',expected_schema_version=VERSION)
     require(p.manifest_digest==expected and set(p.manifest['file_table'])=={'permit.json','vllm.yaml','chat_template.jinja'},'execution permit anchor/inventory drift')
     r=strict_json((p.path/'permit.json').read_bytes())
     require(digest(r)==p.manifest['record_digest'] and r['run_digest']==a.manifest_digest and r['model']==key
-            and r['model_spec_digest']==spec.digest and r['source']==run['source']==source_v3()
+            and r['model_spec_digest']==spec.digest and r['source']==run['source']
+            and (not physical or r['source']==source_v3())
             and r['evidence_kind']=='physical_execution_binding' and run['mode'] in ('formal','technical'), 'live permit/source/model drift')
     require((p.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
             and (p.path/'vllm.yaml').read_bytes()==vllm_config_bytes(r['profile']['argv_options']), 'live template/config drift')
     if physical:
         require(sys.platform=='linux' and run['source']['source_inventory_clean'] and safe_path(root).is_relative_to(BASE), 'live physical platform/source/path gate')
         q=qualified_offline(r['qualification_root'],r['qualification_digest'],spec)
+        from werewolf.tom_llm.deployment import qualification_compatibility
+        compatibility=qualification_compatibility(q['source'])
+        if 'qualification_compatibility' in r:
+            require(r['qualification_compatibility']==compatibility,'qualification inheritance binding drift')
+        else:
+            from werewolf.tom_llm.multimodel import source_identity
+            require(q['source']==source_identity(),
+                    'legacy permit cannot inherit another Source')
         require(open_budget(r['budget_root'],spec,q['upstream_receipts']['budget'])==q['budget'],'live budget drift')
         require(r['profile']==service_profile(root,spec,q) and q['budget']['cohort_digest']==run['cohort_digest']
                 and r['qualified_runtime']==qualification_runtime(r['qualification_root']),'live profile/budget/runtime drift')
