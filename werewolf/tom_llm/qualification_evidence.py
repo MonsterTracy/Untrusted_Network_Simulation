@@ -26,7 +26,8 @@ def validate_sampling(params,schema,spec):
     require(params['stop'] in (None,[]) and params['ignore_eos'] is False
             and params['eos_token_ids']==sorted(eos) and params['primary_eos_token_id'] in eos
             and type(params['stop_token_ids']) is list and set(params['stop_token_ids'])<=eos, 'effective EOS/termination drift')
-    require(all(params[k] is None for k in ('logit_bias','allowed_token_ids','bad_words','logits_processors')),
+    require(all(params[k] is None for k in ('logit_bias','allowed_token_ids','logits_processors'))
+            and (params['bad_words'] is None or type(params['bad_words']) is list and not params['bad_words']),
             'undeclared logits modifiers')
     require(params['json_schema']==schema,'effective six-seat JSON Schema drift')
 

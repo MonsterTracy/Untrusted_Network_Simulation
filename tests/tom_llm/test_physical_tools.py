@@ -56,12 +56,12 @@ def sampling(spec,schema):
     eos=sorted(set(eos)|{spec.record()['tokenizer']['eos_token_id']})
     return {**NUMERIC,'stop':[],'stop_token_ids':spec.record()['termination']['extra_stop_token_ids'],
         'eos_token_ids':eos,'primary_eos_token_id':spec.record()['tokenizer']['eos_token_id'],'ignore_eos':False,
-        'json_schema':schema,**{k:None for k in ('logit_bias','allowed_token_ids','bad_words','logits_processors')}}
+        'json_schema':schema,'bad_words':[],**{k:None for k in ('logit_bias','allowed_token_ids','logits_processors')}}
 
 
 def params_object(record,case):
     p=sampling(ModelSpec(record['key']),case['task']['response_schema']);kwargs={k:p[k] for k in NUMERIC}
-    kwargs.update({k:p[k] for k in ('stop','stop_token_ids','ignore_eos')})
+    kwargs.update({k:p[k] for k in ('stop','stop_token_ids','ignore_eos','bad_words')})
     return NS(**kwargs,_all_stop_token_ids=set(p['eos_token_ids']),_eos_token_id=p['primary_eos_token_id'],
         structured_outputs=NS(json=p['json_schema']))
 
@@ -176,8 +176,10 @@ def test_native_suite_preserves_shared_cases_and_qwen_76_protocol(native_suites,
 def test_native_sampling_eos_schema_and_parameters_are_strict(native_suites,key):
     spec=ModelSpec(key);schema=native_suites[key]['cases'][0]['task']['response_schema'];p=sampling(spec,schema)
     validate_sampling(p,schema,spec)
+    disabled=deepcopy(p);disabled['bad_words']=None
+    validate_sampling(disabled,schema,spec)
     if key=='yi':assert p['eos_token_ids']==[2,7] and p['stop_token_ids']==[7]
-    for field,value in [('top_k',-1),('max_tokens',513),('temperature',True),('json_schema',{}),('ignore_eos',True),('eos_token_ids',[999])]:
+    for field,value in [('top_k',-1),('max_tokens',513),('temperature',True),('json_schema',{}),('ignore_eos',True),('eos_token_ids',[999]),('bad_words',['blocked'])]:
         wrong=deepcopy(p);wrong[field]=value
         with pytest.raises(ValueError):validate_sampling(wrong,schema,spec)
     assert snapshot_sampling(params_object(model_record(key,native_suites),native_suites[key]['cases'][0]))==p
