@@ -514,6 +514,20 @@ def test_environment_recheck_uses_target_prefix_not_controller_python(tmp_path,m
     assert observed['kwargs']['check'] is True
 
 
+def test_environment_recheck_surfaces_child_dependency_diagnostics(tmp_path,monkeypatch):
+    from werewolf.tom_llm import live_admission as admission
+    prefix=tmp_path/'model-env';(prefix/'bin').mkdir(parents=True)
+    (prefix/'bin/python').write_bytes(b'UNIT INTERPRETER NOT EXECUTED')
+    def run(command,**kwargs):
+        raise subprocess.CalledProcessError(1,command,output='UNIT child stdout',
+            stderr='ValueError: dependency integrity failure\nuns-local-broken requires uns-local-missing')
+    monkeypatch.setattr(admission.subprocess,'run',run)
+    with pytest.raises(ValueError,match='uns-local-missing') as error:
+        admission.capture_bound_environment(prefix,'e'*64)
+    assert 'UNIT child stdout' in str(error.value)
+    assert isinstance(error.value.__cause__,subprocess.CalledProcessError)
+
+
 
 def test_cross_session_response_is_rejected_before_recovery(study,fake_http,monkeypatch):
     root,tasks,_=study;endpoint,_=fake_http
