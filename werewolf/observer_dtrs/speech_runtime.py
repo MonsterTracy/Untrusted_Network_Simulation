@@ -8,94 +8,24 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import re
 
-from scripts.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
+from scripts.speech_planning import generate_candidates
 from scripts.verified_speech_commit import realize_and_commit
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
 from werewolf.observer_dtrs.context import contexts_for_pre
 from werewolf.observer_dtrs.contextual_policy import contextual_loss, estimate_event
-from werewolf.observer_dtrs.decision import LossSpec, Region, TiePolicy, candidate_losses
+from werewolf.observer_dtrs.decision import LossSpec, TiePolicy, candidate_losses
 from werewolf.observer_dtrs.probabilities import ProbabilityMatrix
 from werewolf.observer_dtrs.estimation import FittedModel
 
 
-VERSION = 'observer_dtrs_evidence_speech_research_v2'
+from werewolf.observer_dtrs.speech_evidence import (
+    ObserverCognition, ObserverSelection, SelectionMode, SpeechStrategy,
+    process_cognition, select_observer, select_speech, strategy_plan,
+)
 
 
-@dataclass(frozen=True)
-class ObserverSelection:
-    observer_id: str
-    reason: str
-    event_id: str | None
-    annotation_digest: str | None
-    relation: str  # Public claim direction, never the event Y or a role fact.
-
-
-def select_observer(pre, known_wolf_ids):
-    """Latest same-day speech per living non-wolf; direction, recency, seat order.
-
-    Priority: explicit current-actor accusation; teammate accusation; any annotated
-    speech; any unparsed/failed speech; no speech. No label, raw-text reparsing,
-    Q averaging, predicted probability ranking or past-day resurrection.
-    """
-    contexts = contexts_for_pre(pre, known_wolf_ids)
-    if not contexts:
-        raise ValueError('no legal wolf-speech observers')
-    generate_candidates(pre)  # Also validate actual public speaking/PK order.
-    day = pre.public_temporal_state.day
-    annotations = {a.event_id: a for a in pre.v1_annotations}
-    ranked = []
-    for context in contexts:
-        events = [e for e in pre.public_event_history.events if e.event_type == 'public_speech'
-                  and e.speaker == context.observer_id and e.temporal_state.day == day]
-        last = events[-1] if events else None
-        ann = annotations.get(last.event_id) if last else None
-        targets = {a.object for a in ann.actions if a.action == 'point_as_werewolf'} if ann and ann.is_successful else set()
-        if ann and ann.is_successful:
-            targets -= {a.object for a in ann.actions if a.action == 'point_as_non_werewolf'}
-        relation = ('SELF_ACCUSED' if context.acting_wolf in targets else
-                    'TEAM_ACCUSED' if targets.intersection(context.alive_wolf_ids) else 'NO_EXPLICIT_ACCUSATION')
-        priority = (0 if relation == 'SELF_ACCUSED' else 1 if relation == 'TEAM_ACCUSED' else
-                    2 if ann and ann.is_successful else 3 if last else 4)
-        reason = ('PUBLIC_SELF_ACCUSATION', 'PUBLIC_TEAM_ACCUSATION', 'LATEST_ANNOTATED_SPEECH',
-                  'LATEST_UNINTERPRETED_SPEECH', 'CANONICAL_SEAT_NO_EVIDENCE')[priority]
-        selection = ObserverSelection(context.observer_id, reason, last.event_id if last else None,
-                                      ann.annotation_digest if ann else None, relation)
-        ranked.append(((priority, -last.event_index if last else 0, PLAYER_IDS.index(context.observer_id)), selection))
-    return min(ranked, key=lambda pair: pair[0])[1]
-
-
-@dataclass(frozen=True)
-class SpeechStrategy:
-    """Explicit hypothesis knobs; action eligibility and evidence gates are fixed."""
-    positive_self: A
-    positive_team: A
-    boundary: A
-    negative: A
-
-    def __post_init__(self):
-        for name in ('positive_self', 'positive_team', 'boundary', 'negative'):
-            choices = (A.NO_COMMITMENT, A.OPPOSE, A.SELF_DEFEND) if name == 'positive_self' else (A.NO_COMMITMENT, A.OPPOSE)
-            if not isinstance(getattr(self, name), A) or getattr(self, name) not in choices:
-                raise ValueError('unsupported evidence-speech hypothesis')
-
-    def to_record(self):
-        return {k: v.value for k, v in asdict(self).items()}
-
-
-def strategy_plan(pre, selection, decision, strategy):
-    if not isinstance(strategy, SpeechStrategy):
-        raise TypeError('explicit SpeechStrategy required')
-    if selection.relation == 'NO_EXPLICIT_ACCUSATION':
-        return SpeechPlan(A.NO_COMMITMENT), 'NO_DIRECTIONAL_PUBLIC_EVIDENCE'
-    if decision.region is Region.POS:
-        action = strategy.positive_self if selection.relation == 'SELF_ACCUSED' else strategy.positive_team
-    else:
-        action = strategy.boundary if decision.region is Region.BND else strategy.negative
-    plan = SpeechPlan(action, selection.observer_id if action is A.OPPOSE else None)
-    if plan not in generate_candidates(pre):
-        raise ValueError('strategy intent is not eligible at this PRE')
-    return plan, 'CONFIGURED_' + decision.region.value + '_' + selection.relation
+VERSION = 'observer_dtrs_evidence_speech_research_v3_s1a'
 
 
 class Comparison(str, Enum):
@@ -196,15 +126,17 @@ class SpeechExecution:
 
 
 def execute_pending_speech(*, env, recorder, actor, source, model, protocol,
-                           condition: Comparison, policy: ResearchPolicy):
+                           condition: Comparison, policy: ResearchPolicy,
+                           selection_mode: SelectionMode = SelectionMode.EXPLICIT_THREE_WAY):
     """One decision -> original Actor/Parser/verified commit at one pending PRE.
 
     No role table, supervision reader, runner replacement, retry or fallback. In
     this research adapter the estimator must have controlled-fixture provenance;
     formal OOF-to-online transfer is not admitted by an in-memory model digest.
     """
-    if not isinstance(condition, Comparison) or not isinstance(policy, ResearchPolicy):
-        raise TypeError('explicit comparison condition and ResearchPolicy required')
+    if (not isinstance(condition, Comparison) or not isinstance(policy, ResearchPolicy)
+            or type(selection_mode) is not SelectionMode):
+        raise TypeError('explicit comparison, ResearchPolicy and selection mode required')
     pending = recorder._pending
     if (recorder._env is not env or pending is None or pending.prefix is None
             or pending.handoff is None or pending.raw_action is not None):
@@ -228,12 +160,17 @@ def execute_pending_speech(*, env, recorder, actor, source, model, protocol,
         context, tie_policy=policy.static_loss.tie_policy)
     features, estimate, decision = estimate_event(context, matrix, model=model, protocol=protocol, loss=loss)
     strategy = policy.contextual_strategy if condition is Comparison.CONTEXTUAL_SPEECH else policy.reference_strategy
-    plan, reason = strategy_plan(pre, selection, decision, strategy)
+    evidence = process_cognition(pre, panel=(ObserverCognition(
+        context, features, model.digest, estimate['level'], loss, decision),))
+    chosen = select_speech(pre, evidence, candidates=generate_candidates(pre),
+                           strategy=strategy, mode=selection_mode)
+    plan, reason = chosen.plan, chosen.reason
     audit = {'version': VERSION, 'condition': condition.value, 'selection': asdict(selection),
              'prediction': {**provenance, 'matrix_digest': sha256_bytes(canonical_json_bytes(asdict(matrix)))},
              'policy': policy.to_record(), 'model_digest': model.digest, 'estimator_level': estimate['level'],
              'features': features.to_record(), 'loss': loss.to_record(), 'decision': decision.to_record(),
              'strategy': strategy.to_record(), 'mapping_reason': reason, 'public_payload': plan.public_payload(),
+             'cognitive_processing': evidence.to_record(), 'candidate_selection': chosen.to_record(),
              'game_id': pre.game_id, 'boundary_id': pre.boundary_id, 'prefix_digest': pre.prefix_digest}
     if recorder._pending is not pending or freeze_public_event_history(env.public_events).digest != pre.public_event_history.digest:
         raise ValueError('PRE changed during planning')
