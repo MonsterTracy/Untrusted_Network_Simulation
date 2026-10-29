@@ -53,7 +53,7 @@ def _act_at_boundary(
 
 def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
          planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
-         wolf_speech_tom=None, online_pilot=None, observer_shadow=None):
+         wolf_speech_tom=None, online_pilot=None, observer_shadow=None, f0_slice_control=None):
     """Execute one game exclusively through canonical evidence construction.
 
     An explicit online_pilot handles the collected speech PRE before baseline
@@ -83,6 +83,12 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
             speech_treatment = SpeechTreatment()
         if not isinstance(speech_treatment, SpeechTreatment):
             raise TypeError("expected SpeechTreatment")
+    if f0_slice_control is not None:
+        from werewolf.observer_dtrs.f0_slice import F0SliceControl
+        if (type(f0_slice_control) is not F0SliceControl or planning_mode != 'original'
+                or online_pilot is not None or wolf_speech_tom is not None or observer_shadow is not None):
+            raise TypeError("F0 slice requires its exclusive original-mode control")
+        f0_slice_control.begin_runtime(canonical_recorder)
     for agent in agent_list:
         agent.reset()
     observation = env.reset(roles=roles_)
@@ -108,6 +114,14 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                     observer_shadow.capture_error(
                         boundary_id=handoff.boundary_id, prefix_digest=handoff.prefix_digest,
                         actor=handoff.observer_id)
+            if f0_slice_control is not None and is_speech:
+                committed = f0_slice_control.handle_pre(
+                    env=env, recorder=canonical_recorder, call_audit=call_audit,
+                    observation=observation, handoff=handoff)
+                if committed is not None:
+                    # A normal partial result, not a winner or a collection failure.
+                    return f0_slice_control.boundary_result(
+                        env=env, recorder=canonical_recorder, native_result=committed)
             if online_pilot is not None and is_speech:
                 committed = online_pilot.handle_pre(
                     env=env, recorder=canonical_recorder, call_audit=call_audit,

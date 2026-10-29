@@ -59,8 +59,26 @@ class _RecordedRuntime:
     recorder: CanonicalGameRecorder
     call_audit: CanonicalCallAudit
     replay_executor: Any
+    f0_control: Any = None
+
+    def run_f0_slice(self):
+        if self.f0_control is None:
+            raise TypeError("explicit F0-only runtime required")
+        from werewolf.observer_dtrs.f0_slice import F0SliceProduct
+        self.f0_control.require_bound(self.recorder)
+        try:
+            result = run_game(self.env, self.agents, self.roles,
+                canonical_recorder=self.recorder, call_audit=self.call_audit,
+                f0_slice_control=self.f0_control)
+        except Exception as error:
+            return self.f0_control.capture(env=self.env, recorder=self.recorder, error=error)
+        if type(result) is F0SliceProduct:
+            return result
+        return self.f0_control.capture(env=self.env, recorder=self.recorder, error=None)
 
     def run(self) -> CanonicalGameProduct:
+        if self.f0_control is not None:
+            raise TypeError("F0 slice cannot enter full-game run/collect")
         try:
             run_game(
                 self.env,
@@ -92,7 +110,13 @@ class Classic7RuntimeFactory:
         runtime_config: Mapping[str, Any],
         backends: Mapping[str, Any],
         configured_call_limit: int,
+        f0_control=None,
     ) -> None:
+        if f0_control is not None:
+            from werewolf.observer_dtrs.f0_slice import F0SliceControl
+            if type(f0_control) is not F0SliceControl:
+                raise TypeError("explicit F0SliceControl required")
+        self.f0_control = f0_control
         self._raw_config = deepcopy(dict(runtime_config))
         self._normalized = normalize_runtime_config(self._raw_config)
         self._backends = dict(backends)
@@ -144,6 +168,7 @@ class Classic7RuntimeFactory:
             recorder=recorder,
             call_audit=audit,
             replay_executor=replay,
+            f0_control=self.f0_control,
         )
 
 

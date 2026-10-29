@@ -208,6 +208,9 @@ def collect(
     durable no-replace publication has returned successfully.
     """
 
+    if (getattr(runtime_factory, 'f0_control', None) is not None
+            or (Path(destination) / 'f0-slice-contract').exists()):
+        raise TypeError("F0 slice requires its single-attempt entry; collect/resume forbidden")
     validate_collection_plan(plan)
     if not callable(runtime_factory):
         raise TypeError("runtime_factory must be callable")
