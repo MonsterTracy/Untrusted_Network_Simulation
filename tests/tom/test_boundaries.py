@@ -109,10 +109,17 @@ def _production_import_closure(root):
 
 
 def test_all_production_modules_belong_to_current_cli_import_closure():
-    """No production orphans across uns and standalone executable script roots."""
+    """Only the two published read-only research libraries lack CLI roots."""
     root = Path(__file__).resolve().parents[2]
     production, reached, _ = _production_import_closure(root)
-    assert production - reached == set()
+    # Phase-1 cognition and Phase-2G offline linkage confer no execution authority.
+    # See docs/research/observer-dtrs-dynamic-planning-phase1.md and
+    # docs/research/observer-dtrs-phase-2g-native-evidence.md.
+    controlled_research_libraries = {
+        "werewolf.observer_dtrs.planning_research",
+        "werewolf.observer_dtrs.native_action_link",
+    }
+    assert production - reached == controlled_research_libraries
 
 
 @pytest.mark.parametrize("script", (

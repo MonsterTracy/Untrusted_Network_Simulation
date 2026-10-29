@@ -349,16 +349,25 @@ def test_thread_and_fork_inherited_writer_cannot_append(tmp_path):
         t = threading.Thread(target=lambda: _try_wrong_thread(store, errors))
         t.start(); t.join(5)
         assert not t.is_alive() and errors == ['StoreError']
-        pid = os.fork()
-        if pid == 0:
-            try:
-                store.append('fork', 'OPPORTUNITY', opportunity())
-            except StoreError:
-                store.close(); os._exit(0)
-            os._exit(1)
-        _, status = os.waitpid(pid, 0)
-        assert os.waitstatus_to_exitcode(status) == 0
+        # Keep the real fork-inheritance check, but bound both the wait and
+        # cleanup if inherited interpreter/library state stalls the child.
+        process = mp.get_context('fork').Process(target=_try_forked_writer, args=(store,))
+        process.start()
+        try:
+            process.join(5)
+            assert process.exitcode == 0
+        finally:
+            _finish(process)
         store.append('parent', 'OPPORTUNITY', opportunity())
+
+
+def _try_forked_writer(store):
+    try:
+        store.append('fork', 'OPPORTUNITY', opportunity())
+    except StoreError:
+        store.close()
+        return
+    raise AssertionError('fork-inherited writer appended')
 
 
 def _try_wrong_thread(store, errors):
