@@ -76,7 +76,7 @@ def test_broker_disconnect_hard_hang_cannot_reuse_old_service(factory):
         broker.close()
 
 
-@pytest.mark.parametrize('case',['token','pre','deadline','extra'])
+@pytest.mark.parametrize('case',['token','pre','deadline','extra','request_id'])
 def test_bad_broker_input_never_admits_inference(factory,case):
     make,_=factory;owner=make();assert owner.start()
     broker=ResidentBroker(owner);lease=broker.lease();binding=lease.binding
@@ -84,10 +84,11 @@ def test_bad_broker_input_never_admits_inference(factory,case):
     if case=='token':binding['token']='e'*64
     elif case=='pre':payload['pre']['Y']=1
     elif case=='deadline':payload['deadline_monotonic']=time.monotonic()-1
-    else:payload['support']=0
+    elif case=='extra':payload['support']=0
+    request_id='x'*129 if case=='request_id' else 'bad'
     channel=Channel(lease.sock,lease.limits)
     try:
-        channel.write(_message('QUERY',binding,'bad',payload),time.monotonic()+1)
+        channel.write(_message('QUERY',binding,request_id,payload),time.monotonic()+1)
         with pytest.raises((PeerClosed,WireTimeout,ProtocolError)):
             channel.read(time.monotonic()+1)
         assert owner.inspect()['submitted']==0
@@ -106,6 +107,30 @@ def test_lease_bound_duplicate_and_same_PID(factory):
         assert owner.pid==pid and owner.inspect()['submitted']==1
     finally:
         lease.close();broker.close()
+
+
+def test_broker_request_id_boundaries_preserve_dedup_and_lease_isolation(factory):
+    make,_=factory;owner=make();assert owner.start();pid=owner.pid
+    broker=ResidentBroker(owner);lease=broker.lease();second=None
+    try:
+        for length in (111,112,128):
+            request_id='x'*length;p=prefix_for(game_id=f'broker-id-{length}')
+            admission,result=lease.predict(p,request_id=request_id,timeout_s=3)
+            assert admission=='SUBMITTED' and result.status=='SUCCEEDED'
+            assert lease.predict(p,request_id=request_id,timeout_s=3)==('DUPLICATE',None)
+        lease.close();wait(lambda:not broker._sessions[0][1].is_alive())
+        second=broker.lease()
+        # The same public ID in a new lease belongs to a separate namespace.
+        admission,result=second.predict(prefix_for(game_id='broker-second-lease'),request_id='x'*128,timeout_s=3)
+        assert admission=='SUBMITTED' and result.status=='SUCCEEDED'
+        audit=owner.inspect()
+        assert audit['submitted']==audit['terminal']==4 and owner.pid==pid
+        internal_ids=[e['request_id'] for e in owner.journal.events if e['kind']=='ADMISSION']
+        assert len(set(internal_ids))==4 and all(len(rid)<=128 for rid in internal_ids)
+    finally:
+        lease.close()
+        if second is not None:second.close()
+        broker.close()
 
 
 def test_broker_lifetime_lease_quota_is_bounded(factory):

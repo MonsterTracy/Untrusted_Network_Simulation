@@ -466,6 +466,8 @@ def test_native_cpu_preparation_needs_no_weights_environment_or_gpu(tmp_path,mon
 
 
 def test_cpu_stage_cli_saves_only_generated_references_and_never_defaults_to_download(tmp_path,monkeypatch):
+    monkeypatch.setattr(dep,'BASE',tmp_path)
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
     cfg=tmp_path/'ops.yaml';cfg.write_text('output_root: '+str(tmp_path/'outputs')+'\nmodels:\n  yi:\n    tokenizer_assets: /UNIT/small-assets\n')
     calls=[]
     def prepare(c,key,stage):
@@ -486,7 +488,9 @@ def test_cpu_stage_cli_saves_only_generated_references_and_never_defaults_to_dow
     assert not list(tmp_path.glob('*.tmp'))
 
 
-def test_explicit_config_update_refuses_intervening_edits_and_sealed_directories(tmp_path):
+def test_explicit_config_update_refuses_intervening_edits_and_sealed_directories(tmp_path,monkeypatch):
+    monkeypatch.setattr(dep,'BASE',tmp_path)
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
     cfg=tmp_path/'ops.yaml';original=b'models: {yi: {}}\n';cfg.write_bytes(original)
     cfg.write_bytes(original+b'# user edit\n')
     with pytest.raises(ValueError,match='configuration changed'):ops.save_configuration(cfg,original,{'models':{'yi':{}}})
@@ -496,6 +500,8 @@ def test_explicit_config_update_refuses_intervening_edits_and_sealed_directories
 
 
 def test_preparing_a_new_deployment_cannot_silently_use_an_old_admission(tmp_path,monkeypatch):
+    monkeypatch.setattr(dep,'BASE',tmp_path)
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
     admission_root=tmp_path/'old-admission';admission_root.mkdir()
     (admission_root/'admission.json').write_text(json.dumps({'deployment_manifest_digest':'a'*64}))
     cfg=tmp_path/'ops.json'
@@ -510,7 +516,9 @@ def test_preparing_a_new_deployment_cannot_silently_use_an_old_admission(tmp_pat
 
 
 @pytest.mark.parametrize('kind',['model_directory','environment_prefix','tokenizer_assets','deployment'])
-def test_cpu_output_paths_cannot_modify_existing_assets_or_candidates(tmp_path,kind):
+def test_cpu_output_paths_cannot_modify_existing_assets_or_candidates(tmp_path,monkeypatch,kind):
+    monkeypatch.setattr(dep,'BASE',tmp_path)
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
     root=tmp_path/'protected'
     item={'cpu_root':str(root/'nested'),'tokenizer_assets':str(tmp_path/'tokens')}
     if kind=='deployment':item[kind]={'path':str(root/'deployment'),'digest':'a'*64}
@@ -519,6 +527,17 @@ def test_cpu_output_paths_cannot_modify_existing_assets_or_candidates(tmp_path,k
     with pytest.raises(ValueError,match='inside'):
         ops.prepare_inputs(c,'yi','suite')
     assert not root.exists()
+
+
+def test_linux_cpu_cli_still_rejects_outputs_outside_independent_root(tmp_path,monkeypatch):
+    monkeypatch.setattr(dep,'BASE',tmp_path/'baseline')
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
+    outside=tmp_path/'outside';cfg=tmp_path/'ops.json'
+    cfg.write_text(json.dumps({'output_root':str(outside),'models':{'yi':{}}}))
+    monkeypatch.setattr(ops,'prepare_inputs',lambda *a:pytest.fail('outside path reached CPU publisher'))
+    with pytest.raises(ValueError,match='writes outside independent baseline root'):
+        main(['tom-llm','--config',str(cfg),'prepare','--stage','suite','--models','yi'])
+    assert not outside.exists()
 
 
 def test_spawn_failure_preserves_intent_and_refuses_an_automatic_reset(managed,monkeypatch):

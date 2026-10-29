@@ -141,7 +141,9 @@ class ResidentBroker:
                 from werewolf.canonical_collection.game_bundle import _prefix_from_record
                 prefix = _prefix_from_record(payload['pre'])
                 require(prefix.to_record() == payload['pre'], 'broker PRE allowlist/roundtrip')
-                admission, active = self.owner.submit(prefix, request_id=binding['token'][:16]+':'+rid,
+                # Keep the public 128-character ID contract and the Owner's
+                # separate 128-character bound, including the lease namespace.
+                admission, active = self.owner.submit(prefix, request_id=binding['token'][:16]+':'+digest(rid),
                     timeout_s=deadline-time.monotonic())
                 if active is not None and admission == 'SUBMITTED':
                     while not active.done.wait(.01):

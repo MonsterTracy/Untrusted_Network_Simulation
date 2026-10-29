@@ -93,7 +93,9 @@ def test_service_does_not_import_training_and_denies_original_lifecycle(factory)
                                           ('ready_source', 'PROTOCOL_ERROR')])
 def test_startup_failure_kills_owned_process(factory, mode, expected):
     make, _ = factory
-    owner = make(mode, replace(Limits(), cold_start_s=.5 if mode == 'cold_hang' else 5., ready_s=.5 if mode == 'ready_hang' else 5.))
+    limits = Limits()
+    owner = make(mode, replace(limits, cold_start_s=.5 if mode == 'cold_hang' else limits.cold_start_s,
+                               ready_s=.5 if mode == 'ready_hang' else limits.ready_s))
     assert not owner.start() and owner.state == 'UNHEALTHY'
     r = [e for e in owner.journal.events if e['kind'] == 'START_FAILED'][-1]['payload']
     assert r['status'] == expected and r['cleanup']['pid_exit_confirmed']

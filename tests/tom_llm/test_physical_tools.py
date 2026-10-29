@@ -299,8 +299,11 @@ def test_probe_launch_effective_options_and_mac_gpu_guard(tmp_path,monkeypatch):
     with pytest.raises(FileExistsError):JsonlSink(log)
 
 
-def test_cpu_env_audit_wrong_interpreter_does_not_install_or_import_gpu(tmp_path):
-    with pytest.raises(ValueError,match='own isolated interpreter'):physical.capture_environment(tmp_path,prior_audit_digest='a'*64)
+@pytest.mark.parametrize('version,message', [((3,10),'Python 3.12'),((3,12),'own isolated interpreter')])
+def test_cpu_env_audit_wrong_interpreter_does_not_install_or_import_gpu(tmp_path,monkeypatch,version,message):
+    import sys
+    monkeypatch.setattr(physical,'sys',NS(version_info=version,prefix=sys.prefix,executable=sys.executable))
+    with pytest.raises(ValueError,match=message):physical.capture_environment(tmp_path,prior_audit_digest='a'*64)
 
 
 def test_linux_service_process_listener_log_and_environment_identity(tmp_path,native_suites,monkeypatch):
@@ -342,6 +345,7 @@ def environment_snapshot(tmp_path,monkeypatch):
     import sys
     import subprocess
     from pathlib import PurePosixPath
+    if sys.version_info[:2]!=(3,12):pytest.skip('NOT_RUN: actual Python 3.12 required for physical environment fixture')
     prefix=tmp_path/'env';binary=prefix/'bin/python'
     subprocess.run([sys.executable,'-I','-B','-m','venv','--copies',str(prefix)],
         check=True,capture_output=True,text=True,timeout=60)
@@ -362,7 +366,7 @@ def environment_snapshot(tmp_path,monkeypatch):
         critical[name]=hashlib.sha256(file.read_bytes()).hexdigest()
     for name in ['openai/_base_client.py','torch/__init__.py','flashinfer/__init__.py','tvm_ffi/__init__.py']:
         file=site/name;file.parent.mkdir(parents=True,exist_ok=True);file.write_bytes(b'UNIT CODE')
-    monkeypatch.setattr(physical,'sys',NS(prefix=str(prefix),executable=str(binary),version_info=(3,12),version=sys.version))
+    monkeypatch.setattr(physical,'sys',NS(prefix=str(prefix),executable=str(binary),version_info=sys.version_info,version=sys.version))
     monkeypatch.setattr(physical.importlib.metadata,'distribution',lambda n:distributions[n])
     monkeypatch.setattr(dep,'recipe',lambda:{**original,'vllm_source_sha256':critical})
     return prefix,site,binary

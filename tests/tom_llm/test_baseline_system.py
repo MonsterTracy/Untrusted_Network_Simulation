@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from tests.tom_llm.test_multimodel import cohort
+from tests.tom_llm.test_physical_tools import native_suites
 from werewolf.artifact_io import verify_artifact,canonical_json_bytes
 from werewolf.tom_llm import experiment as ex
 from werewolf.tom_llm import live_runner as runner
@@ -251,12 +252,11 @@ def test_cli_help_is_cpu_only(script):
 
 
 @pytest.mark.parametrize('key',['qwen3','yi','mistral'])
-def test_native_live_probe_and_proof_match_effective_engine_inputs(key):
+def test_native_live_probe_and_proof_match_effective_engine_inputs(key,native_suites):
     from tests.tom_llm.test_physical_tools import model_record,params_object
-    from werewolf.tom_llm.qualification_inputs import build_suite
     from werewolf.tom_llm.live_service import install_live_probe
     assets=os.environ[{'qwen3':'UNS_LLM_TOKENIZER_ASSETS','yi':'UNS_LLM_YI_ASSETS','mistral':'UNS_LLM_MISTRAL_ASSETS'}[key]]
-    spec=ModelSpec(key);suite=build_suite(spec,assets);task=suite['cases'][0]['task'];tokenizer=load_cpu_tokenizer(spec,assets)
+    spec=ModelSpec(key);suite=native_suites[key];task=suite['cases'][0]['task'];tokenizer=load_cpu_tokenizer(spec,assets)
     record=model_record(key,{key:suite});events=[];called=[]
     class Engine:
         async def _add_request(self,core):called.append(core);return None

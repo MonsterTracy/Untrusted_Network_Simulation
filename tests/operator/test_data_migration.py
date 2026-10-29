@@ -59,10 +59,10 @@ assert 'werewolf.tom.development_input' not in sys.modules
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_new_training_commands_are_not_registered():
+def test_integrated_v2_training_and_data_commands_are_registered():
     from werewolf.cli import build_parser
     import argparse
     commands = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)).choices
-    assert not {'prepare-experiment-v2', 'prepare-final-experiment-v2', 'prepare-backbone-tom-study-v2'} & commands.keys()
+    assert {'prepare-experiment-v2', 'prepare-final-experiment-v2', 'prepare-backbone-tom-study-v2'} <= commands.keys()
     assert {'prepare-canonical-split-protocol', 'publish-canonical-split', 'publish-development-v2',
             'audit-canonical-terminals', 'release-canonical-development-v2'} <= commands.keys()

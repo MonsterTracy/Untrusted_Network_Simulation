@@ -44,31 +44,36 @@ def main():
                 if fullname.startswith(forbidden): raise ImportError('restricted service dependency')
         sys.meta_path.insert(0, Block())
     if args.mode == 'ignore_term': signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    import torch
-    import numpy as np
-    from werewolf.observer_dtrs import final_tom_capsule as cap
-    original = cap.CapsulePredictor
-    class FixturePredictor(original):
-        def __init__(self, *a, **kw):
-            if args.mode == 'ready_hang': time.sleep(60)
-            super().__init__(*a, **kw)
-        def predict(self, prefix):
-            if args.mode == 'crash' or (args.mode == 'crash_on_game' and prefix.game_id == 'controlled-game'): os._exit(19)
-            if args.mode in ('hang', 'ignore_term'):
-                while True: time.sleep(60)
-            if args.mode in ('delay', 'late_success', 'service_timeout'): time.sleep(.2)
-            py, nps, tr = random.getstate(), np.random.get_state(), torch.get_rng_state().clone()
-            result = super().predict(prefix)
-            assert random.getstate() == py and np.array_equal(np.random.get_state()[1], nps[1])
-            assert np.random.get_state()[0] == nps[0] and np.random.get_state()[2:] == nps[2:]
-            assert torch.equal(torch.get_rng_state(), tr)
-            return result
-    cap.CapsulePredictor = FixturePredictor
+    def install_predictor_fault():
+        import torch
+        import numpy as np
+        from werewolf.observer_dtrs import final_tom_capsule as cap
+        original = cap.CapsulePredictor
+        class FixturePredictor(original):
+            def predict(self, prefix):
+                if args.mode == 'crash' or (args.mode == 'crash_on_game' and prefix.game_id == 'controlled-game'): os._exit(19)
+                if args.mode in ('hang', 'ignore_term'):
+                    while True: time.sleep(60)
+                if args.mode in ('delay', 'late_success', 'service_timeout'): time.sleep(.2)
+                py, nps, tr = random.getstate(), np.random.get_state(), torch.get_rng_state().clone()
+                result = super().predict(prefix)
+                assert random.getstate() == py and np.array_equal(np.random.get_state()[1], nps[1])
+                assert np.random.get_state()[0] == nps[0] and np.random.get_state()[2:] == nps[2:]
+                assert torch.equal(torch.get_rng_state(), tr)
+                return result
+        cap.CapsulePredictor = FixturePredictor
     write, read = Channel.write, Channel.read
     ready = False
     def altered_write(channel, message, deadline):
         nonlocal ready
         message = deepcopy(message)
+        if message['kind'] == 'BOOTED':
+            result = write(channel, message, deadline)
+            # Match production: model imports/loading belong to READY, not cold
+            # startup. Install faults before serve() imports CapsulePredictor.
+            if args.mode == 'ready_hang': time.sleep(60)
+            install_predictor_fault()
+            return result
         if message['kind'] == 'READY':
             ready = True
             if args.mode == 'ready_source': message['payload']['session']['capsule']['capsule_digest'] = 'e'*64
