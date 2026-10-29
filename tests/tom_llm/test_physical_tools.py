@@ -299,8 +299,11 @@ def test_probe_launch_effective_options_and_mac_gpu_guard(tmp_path,monkeypatch):
     with pytest.raises(FileExistsError):JsonlSink(log)
 
 
-def test_cpu_env_audit_wrong_interpreter_does_not_install_or_import_gpu(tmp_path):
-    with pytest.raises(ValueError,match='own isolated interpreter'):physical.capture_environment(tmp_path,prior_audit_digest='a'*64)
+@pytest.mark.parametrize('version,message', [((3,10),'Python 3.12'),((3,12),'own isolated interpreter')])
+def test_cpu_env_audit_wrong_interpreter_does_not_install_or_import_gpu(tmp_path,monkeypatch,version,message):
+    import sys
+    monkeypatch.setattr(physical,'sys',NS(version_info=version,prefix=sys.prefix,executable=sys.executable))
+    with pytest.raises(ValueError,match=message):physical.capture_environment(tmp_path,prior_audit_digest='a'*64)
 
 
 def test_linux_service_process_listener_log_and_environment_identity(tmp_path,native_suites,monkeypatch):
@@ -337,17 +340,24 @@ def test_linux_service_process_listener_log_and_environment_identity(tmp_path,na
     with pytest.raises(ValueError,match='audit log'):dep.capture_instance(a,record,100)
 
 
-def test_environment_snapshot_retains_record_deviations_and_pins_probe_code(tmp_path,monkeypatch):
+@pytest.fixture
+def environment_snapshot(tmp_path,monkeypatch):
     import sys
+    import subprocess
     from pathlib import PurePosixPath
-    prefix=tmp_path/'env';binary=prefix/'bin/python';binary.parent.mkdir(parents=True);binary.write_bytes(b'UNIT')
-    site=prefix/'lib/python3.12/site-packages';site.mkdir(parents=True)
+    if sys.version_info[:2]!=(3,12):pytest.skip('NOT_RUN: actual Python 3.12 required for physical environment fixture')
+    prefix=tmp_path/'env';binary=prefix/'bin/python'
+    subprocess.run([sys.executable,'-I','-B','-m','venv','--copies',str(prefix)],
+        check=True,capture_output=True,text=True,timeout=60)
+    site=prefix/'lib/python3.12/site-packages'
     class Distribution:
         def __init__(self,name):
-            self.version='0.27.0' if name=='vllm' else 'UNIT'
-            self.files=[PurePosixPath(name+'.dist-info/'+n) for n in ('METADATA','RECORD')]
-            for name in self.files:
-                file=site/str(name);file.parent.mkdir(parents=True,exist_ok=True);file.write_text('UNIT KNOWN MISMATCH PRESERVED')
+            self.version='0.27.0' if name=='vllm' else '1.0'
+            self.files=[PurePosixPath(name.replace('-','_')+'-'+self.version+'.dist-info/'+n) for n in ('METADATA','RECORD')]
+            for relative in self.files:
+                file=site/str(relative);file.parent.mkdir(parents=True,exist_ok=True)
+                file.write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: {self.version}\n'
+                    if file.name=='METADATA' else 'UNIT KNOWN MISMATCH PRESERVED')
         def locate_file(self,path):return site/str(path)
     distributions={n:Distribution(n) for n in physical.CORE_PACKAGES}
     original=dep.recipe();critical={}
@@ -356,15 +366,48 @@ def test_environment_snapshot_retains_record_deviations_and_pins_probe_code(tmp_
         critical[name]=hashlib.sha256(file.read_bytes()).hexdigest()
     for name in ['openai/_base_client.py','torch/__init__.py','flashinfer/__init__.py','tvm_ffi/__init__.py']:
         file=site/name;file.parent.mkdir(parents=True,exist_ok=True);file.write_bytes(b'UNIT CODE')
-    monkeypatch.setattr(sys,'prefix',str(prefix));monkeypatch.setattr(sys,'executable',str(binary))
+    monkeypatch.setattr(physical,'sys',NS(prefix=str(prefix),executable=str(binary),version_info=sys.version_info,version=sys.version))
     monkeypatch.setattr(physical.importlib.metadata,'distribution',lambda n:distributions[n])
     monkeypatch.setattr(dep,'recipe',lambda:{**original,'vllm_source_sha256':critical})
-    monkeypatch.setattr(physical.subprocess,'run',lambda *a,**k:NS(returncode=0,stdout='UNIT pip check PASS'))
+    return prefix,site,binary
+
+
+def test_environment_snapshot_retains_record_deviations_and_pins_probe_code(environment_snapshot,monkeypatch):
+    prefix,site,binary=environment_snapshot
+    def check(command,**kwargs):
+        assert command==[str(binary),'-I','-B','-m','pip','check']
+        return NS(returncode=0,stdout='UNIT pip check PASS',stderr='')
+    monkeypatch.setattr(physical.subprocess,'run',check)
     result=physical.capture_environment(prefix,prior_audit_digest='a'*64)
     assert result['gpu_runtime_imported'] is False and result['record_integrity']=='PRIOR_STRICT_FAILURES_RETAINED_NOT_REPAIRED'
-    assert (site/'vllm.dist-info/RECORD').read_text()=='UNIT KNOWN MISMATCH PRESERVED'
+    assert (site/'vllm-0.27.0.dist-info/RECORD').read_text()=='UNIT KNOWN MISMATCH PRESERVED'
+    monkeypatch.setattr(physical.subprocess,'run',lambda *a,**k:NS(returncode=1,stdout='UNIT stdout conflict',stderr='UNIT stderr error'))
+    with pytest.raises(ValueError,match='exit 1') as error:
+        physical.capture_environment(prefix,prior_audit_digest='a'*64)
+    assert 'UNIT stdout conflict' in str(error.value) and 'UNIT stderr error' in str(error.value)
     (site/'vllm/v1/engine/async_llm.py').write_bytes(b'drift')
     with pytest.raises(ValueError,match='seam code drift'):physical.capture_environment(prefix,prior_audit_digest='a'*64)
+
+
+def test_environment_pip_check_ignores_external_packages_but_reports_local_conflicts(environment_snapshot,tmp_path,monkeypatch):
+    prefix,site,binary=environment_snapshot
+    external=tmp_path/'user-packages';external.mkdir()
+    def broken(root,name,dependency):
+        metadata=root/(name.replace('-','_')+'-1.0.dist-info')/'METADATA';metadata.parent.mkdir()
+        metadata.write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\nRequires-Dist: {dependency}==1.0\n')
+    broken(external,'uns-external-broken','uns-external-missing')
+    monkeypatch.setenv('PYTHONPATH',str(external))
+    # A new interpreter does not inherit its parent's isolation flags.
+    unisolated=physical.subprocess.run([str(binary),'-B','-m','pip','check'],capture_output=True,text=True,timeout=120)
+    assert unisolated.returncode!=0 and 'uns-external-missing' in unisolated.stdout
+    result=physical.capture_environment(prefix,prior_audit_digest='a'*64)
+    assert 'No broken requirements found' in result['pip_check']
+    broken(site,'uns-local-broken','uns-local-missing')
+    with pytest.raises(ValueError,match='uns-local-missing') as error:
+        physical.capture_environment(prefix,prior_audit_digest='a'*64)
+    assert 'dependency integrity failure' in str(error.value)
+    assert 'uns-external-missing' not in str(error.value)
+    assert (site/'vllm-0.27.0.dist-info/RECORD').read_text()=='UNIT KNOWN MISMATCH PRESERVED'
 
 
 def test_old_w5_or_mock_admission_domains_are_never_upgraded(tmp_path):

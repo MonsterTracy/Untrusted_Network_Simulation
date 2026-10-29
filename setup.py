@@ -21,7 +21,7 @@ setup(
         "tiktoken>=0.7.0",
     ],
     extras_require={
-        "llm-reasoner": ["Jinja2>=3.1,<4"],
+        "llm-reasoner": ["Jinja2>=3.1,<4", "matplotlib>=3.7,<4"],
         "tom": [
             "torch>=2.0.0",
             "transformers>=4.47.1",

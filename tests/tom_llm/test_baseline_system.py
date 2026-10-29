@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from tests.tom_llm.test_multimodel import cohort
+from tests.tom_llm.test_physical_tools import native_suites
 from werewolf.artifact_io import verify_artifact,canonical_json_bytes
 from werewolf.tom_llm import experiment as ex
 from werewolf.tom_llm import live_runner as runner
@@ -251,12 +252,11 @@ def test_cli_help_is_cpu_only(script):
 
 
 @pytest.mark.parametrize('key',['qwen3','yi','mistral'])
-def test_native_live_probe_and_proof_match_effective_engine_inputs(key):
+def test_native_live_probe_and_proof_match_effective_engine_inputs(key,native_suites):
     from tests.tom_llm.test_physical_tools import model_record,params_object
-    from werewolf.tom_llm.qualification_inputs import build_suite
     from werewolf.tom_llm.live_service import install_live_probe
     assets=os.environ[{'qwen3':'UNS_LLM_TOKENIZER_ASSETS','yi':'UNS_LLM_YI_ASSETS','mistral':'UNS_LLM_MISTRAL_ASSETS'}[key]]
-    spec=ModelSpec(key);suite=build_suite(spec,assets);task=suite['cases'][0]['task'];tokenizer=load_cpu_tokenizer(spec,assets)
+    spec=ModelSpec(key);suite=native_suites[key];task=suite['cases'][0]['task'];tokenizer=load_cpu_tokenizer(spec,assets)
     record=model_record(key,{key:suite});events=[];called=[]
     class Engine:
         async def _add_request(self,core):called.append(core);return None
@@ -512,6 +512,20 @@ def test_environment_recheck_uses_target_prefix_not_controller_python(tmp_path,m
     assert observed['kwargs']['env']['CUDA_VISIBLE_DEVICES']==''
     assert 'capture_environment' in observed['command'][5]
     assert observed['kwargs']['check'] is True
+
+
+def test_environment_recheck_surfaces_child_dependency_diagnostics(tmp_path,monkeypatch):
+    from werewolf.tom_llm import live_admission as admission
+    prefix=tmp_path/'model-env';(prefix/'bin').mkdir(parents=True)
+    (prefix/'bin/python').write_bytes(b'UNIT INTERPRETER NOT EXECUTED')
+    def run(command,**kwargs):
+        raise subprocess.CalledProcessError(1,command,output='UNIT child stdout',
+            stderr='ValueError: dependency integrity failure\nuns-local-broken requires uns-local-missing')
+    monkeypatch.setattr(admission.subprocess,'run',run)
+    with pytest.raises(ValueError,match='uns-local-missing') as error:
+        admission.capture_bound_environment(prefix,'e'*64)
+    assert 'UNIT child stdout' in str(error.value)
+    assert isinstance(error.value.__cause__,subprocess.CalledProcessError)
 
 
 

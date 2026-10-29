@@ -43,9 +43,13 @@ def _cpu_child(prefix, code, arguments):
     child={k:os.environ[k] for k in ('HOME','USER','LANG','LC_ALL') if k in os.environ}
     child.update(PATH=str(prefix/'bin')+':/usr/bin:/bin',PYTHONDONTWRITEBYTECODE='1',CUDA_VISIBLE_DEVICES='',
         HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1')
-    result=subprocess.run([str(prefix/'bin/python'),'-I','-S','-B','-c',code,str(ROOT),
-        str(prefix/'lib/python3.12/site-packages'),*map(str,arguments)],
-        env=child,capture_output=True,text=True,timeout=300,check=True)
+    try:
+        result=subprocess.run([str(prefix/'bin/python'),'-I','-S','-B','-c',code,str(ROOT),
+            str(prefix/'lib/python3.12/site-packages'),*map(str,arguments)],
+            env=child,capture_output=True,text=True,timeout=300,check=True)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(f'CPU environment check failed (exit {error.returncode})\n'
+                         f'stdout:\n{error.stdout or ""}\nstderr:\n{error.stderr or ""}') from error
     return strict_json(result.stdout)
 
 

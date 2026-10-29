@@ -98,8 +98,10 @@ def capture_environment(prefix, *, prior_audit_digest):
     for dist_name,path in [('openai','openai/_base_client.py'),('torch','torch/__init__.py'),
                            ('flashinfer-python','flashinfer/__init__.py'),('apache-tvm-ffi','tvm_ffi/__init__.py')]:
         critical[path] = file_identity(importlib.metadata.distribution(dist_name).locate_file(path))
-    check = subprocess.run([sys.executable,'-B','-m','pip','check'],capture_output=True,text=True,timeout=120)
-    require(check.returncode==0, 'dependency integrity failure; do not repair existing environment')
+    check = subprocess.run([sys.executable,'-I','-B','-m','pip','check'],capture_output=True,text=True,timeout=120)
+    if check.returncode!=0:
+        raise ValueError(f'dependency integrity failure (exit {check.returncode}); do not repair existing environment\n'
+                         f'stdout:\n{check.stdout}\nstderr:\n{check.stderr}')
     return {'schema_version':VERSION+'_environment','evidence_kind':'physical_cpu','prefix':str(prefix),
             'python':sys.version,'executable':file_identity(Path(sys.executable).resolve()),
             'versions':versions,'distribution_metadata':metadata,'critical_files':critical,

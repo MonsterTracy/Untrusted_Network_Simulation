@@ -94,7 +94,7 @@ def test_setup_keeps_existing_extras_and_only_prompt_resources():
     config = setup.call_args.kwargs
     assert config["entry_points"]["console_scripts"] == ["uns=werewolf.cli:main"]
     assert set(config["extras_require"]) == {"tom", "mapper", "dev", "llm-reasoner"}
-    assert config["extras_require"]["llm-reasoner"] == ["Jinja2>=3.1,<4"]
+    assert config["extras_require"]["llm-reasoner"] == ["Jinja2>=3.1,<4", "matplotlib>=3.7,<4"]
     assert config["package_data"] == {"werewolf.tom_llm": ["assets/*.txt", "assets/*.jinja"]}
 
 
