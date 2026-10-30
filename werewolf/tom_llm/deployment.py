@@ -14,6 +14,7 @@ from werewolf.tom_llm.qualification_inputs import open_suite, open_budget
 
 VERSION = 'classic7_multimodel_deployment_v1'
 BASE = Path('/data/yuxiao/tom-llm-reasoner-b2')
+EXPERIMENT_BASE = Path('/data/yuxiao/TomBaseline-data')
 ENV_BASE = Path('/data/yuxiao/envs')
 RECIPE = ROOT/'configs/paper/tom-llm-qualification-recipe-v1.json'
 RECIPE_SHA = '8b664c3cceede49cc9083c64cb2a4207e8e5853352ddb51501bec20712a97aaa'
@@ -102,12 +103,23 @@ def vllm_config_bytes(options):
         (True if value is False else value) for key,value in options.items()})
 
 
+def baseline_root(path):
+    """Output roots only; historical physical assets and the GPU lock keep BASE."""
+    p=Path(path)
+    require(p.is_absolute() and '..' not in p.parts
+            and not any(q.is_symlink() for q in (p,*p.parents)),
+            'absolute baseline path without parent traversal/symlinks required')
+    base=next((b for b in (BASE,EXPERIMENT_BASE) if p.is_relative_to(b)),None)
+    require(base is not None,'writes outside independent baseline roots')
+    return base
+
+
 def profile(spec, *, gpu_uuid, candidate_root, model_directory=None, environment_prefix=None):
     require(type(spec) is ModelSpec and type(gpu_uuid) is str and gpu_uuid.startswith('GPU-'), 'explicit model/GPU identity required')
     row = spec.record(); root = Path(candidate_root)
-    require(root.is_absolute() and root.is_relative_to(BASE/'multimodel'/spec.key)
-            and root != BASE/'multimodel'/spec.key and '..' not in root.parts
-            and not any(p.is_symlink() for p in (root,*root.parents)), 'isolated candidate root required')
+    base=baseline_root(root)
+    require(root.is_relative_to(base/'multimodel'/spec.key)
+            and root != base/'multimodel'/spec.key, 'isolated candidate root required')
     model = Path(model_directory) if model_directory else root/'model'
     env = Path(environment_prefix) if environment_prefix else root/'env'
     require(model.is_absolute() and model.is_relative_to(BASE) and '..' not in model.parts,

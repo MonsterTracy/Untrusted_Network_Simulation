@@ -8,14 +8,55 @@ request replay is provided.
 
 ## Configuration and stages
 
-Copy `configs/paper/tom-llm-operations.example.yaml` outside the checkout as
-`tom-llm.yaml`. Fill actual paths and externally verified manifest digests once.
+Use `configs/paper/tom-llm-operations.example.yaml` as the configuration schema.
+The approved future Qwen config is `/data/yuxiao/TomBaseline-data/Qwen3-8b.yaml`;
+Yi/Mistral config names and all three new candidate names still require the user's
+decision. The example's historical candidate names do not approve new ones.
+Fill actual paths and externally verified manifest digests once.
 Placeholders are deliberately not usable identities. JSON experiment configs
 continue to work with the original scripts. The frozen model registry supplies
 official revisions, templates, decoding and termination parameters; Deployment
 supplies ports 18581/18582/18583, device 0 and the dedicated GPU UUID. These are
 shown/verified rather than duplicated as freely editable YAML sampling values.
 Changing those frozen values is a new protocol, not an operations setting.
+
+### New experiment outputs and historical inputs
+
+The shared output path validator accepts exactly the historical
+`/data/yuxiao/tom-llm-reasoner-b2` and new `/data/yuxiao/TomBaseline-data` roots.
+Configure future `output_root`, optional `cpu_root` and per-model `candidate_root`
+under the new root; candidates retain `multimodel/MODEL/USER_SELECTED_NAME`.
+Deployment, caches/TMP, service control, qualification rounds/Admission, Run,
+Permit, Prediction Seal and reports then follow their existing owning directories.
+The older direct baseline CLI now defaults to `TomBaseline-data/experiments`;
+pass its explicit `--output-root` when inspecting historical runs.
+No server directory or configuration has been created by this local adaptation.
+
+Only the output roots have expanded. Explicitly retain `model_directory` under
+the historical baseline root and `environment_prefix` under that root or as a
+direct `/data/yuxiao/envs/` child. These physical asset path rules are unchanged;
+the new candidate's default `model`/`env` subdirectories do not authorize moving
+assets there. Tokenizer, Selection, Cohort, Suite, Budget and Receipt references
+keep their original absolute paths and digests, with their existing strict readers.
+Existing Deployment/Admission artifacts are historical inputs, not qualification
+for the new Source or a changed environment. Offline Deployment reading rebuilds
+the original profile without retargeting its root or rewriting any evidence.
+Both roots remain supported for original contracts; this is not a migration.
+
+`load_config` and explicit `--save-config` use the same YAML/JSON contract in the
+new root. Saving still refuses symlinks, sealed Artifact ancestors and intervening
+edits. Output checks reject traversal, symlink components and all other roots.
+The physical model, tokenizer, environment, Source compatibility and Admission
+checks are unchanged. New Source-bound Deployment and independent model
+Qualification are still required where the existing inventory comparison fails.
+
+Both old and new managed services always use the original single shared lock:
+`/data/yuxiao/tom-llm-reasoner-b2/baseline-gpu.lock`. Keep this directory and lock
+in place. No lock is created under `TomBaseline-data`; moving or replacing the
+shared lock could split mutual exclusion with historical controllers. The same
+inherited lock FD, pidfd ownership checks and incomplete-launch fence still apply.
+Mac tests cover cross-root contention with an isolated CPU child, not real vLLM
+bootstrap, Linux pidfd behavior or physical GPU qualification.
 
 All commands below are **future Ubuntu manual operations after review and separate
 authorization**. They have not been executed by this refactor. Use a committed
@@ -50,8 +91,9 @@ The supplied YAML uses one `environment_prefix` via YAML anchors for all three
 models. A prefix must be inside the historical baseline root, or be a direct,
 non-symlink child of `/data/yuxiao/envs/`. The parent directory itself, nested
 external prefixes and `..` paths are rejected. This exception is for a read-only
-environment asset only: models, caches, temporary files, logs, candidates and
-results still use separate paths inside `/data/yuxiao/tom-llm-reasoner-b2`.
+environment asset only. Model assets stay in the historical baseline root;
+caches, temporary files, logs, candidates and results use separate paths inside
+the selected baseline output root.
 No Conda activation/discovery, registration or automatic installation is added.
 The selected interpreter is always the prefix's own `bin/python`.
 

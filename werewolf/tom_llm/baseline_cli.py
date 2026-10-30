@@ -44,8 +44,8 @@ def prepare(args,root):
     choose_games(strict_json((selection_artifact.path/'selection.json').read_bytes()),games,mode)
     for key in models:ModelSpec(key).record();require(key in c['models'],'model config missing')
     if mode!='fake' and sys.platform=='linux':
-        from werewolf.tom_llm.deployment import BASE
-        require(root.is_relative_to(BASE),'Ubuntu writes must remain inside independent b2 root')
+        from werewolf.tom_llm.deployment import baseline_root
+        baseline_root(safe_path(root))
     if c.get('cohort'):
         cohort,tasks=read_cohort(c['cohort']['path'],c['cohort']['digest'],current_source=False)
     else:
@@ -113,7 +113,8 @@ def main(argv=None, *, analysis=False):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--action',choices=['prepare','permit','run','status','analyze'],default='analyze' if analysis else 'run')
     parser.add_argument('--run-id',required=True)
-    parser.add_argument('--output-root',default='/data/yuxiao/tom-llm-reasoner-b2/experiments')
+    from werewolf.tom_llm.deployment import EXPERIMENT_BASE
+    parser.add_argument('--output-root',default=str(EXPERIMENT_BASE/'experiments'))
     parser.add_argument('--models',nargs='+',choices=['qwen3','yi','mistral'])
     parser.add_argument('--games',type=int);parser.add_argument('--mode',choices=['formal','technical','fake'])
     parser.add_argument('--config');parser.add_argument('--resume',action='store_true')

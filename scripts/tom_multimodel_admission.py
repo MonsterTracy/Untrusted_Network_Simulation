@@ -36,9 +36,10 @@ def main():
     for n in ('qwen3','yi','mistral'):upstream(p,n)
     args=parser.parse_args()
     if sys.platform=='linux' and hasattr(args,'output'):
-        target=Path(args.output).resolve()
-        if not target.is_relative_to(Path('/data/yuxiao/tom-llm-reasoner-b2')):
-            parser.error('Ubuntu writes must stay inside the independent b2 directory')
+        from werewolf.tom_llm.deployment import baseline_root
+        from werewolf.tom_llm.experiment import safe_path
+        try:baseline_root(safe_path(args.output))
+        except ValueError as error:parser.error(str(error))
     if args.command=='inspect-budgets':
         from werewolf.tom_llm.qualification_inputs import open_budget,budget_matrix
         from werewolf.tom_llm.model_spec import ModelSpec

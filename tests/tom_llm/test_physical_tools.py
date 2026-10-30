@@ -197,6 +197,70 @@ def test_profiles_are_disjoint_and_cache_scoped():
 
 
 @pytest.mark.parametrize('key',KEYS)
+def test_cross_root_deployments_preserve_original_assets_and_offline_source_identity(tmp_path,monkeypatch,key):
+    """Real artifact/byte checks over tiny unit assets; no native/GPU evidence."""
+    from werewolf.tom_llm import live_admission as live
+    old=tmp_path/'historical';new=tmp_path/'TomBaseline-data'
+    monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
+    spec=ModelSpec(key);model=old/'models'/key;model.mkdir(parents=True)
+    files={'config.json':b'{}','model-00001.safetensors':b'UNIT_NOT_REAL_WEIGHTS',
+        'model.safetensors.index.json':canonical_json_bytes({'weight_map':{'unit':'model-00001.safetensors'}})}
+    for name,raw in files.items():(model/name).write_bytes(raw)
+    revision=spec.record()['revision'];(model/'HF_REVISION').write_text(revision+'\n')
+    inventory={n:{'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'git_blob_oid':None} for n,b in files.items()}
+    monkeypatch.setattr(physical,'asset_spec',lambda s:{'model':s.record()['model'],'revision':revision,'files':inventory})
+    env=old/'env';environment={'schema_version':physical.VERSION+'_environment','evidence_kind':'physical_cpu',
+        'prefix':str(env),'prior_audit_digest':'a'*64,'UNIT_ONLY':True}
+    monkeypatch.setattr(live,'capture_bound_environment',lambda *a:deepcopy(environment))
+    assets=physical.publish_receipt(old/'receipts/assets','model',physical.verify_model(spec,model))
+    receipt=physical.publish_receipt(old/'receipts/environment','environment',environment)
+    # Native suite/budget construction is outside this path/identity unit test.
+    suite={'UNIT_ONLY':key};budget={'UNIT_ONLY':key}
+    monkeypatch.setattr(dep,'open_suite',lambda *a:suite)
+    monkeypatch.setattr(dep,'open_budget',lambda *a:budget)
+    monkeypatch.setattr(qi,'validate_suite',lambda s,spec:s)
+    source=dep.source_identity();source['source_inventory_clean']=True
+    monkeypatch.setattr(dep,'source_identity',lambda:source)
+    args=dict(gpu_uuid='GPU-unit-only',model_root=model,model_receipt=assets.path,expected_model=assets.manifest_digest,
+        environment_root=env,environment_receipt=receipt.path,expected_environment=receipt.manifest_digest,
+        suite_root=old/'suite',expected_suite='b'*64,budget_root=old/'budget',expected_budget='c'*64)
+    original=dep.prepare_deployment(old/'multimodel'/key/'unit-candidate/deployment',spec,**args)
+    protected={p:p.read_bytes() for p in old.rglob('*') if p.is_file()}
+    current=deepcopy(source);current['source_revision']='f'*40
+    current['file_digests']['werewolf/unknown_unit_runtime.py']='d'*64
+    current['implementation_digest']=digest(current['file_digests'])
+    monkeypatch.setattr(dep,'source_identity',lambda:current)
+    destination=new/'multimodel'/key/'unit-candidate/deployment'
+    artifact=dep.prepare_deployment(destination,spec,**args)
+    _,record=dep.open_deployment(artifact.path,artifact.manifest_digest,physical_recheck=True)
+    assert record['source']==current and record['model']['directory']==str(model)
+    assert record['environment']==environment and record['physical_gpu_admission'] is False
+    assert record['upstream_receipts']['model']==assets.manifest_digest
+    assert record['upstream_receipts']['environment']==receipt.manifest_digest
+    _,historical=dep.open_deployment(original.path,original.manifest_digest,current_source=False)
+    assert historical['source']==source and historical['profile']['root']==str(original.path.parent)
+    with pytest.raises(ValueError,match='identity/domain'):dep.open_deployment(original.path,original.manifest_digest)
+    with pytest.raises(ValueError,match='new GPU qualification'):dep.qualification_compatibility(historical['source'])
+    with pytest.raises(ValueError,match='new ROOT/deployment'):dep.prepare_deployment(destination,spec,**args)
+    assert all(p.read_bytes()==raw for p,raw in protected.items())
+    bad={**args,'expected_model':'0'*64}
+    with pytest.raises(ValueError,match='CPU receipt identity'):
+        dep.prepare_deployment(new/'multimodel'/key/'other-candidate/deployment',spec,**bad)
+    environment['UNIT_ONLY']='changed environment'
+    with pytest.raises(ValueError,match='physical environment changed'):
+        dep.open_deployment(artifact.path,artifact.manifest_digest,physical_recheck=True)
+    environment['UNIT_ONLY']=True
+    (model/'model-00001.safetensors').write_bytes(b'changed')
+    with pytest.raises(ValueError,match='official physical bytes drift'):
+        dep.open_deployment(artifact.path,artifact.manifest_digest,physical_recheck=True)
+    # Offline history does not touch the now-changed physical assets.
+    assert dep.open_deployment(original.path,original.manifest_digest,current_source=False)[1]==historical
+    schema=qi.synthetic_tasks()[0]['response_schema'];params=sampling(spec,schema)
+    validate_sampling(params,schema,spec)
+    if key=='yi':assert params['eos_token_ids']==[2,7]
+
+
+@pytest.mark.parametrize('key',KEYS)
 def test_two_native_rounds_join_durable_engine_and_reply_evidence(tmp_path,native_suites,key,monkeypatch):
     record=model_record(key,native_suites);rounds=[]
     for run in (0,1):

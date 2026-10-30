@@ -414,10 +414,13 @@ def test_cli_prepare_reuses_real_readers_and_existing_selection(study,cohort,sea
 
 @pytest.mark.parametrize('mode',['formal','technical'])
 @pytest.mark.parametrize('key',['qwen3','yi','mistral'])
-def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tmp_path,monkeypatch,mode,key):
+@pytest.mark.parametrize('domain',['historical','new'])
+def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tmp_path,monkeypatch,mode,key,domain):
     """Unit-only physical boundary stubs: this artifact is not real Admission."""
     from werewolf.tom_llm import live_admission as admission
-    root=tmp_path/'unit-run';spec=ModelSpec(key);source={**ex.source_v3(),'source_inventory_clean':True}
+    historical=tmp_path/'historical';new=tmp_path/'TomBaseline-data'
+    root=(historical if domain=='historical' else new)/'unit-run'
+    spec=ModelSpec(key);source={**ex.source_v3(),'source_inventory_clean':True}
     contract=NS(manifest_digest='a'*64)
     run={'mode':mode,'source':source,'models':{key:spec.digest},'cohort_digest':'c'*64}
     budget={'cohort_digest':run['cohort_digest']};qualified={'budget':budget,'upstream_receipts':{'budget':'b'*64},'source':source}
@@ -425,7 +428,7 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     monkeypatch.setattr(deployment,'qualification_compatibility',lambda s:{'UNIT_ONLY':digest(s)})
     profile={'argv_options':{'UNIT_ONLY':'not_a_real_vllm_config'}};observed=[]
     monkeypatch.setattr(admission,'sys',NS(platform='linux'))
-    monkeypatch.setattr(admission,'BASE',tmp_path)
+    monkeypatch.setattr(deployment,'BASE',historical);monkeypatch.setattr(deployment,'EXPERIMENT_BASE',new)
     monkeypatch.setattr(admission,'open_run',lambda *a,**kw:(contract,run,[]))
     monkeypatch.setattr(admission,'source_v3',lambda:source)
     def physical_check(path,expected,model):
@@ -454,13 +457,13 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
         admission.open_permit(root,key,artifact.manifest_digest)
     run['cohort_digest']=budget['cohort_digest'];source['source_inventory_clean']=False
     with pytest.raises(ValueError,match='committed'):
-        admission.publish_permit(tmp_path/'dirty-run',key,**args)
+        admission.publish_permit(root.parent/'dirty-run',key,**args)
     source['source_inventory_clean']=True
     def invalid_qualification(*args):raise ValueError('sealed physical qualification rejected')
     monkeypatch.setattr(admission,'qualified_offline',invalid_qualification)
     with pytest.raises(ValueError,match='sealed physical'):
-        admission.publish_permit(tmp_path/'invalid-physical-run',key,**args)
-    assert not (tmp_path/'invalid-physical-run/models'/key/'permit').exists()
+        admission.publish_permit(root.parent/'invalid-physical-run',key,**args)
+    assert not (root.parent/'invalid-physical-run/models'/key/'permit').exists()
 
 
 def test_cli_removes_old_approval_and_predecessor_options(tmp_path,monkeypatch):

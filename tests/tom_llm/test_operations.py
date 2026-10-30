@@ -217,14 +217,18 @@ def test_old_v1_admission_reads_offline_after_source_update_and_stopped_service(
         expected_deployment=deployment.manifest_digest,model_spec=ModelSpec('qwen3'))
 
 
-@pytest.fixture
-def managed(tmp_path,monkeypatch):
+@pytest.fixture(params=['historical','new'])
+def managed(tmp_path,monkeypatch,request):
     from werewolf.tom_llm import service_manager as sm
-    monkeypatch.setattr(sm.sys,'platform','linux');monkeypatch.setattr(dep,'BASE',tmp_path)
+    base=tmp_path/'historical';base.mkdir()
+    new=tmp_path/'TomBaseline-data'
+    monkeypatch.setattr(sm.sys,'platform','linux');monkeypatch.setattr(dep,'BASE',base)
+    monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
     monkeypatch.setattr(dep,'require_idle_gpu',lambda p:None)
-    profile={'root':str(tmp_path/'service'),'argv_options':{'port':0},'gpu':{'uuid':'GPU-UNIT'},
+    service=(base if request.param=='historical' else new)/'service'
+    profile={'root':str(service),'argv_options':{'port':0},'gpu':{'uuid':'GPU-UNIT'},
         'environment_prefix':str(tmp_path/'env'),
-        'environment_requirements':{k:str(tmp_path/'service'/k) for k in dep.CACHE_VARIABLES}}
+        'environment_requirements':{k:str(service/k) for k in dep.CACHE_VARIABLES}}
     spec=Service(tmp_path/'run','qwen3','a'*64)
     cmd=[str(tmp_path/'env/bin/python'),'-m','werewolf.tom_llm.live_service','--execute-live']
     monkeypatch.setattr(spec,'binding',lambda **kw:(NS(manifest_digest='a'*64),{'profile':profile},cmd))
@@ -687,10 +691,129 @@ def test_gpu_lock_fd_survives_controller_close_until_cpu_child_exits(managed,mon
     try:
         state=manager.start(execute=True)
         assert state['pid']==manager.child.pid
-        with (tmp_path/'baseline-gpu.lock').open('a+b') as other:
+        with (dep.BASE/'baseline-gpu.lock').open('a+b') as other:
             with pytest.raises(BlockingIOError):fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            # The other output root/model must contend on the same inherited FD.
+            other_base=dep.EXPERIMENT_BASE if Path(r['profile']['root']).is_relative_to(dep.BASE) else dep.BASE
+            other_profile=deepcopy(r['profile']);other_profile['root']=str(other_base/'other-service')
+            second=Service(tmp_path/'other-run','yi','b'*64)
+            monkeypatch.setattr(second,'binding',lambda **kw:(a,{'profile':other_profile},cmd))
+            with pytest.raises(BlockingIOError):second.start(execute=True)
+            assert second.child is None and not second.pending_launch.exists()
             manager.child.terminate();manager.child.wait(timeout=5)
             fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        assert not (dep.EXPERIMENT_BASE/'baseline-gpu.lock').exists()
     finally:
         if manager.child is not None and manager.child.poll() is None:
             manager.child.terminate();manager.child.wait(timeout=5)
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_new_candidate_profiles_keep_historical_asset_and_model_protocol_contracts(key):
+    spec=ModelSpec(key);shared=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline'
+    model=dep.BASE/'models'/key
+    old=dep.profile(spec,gpu_uuid='GPU-UNIT',candidate_root=dep.BASE/'multimodel'/key/'unit-candidate',
+        model_directory=model,environment_prefix=shared)
+    root=dep.EXPERIMENT_BASE/'multimodel'/key/'unit-candidate'
+    new=dep.profile(spec,gpu_uuid='GPU-UNIT',candidate_root=root,model_directory=model,environment_prefix=shared)
+    assert dep.baseline_root(root)==dep.EXPERIMENT_BASE
+    assert new['argv_options']=={**old['argv_options'],'chat-template':str(root/'deployment/chat_template.jinja')}
+    ignored=set(dep.CACHE_VARIABLES)|{'PYTHONPATH'}
+    assert {k:v for k,v in new['environment_requirements'].items() if k not in ignored}=={
+        k:v for k,v in old['environment_requirements'].items() if k not in ignored}
+    for k in dep.CACHE_VARIABLES:assert Path(new['environment_requirements'][k]).is_relative_to(root)
+    assert new['model_spec_digest']==old['model_spec_digest']==spec.digest
+    # Only the output contract changed, never the allowed physical asset roots.
+    with pytest.raises(ValueError,match='physical model path'):
+        dep.profile(spec,gpu_uuid='GPU-UNIT',candidate_root=root,model_directory=root/'model',environment_prefix=shared)
+    with pytest.raises(ValueError,match='environment'):
+        dep.profile(spec,gpu_uuid='GPU-UNIT',candidate_root=root,model_directory=model,environment_prefix=root/'env')
+    with pytest.raises(ValueError,match='isolated candidate'):
+        dep.profile(spec,gpu_uuid='GPU-UNIT',candidate_root=dep.EXPERIMENT_BASE/'multimodel'/key,
+            model_directory=model,environment_prefix=shared)
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_new_yaml_saves_anchored_historical_references_without_rewriting_them(tmp_path,monkeypatch,key):
+    old=tmp_path/'historical';new=tmp_path/'TomBaseline-data';new.mkdir()
+    monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
+    a=publish_artifact(old/'receipt',manifest_fields={'artifact_type':'unit','schema_version':'unit'},files={'record.json':b'{}'})
+    protected={p:p.read_bytes() for p in a.path.iterdir()}
+    cfg=new/'Qwen3-8b.yaml';cfg.write_text('models: {'+key+': {}}\n')
+    original=cfg.read_bytes();updated=ops.load_config(cfg)
+    updated['models'][key]['assets']=ops.ref(a)
+    ops.save_configuration(cfg,original,updated)
+    assert ops.load_config(cfg)==updated
+    assert ops.anchor(updated['models'][key]['assets']).manifest_digest==a.manifest_digest
+    assert all(p.read_bytes()==raw for p,raw in protected.items())
+    wrong={**ops.ref(a),'digest':'0'*64}
+    with pytest.raises(ValueError,match='digest mismatch'):ops.anchor(wrong)
+    alias=new/'alias.yaml';alias.symlink_to(cfg)
+    with pytest.raises(ValueError,match='symlink'):ops.load_config(alias)
+    with pytest.raises(ValueError,match='symlink'):ops.save_configuration(alias,cfg.read_bytes(),updated)
+    with pytest.raises(ValueError,match='configuration changed'):ops.save_configuration(cfg,original,updated)
+    for invalid in (tmp_path/'outside',Path(str(new)+'-other')/'outputs',new/'..'/'outside'):
+        with pytest.raises(ValueError):dep.baseline_root(invalid)
+    (new/'alias').symlink_to(old,target_is_directory=True)
+    with pytest.raises(ValueError,match='symlink'):dep.baseline_root(new/'alias'/'outputs')
+    assert not list(new.glob('*.tmp')) and all(p.read_bytes()==raw for p,raw in protected.items())
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_linux_cli_new_output_root_and_cpu_inputs_share_the_same_path_gate(tmp_path,monkeypatch,key):
+    from werewolf.tom_llm import qualification_inputs as qi
+    old=tmp_path/'historical';new=tmp_path/'TomBaseline-data';new.mkdir()
+    monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
+    monkeypatch.setattr(ops,'sys',NS(platform='linux'))
+    outputs=[]
+    monkeypatch.setattr(qi,'publish_suite',lambda path,*a:outputs.append(path) or NS(path=path,manifest_digest='a'*64))
+    monkeypatch.setattr(qi,'open_suite',lambda *a:None)
+    cfg=new/'Qwen3-8b.yaml'
+    c={'output_root':str(new/'experiments'),'models':{key:{'tokenizer_assets':str(old/'tokens'/key)}}}
+    cfg.write_text(json.dumps(c))
+    argv=['tom-llm','--config',str(cfg),'prepare','--stage','suite','--models',key,'--save-config']
+    assert main(argv)==0 and outputs==[new/'experiments/cpu'/key/'suite']
+    assert ops.load_config(cfg)['models'][key]['suite']['path']==str(outputs[0])
+    c['models'][key]['cpu_root']=str(tmp_path/'outside');cfg.write_text(json.dumps(c))
+    with pytest.raises(ValueError,match='outside independent'):main(argv)
+    assert len(outputs)==1
+    c['models'][key]['cpu_root']=str(new/'cpu')
+    c['models'][key]['candidate_root']=str(tmp_path/'foreign-candidate');cfg.write_text(json.dumps(c))
+    with pytest.raises(ValueError,match='outside independent'):main(argv)
+    assert len(outputs)==1
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_manual_cpu_cli_new_root_rejects_symlink_and_traversal_before_asset_reads(tmp_path,monkeypatch,key):
+    from scripts import tom_multimodel_admission as cli
+    from werewolf.tom_llm import physical
+    old=tmp_path/'historical';new=tmp_path/'TomBaseline-data';new.mkdir()
+    monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
+    monkeypatch.setattr(cli,'sys',NS(platform='linux'))
+    reads=[]
+    def verify(spec,path):
+        reads.append((spec.key,path))
+        return {'schema_version':physical.VERSION+'_model','evidence_kind':'physical_cpu','UNIT_ONLY':True}
+    monkeypatch.setattr(physical,'verify_model',verify)
+    def invoke(target):
+        monkeypatch.setattr('sys.argv',['tool','assets','--model',key,'--directory',str(old/'models'/key),'--output',str(target)])
+        return cli.main()
+    invoke(new/'receipt')
+    assert ops.anchor({'path':str(new/'receipt'),'digest':json.loads((new/'receipt/manifest.json').read_text())['manifest_digest']})
+    (new/'alias').symlink_to(new/'receipt',target_is_directory=True)
+    for invalid in (new/'alias'/'nested',new/'..'/'historical',tmp_path/'outside'):
+        with pytest.raises(SystemExit) as error:invoke(invalid)
+        assert error.value.code==2
+    assert reads==[(key,str(old/'models'/key))]
+
+
+def test_direct_baseline_cli_defaults_to_new_experiment_root(monkeypatch):
+    from werewolf.tom_llm import baseline_cli,baseline_analysis
+    observed=[]
+    monkeypatch.setattr(baseline_cli,'prepare',lambda args,root:observed.append(root) or {})
+    monkeypatch.setattr(baseline_analysis,'analyze',lambda root,destination,**kw:observed.append((root,destination)) or {})
+    baseline_cli.main(['--action','prepare','--run-id','unit-run'])
+    baseline_cli.main(['--action','analyze','--run-id','unit-run'])
+    root=dep.EXPERIMENT_BASE/'experiments/unit-run'
+    assert observed==[root,(root,root/'analysis')]

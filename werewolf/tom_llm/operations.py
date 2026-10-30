@@ -57,8 +57,8 @@ def save_configuration(path,original,configuration):
     import os,tempfile
     path=safe_path(path)
     if sys.platform=='linux':
-        from werewolf.tom_llm.deployment import BASE
-        require(path.is_relative_to(BASE),'saved operations config must stay inside baseline root')
+        from werewolf.tom_llm.deployment import baseline_root
+        baseline_root(path)
     require(not any((p/'manifest.json').exists() for p in path.parents),'configuration is inside a sealed Artifact')
     require(path.read_bytes()==original,'configuration changed; generated Artifacts retained, configuration not replaced')
     if path.suffix=='.json':
@@ -97,8 +97,8 @@ def prepare_inputs(c,key,stage):
     def destination():
         root=safe_path(item['cpu_root']) if item.get('cpu_root') else safe_path(c['output_root'])/'cpu'/key
         if sys.platform=='linux':
-            from werewolf.tom_llm.deployment import BASE
-            require(root.is_relative_to(BASE),'CPU inputs outside independent baseline root')
+            from werewolf.tom_llm.deployment import baseline_root
+            baseline_root(root)
         require(not any((p/'manifest.json').exists() for p in (root,*root.parents)),'CPU inputs inside sealed Artifact')
         for field in ('model_directory','environment_prefix','tokenizer_assets'):
             if item.get(field):require(not root.is_relative_to(safe_path(item[field])), 'CPU outputs inside model/tokenizer/environment assets')
@@ -198,11 +198,11 @@ def dispatch(args):
     op=args.operation
     if hasattr(args,'model'):require(args.model in c['models'],'model is not configured')
     if sys.platform=='linux' and op in ('prepare','admit','run','report') and not (op=='prepare' and args.stage=='tokenizer'):
-        from werewolf.tom_llm.deployment import BASE
-        for name in ('output_root',):require(safe_path(c[name]).is_relative_to(BASE),'writes outside independent baseline root')
+        from werewolf.tom_llm.deployment import baseline_root
+        baseline_root(safe_path(c['output_root']))
         for key in keys:
             if c['models'][key].get('candidate_root'):
-                require(safe_path(c['models'][key]['candidate_root']).is_relative_to(BASE),'candidate outside baseline root')
+                baseline_root(safe_path(c['models'][key]['candidate_root']))
     if op=='status':
         result={'models':{},'gpu':gpu_status()}
         for key in keys:

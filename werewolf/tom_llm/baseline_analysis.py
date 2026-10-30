@@ -172,8 +172,8 @@ def analyze(root,destination,*,expected_run_seal=None):
     for key in result['models']:result['models'][key]['performance']=performance(root,key,tasks,predictions[key])
     dest=safe_path(destination);require(not dest.exists(),'report output exists; no overwrite')
     if run['mode']!='fake':
-        from werewolf.tom_llm.deployment import BASE
-        require(dest.is_relative_to(BASE),'live report must remain inside independent b2 root')
+        from werewolf.tom_llm.deployment import baseline_root
+        baseline_root(dest)
     dest.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.report-cache-',dir=dest.parent) as temp:
         previous=os.environ.get('MPLCONFIGDIR');os.environ['MPLCONFIGDIR']=temp

@@ -10,7 +10,7 @@ from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.experiment import VERSION, open_run, source_v3, safe_path
 from werewolf.tom_llm.model_spec import ROOT, ModelSpec, template_bytes, load_cpu_tokenizer
 from werewolf.tom_llm.physical_admission import ADMISSION_VERSION
-from werewolf.tom_llm.deployment import (BASE, open_deployment, profile, validate_process_environment,
+from werewolf.tom_llm.deployment import (baseline_root, open_deployment, profile, validate_process_environment,
     gpu_snapshot, driver_version, vllm_config_bytes, CACHE_VARIABLES)
 from werewolf.tom_llm.qualification_inputs import open_budget
 
@@ -85,7 +85,7 @@ def publish_permit(root, key, *, qualification, expected_qualification, tokenize
     require(sys.platform=='linux','physical execution permits require Ubuntu; CPU tests cannot grant them')
     a,run,tasks=open_run(root)
     require(run['mode'] in ('formal','technical') and run['source']['source_inventory_clean'],'committed live Source required')
-    require(safe_path(root).is_relative_to(BASE),'live outputs must remain inside independent b2 root')
+    baseline_root(safe_path(root))
     spec=ModelSpec(key);require(key in run['models'],'unplanned model')
     qualified=qualified_offline(qualification,expected_qualification,spec)
     budget=open_budget(budget_root,spec,qualified['upstream_receipts']['budget'])
@@ -123,7 +123,8 @@ def open_permit(root, key, expected, *, physical=True):
     require((p.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
             and (p.path/'vllm.yaml').read_bytes()==vllm_config_bytes(r['profile']['argv_options']), 'live template/config drift')
     if physical:
-        require(sys.platform=='linux' and run['source']['source_inventory_clean'] and safe_path(root).is_relative_to(BASE), 'live physical platform/source/path gate')
+        require(sys.platform=='linux' and run['source']['source_inventory_clean'], 'live physical platform/source/path gate')
+        baseline_root(safe_path(root))
         q=qualified_offline(r['qualification_root'],r['qualification_digest'],spec)
         from werewolf.tom_llm.deployment import qualification_compatibility
         compatibility=qualification_compatibility(q['source'])

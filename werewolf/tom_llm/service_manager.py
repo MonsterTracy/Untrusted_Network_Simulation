@@ -113,10 +113,10 @@ class Service:
         require(execute and sys.platform=='linux','explicit --execute-live on Ubuntu required')
         require(hasattr(os,'pidfd_open') and hasattr(signal,'pidfd_send_signal'),
                 'Linux pidfd support required before service launch')
-        from werewolf.tom_llm.deployment import BASE,CACHE_VARIABLES,require_idle_gpu,validate_cache_paths
+        from werewolf.tom_llm.deployment import BASE,baseline_root,CACHE_VARIABLES,require_idle_gpu,validate_cache_paths
         require(not self.pending_launch.exists(), 'incomplete launch ownership; no restart; inspect '+str(self.pending_launch))
         a,record,cmd=self.binding(physical=True);p=record['profile']
-        require(safe_path(p['root']).is_relative_to(BASE),'service outside independent baseline root')
+        baseline_root(safe_path(p['root']))
         require(self.status()['state']!='running','owned service already running')
         ensure_durable_directory(self.directory)
         with safe_path(BASE/'baseline-gpu.lock').open('a+b') as lock:
