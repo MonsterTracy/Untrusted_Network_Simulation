@@ -134,7 +134,8 @@ def profile(spec, *, gpu_uuid, candidate_root, model_directory=None, environment
         'TORCH_HOME':'torch','TRITON_CACHE_DIR':'triton','VLLM_CACHE_ROOT':'vllm','NUMBA_CACHE_DIR':'numba',
         'FLASHINFER_WORKSPACE_BASE':'flashinfer','TVM_FFI_CACHE_DIR':'tvm-ffi',
         'CUDA_CACHE_PATH':'cuda','TORCH_EXTENSIONS_DIR':'torch-extensions'}.items()}
-    variables.update({'TMPDIR':str(root/'tmp'),'PYTHONPATH':str(root/'source/Untrusted_Network_Simulation'),
+    variables.update({'VLLM_RPC_BASE_PATH':str(base/'multimodel'/spec.key),
+        'TMPDIR':str(root/'tmp'),'PYTHONPATH':str(root/'source/Untrusted_Network_Simulation'),
         'PATH':str(env/'bin')+':/usr/bin:/bin','CUDA_VISIBLE_DEVICES':'0','PYTHONNOUSERSITE':'1','PYTHONDONTWRITEBYTECODE':'1','HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1',
         'VLLM_NO_USAGE_STATS':'1','DO_NOT_TRACK':'1','CUDA_HOME':str(env/'lib/python3.12/site-packages/nvidia/cu13')})
     args = {'model':str(model),'tokenizer':str(model),'revision':row['revision'],
@@ -143,11 +144,13 @@ def profile(spec, *, gpu_uuid, candidate_root, model_directory=None, environment
         'max-model-len':8192,'max-num-seqs':1,'gpu-memory-utilization':.9,'seed':20261014,
         'enable-prefix-caching':False,'trust-request-chat-template':False,'chat-template-content-format':'string',
         'chat-template':str(root/'deployment/chat_template.jinja'),'structured-outputs-config':{'backend':'xgrammar'}}
-    return {'schema_version':VERSION+'_profile','key':spec.key,'model_spec_digest':spec.digest,'root':str(root),
+    p = {'schema_version':VERSION+'_profile','key':spec.key,'model_spec_digest':spec.digest,'root':str(root),
         'environment_prefix':str(env),'environment_requirements':variables,'argv_options':args,
         'gpu':{'uuid':gpu_uuid,'name':'NVIDIA GeForce RTX 3090','memory_total_mib':24576},
         'engine_log_root':str(root/'qualification/engine'),'frontend':recipe()['frontend'],
         'recipe_sha256':RECIPE_SHA,'sdk_retries':0,'http_retries':0,'proxy':False,'qualification_only':True}
+    validate_cache_paths(p)
+    return p
 
 
 
@@ -165,6 +168,17 @@ def validate_cache_paths(p,*,require_existing=False):
                 'cache path escaped model root or uses symlink: '+key)
         if require_existing:
             require(path.is_dir() and os.access(path,os.W_OK|os.X_OK),'scoped writable cache/TMPDIR missing: '+key)
+    # RPC sockets are transient IPC, not caches: only the existing model parent
+    # is allowed outside the candidate. vLLM 0.27.0 appends '/' + UUID (36 bytes).
+    # https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/utils/network_utils.py
+    if 'VLLM_RPC_BASE_PATH' in p['environment_requirements']:
+        path=Path(p['environment_requirements']['VLLM_RPC_BASE_PATH'])
+        require(path==baseline_root(path)/'multimodel'/p['key'],'RPC path must be the isolated model parent')
+        require(len(os.fsencode(path))+1+36<=107,'RPC socket path exceeds Linux 107-byte limit')
+        require(not any((q/'manifest.json').exists() for q in (path,*path.parents)),
+                'RPC path is inside a sealed Artifact')
+        if require_existing:
+            require(path.is_dir() and os.access(path,os.W_OK|os.X_OK),'existing writable RPC model parent required')
 
 
 def validate_process_environment(p,environment):
@@ -224,8 +238,13 @@ def open_deployment(root,expected_digest,*,physical_recheck=False,current_source
             and r['purpose']=='synthetic_gpu_qualification_only' and r['physical_gpu_admission'] is False,
             'deployment execution identity/domain drift')
     p=r['profile']
-    require(p==profile(spec,gpu_uuid=p['gpu']['uuid'],candidate_root=p['root'],model_directory=p['argv_options']['model'],
-                      environment_prefix=p['environment_prefix']) and (a.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
+    expected_profile=profile(spec,gpu_uuid=p['gpu']['uuid'],candidate_root=p['root'],model_directory=p['argv_options']['model'],
+                             environment_prefix=p['environment_prefix'])
+    # Preserve exact pre-RPC evidence for offline inspection only. New/current
+    # execution and physical rechecks must carry the new declared IPC binding.
+    if not current_source and not physical_recheck and 'VLLM_RPC_BASE_PATH' not in p['environment_requirements']:
+        expected_profile['environment_requirements'].pop('VLLM_RPC_BASE_PATH')
+    require(p==expected_profile and (a.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
             and (a.path/'vllm.yaml').read_bytes()==vllm_config_bytes(p['argv_options']), 'deployment template/config drift')
     from werewolf.tom_llm.qualification_inputs import validate_suite
     validate_suite(r['suite'],spec)

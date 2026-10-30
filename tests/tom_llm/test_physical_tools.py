@@ -24,6 +24,129 @@ from werewolf.tom_llm.provider_semantics import NotExecuted,OutcomeUnknown
 KEYS=['qwen3','yi','mistral']
 
 
+@pytest.fixture
+def short_root():
+    # Socket path limits apply to the resolved OS path, including pytest's prefix.
+    import tempfile
+    with tempfile.TemporaryDirectory(dir=Path('/tmp').resolve()) as name:
+        yield Path(name)
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_rpc_base_uses_existing_model_parent_without_changing_tmp_or_caches(key):
+    from uuid import UUID
+    spec=ModelSpec(key)
+    root=dep.EXPERIMENT_BASE/'multimodel'/key/('TomBaseline-Qwen3-8B' if key=='qwen3' else 'UNIT_MODEL_CANDIDATE')
+    p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=root,
+        model_directory=dep.BASE/'models'/key,environment_prefix=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline')
+    env=p['environment_requirements'];rpc=Path(env['VLLM_RPC_BASE_PATH'])
+    assert rpc==dep.EXPERIMENT_BASE/'multimodel'/key
+    assert len(os.fsencode(rpc/str(UUID(int=0))))<=107
+    assert env['TMPDIR']==str(root/'tmp')
+    assert 'VLLM_RPC_BASE_PATH' not in dep.CACHE_VARIABLES
+    for name in dep.CACHE_VARIABLES:assert Path(env[name]).is_relative_to(root)
+    dep.validate_process_environment(p,dict(env))
+    for value in (None,str(dep.EXPERIMENT_BASE/'multimodel'/('yi' if key!='yi' else 'qwen3'))):
+        changed=dict(env)
+        if value is None:changed.pop('VLLM_RPC_BASE_PATH')
+        else:changed['VLLM_RPC_BASE_PATH']=value
+        with pytest.raises(ValueError):dep.validate_process_environment(p,changed)
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_rpc_parent_stays_short_for_long_candidates_and_formal_run_paths(key):
+    from werewolf.tom_llm.live_admission import service_profile
+    spec=ModelSpec(key);parent=dep.EXPERIMENT_BASE/'multimodel'/key
+    profiles=[dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=parent/name,
+        model_directory=dep.BASE/'models'/key,environment_prefix=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline')
+        for name in ('UNIT_CANDIDATE','UNIT_'+'long_'*35)]
+    assert {p['environment_requirements']['VLLM_RPC_BASE_PATH'] for p in profiles}=={str(parent)}
+    live=service_profile(dep.EXPERIMENT_BASE/'experiments'/('UNIT_'+'long_'*35),spec,{'profile':profiles[0]})
+    assert live['environment_requirements']['VLLM_RPC_BASE_PATH']==str(parent)
+    dep.validate_cache_paths(live)
+    for p in [*profiles,live]:
+        assert len(os.fsencode(Path(p['environment_requirements']['VLLM_RPC_BASE_PATH'])/('0'*36)))<=107
+        for name in dep.CACHE_VARIABLES:assert Path(p['environment_requirements'][name]).is_relative_to(p['root'])
+
+
+def test_rpc_path_limit_counts_filesystem_bytes_and_rejects_overflow(short_root,monkeypatch):
+    def make(base):
+        monkeypatch.setattr(dep,'EXPERIMENT_BASE',base)
+        return dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel/qwen3/UNIT',
+            model_directory=dep.BASE/'models/qwen3',environment_prefix=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline')
+    n=107-len(os.fsencode(short_root/'multimodel/qwen3'))-1-1-36
+    assert n>0
+    p=make(short_root/('x'*n))
+    assert len(os.fsencode(p['environment_requirements']['VLLM_RPC_BASE_PATH']))+1+36==107
+    for suffix in ('x'*(n+1),'界'*n):
+        with pytest.raises(ValueError,match='107-byte'):make(short_root/suffix)
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_rpc_parent_safety_and_writability_keep_cache_isolation(short_root,monkeypatch,key):
+    from werewolf.tom_llm.live_admission import service_profile
+    base=short_root/'base';monkeypatch.setattr(dep,'BASE',base)
+    spec=ModelSpec(key);p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
+    live=service_profile(base/'experiments/UNIT',spec,{'profile':p})
+    for var in dep.CACHE_VARIABLES:Path(live['environment_requirements'][var]).mkdir(parents=True,exist_ok=True)
+    rpc=Path(live['environment_requirements']['VLLM_RPC_BASE_PATH'])
+    assert not rpc.exists()
+    with pytest.raises(ValueError,match='existing writable RPC'):dep.validate_cache_paths(live,require_existing=True)
+    rpc.mkdir(parents=True)
+    dep.validate_cache_paths(live,require_existing=True)
+    for invalid in (base/'multimodel'/('yi' if key!='yi' else 'qwen3'),rpc/'nested',rpc/'..',short_root/'outside'):
+        changed=deepcopy(live);changed['environment_requirements']['VLLM_RPC_BASE_PATH']=str(invalid)
+        with pytest.raises(ValueError):dep.validate_cache_paths(changed)
+    changed=deepcopy(live);changed['environment_requirements']['TMPDIR']=str(rpc)
+    with pytest.raises(ValueError,match='cache path escaped'):dep.validate_cache_paths(changed)
+    access=dep.os.access
+    monkeypatch.setattr(dep.os,'access',lambda path,mode:False if Path(path)==rpc else access(path,mode))
+    with pytest.raises(ValueError,match='existing writable RPC'):dep.validate_cache_paths(live,require_existing=True)
+    monkeypatch.setattr(dep.os,'access',access)
+    marker=rpc/'manifest.json';marker.write_bytes(b'UNIT_SEALED')
+    with pytest.raises(ValueError,match='sealed Artifact'):dep.validate_cache_paths(live)
+    marker.unlink()
+    rpc.rmdir();rpc.symlink_to(base/'experiments',target_is_directory=True)
+    with pytest.raises(ValueError,match='symlink'):dep.validate_cache_paths(live)
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_rpc_model_parent_accepts_native_unix_socket_bind(short_root,monkeypatch,key):
+    """Real Mac/host AF_UNIX only, not a Linux/vLLM qualification."""
+    import socket
+    from uuid import uuid4
+    base=short_root/'base';monkeypatch.setattr(dep,'BASE',base)
+    p=dep.profile(ModelSpec(key),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
+    rpc=Path(p['environment_requirements']['VLLM_RPC_BASE_PATH']);rpc.mkdir(parents=True)
+    address=str(rpc/str(uuid4()))
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as listener:
+        listener.settimeout(2);listener.bind(address);listener.listen(1)
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+            client.settimeout(2);client.connect(address)
+            connection,_=listener.accept()
+            with connection:
+                connection.settimeout(2);client.sendall(b'UNIT');assert connection.recv(4)==b'UNIT'
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_pre_rpc_deployment_remains_offline_only_and_unchanged(short_root,monkeypatch,key):
+    base=short_root/'base';monkeypatch.setattr(dep,'BASE',base)
+    spec=ModelSpec(key);p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
+    p['environment_requirements'].pop('VLLM_RPC_BASE_PATH')
+    record={'schema_version':dep.VERSION,'key':key,'model_spec':spec.record(),'source':dep.source_identity(),
+        'profile':p,'model':{'UNIT_ONLY':True},'environment':{'UNIT_ONLY':True},'suite':{'UNIT_ONLY':True},
+        'budget':{},'upstream_receipts':{},'purpose':'synthetic_gpu_qualification_only','physical_gpu_admission':False}
+    a=candidate_artifact(short_root,record)
+    before={f:f.read_bytes() for f in a.path.iterdir()}
+    monkeypatch.setattr(qi,'validate_suite',lambda suite,spec:suite)
+    monkeypatch.setattr(dep,'verify_cpu_binding',lambda *a:pytest.fail('offline read touched physical assets'))
+    assert dep.open_deployment(a.path,a.manifest_digest,current_source=False)[1]==record
+    with pytest.raises(ValueError,match='deployment template/config drift'):dep.open_deployment(a.path,a.manifest_digest)
+    with pytest.raises(ValueError,match='deployment template/config drift'):
+        dep.open_deployment(a.path,a.manifest_digest,current_source=False,physical_recheck=True)
+    assert all(f.read_bytes()==raw for f,raw in before.items())
+
+
 @pytest.fixture(scope='module')
 def native_suites():
     variables={'qwen3':'UNS_LLM_TOKENIZER_ASSETS','yi':'UNS_LLM_YI_ASSETS','mistral':'UNS_LLM_MISTRAL_ASSETS'}
@@ -197,9 +320,10 @@ def test_profiles_are_disjoint_and_cache_scoped():
 
 
 @pytest.mark.parametrize('key',KEYS)
-def test_cross_root_deployments_preserve_original_assets_and_offline_source_identity(tmp_path,monkeypatch,key):
+def test_cross_root_deployments_preserve_original_assets_and_offline_source_identity(short_root,monkeypatch,key):
     """Real artifact/byte checks over tiny unit assets; no native/GPU evidence."""
     from werewolf.tom_llm import live_admission as live
+    tmp_path=short_root
     old=tmp_path/'historical';new=tmp_path/'TomBaseline-data'
     monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
     spec=ModelSpec(key);model=old/'models'/key;model.mkdir(parents=True)
@@ -528,13 +652,15 @@ def test_cohort_export_builds_public_tasks_before_opening_reference(tmp_path,mon
     assert calls==['selection','public','reference']
 
 
-def test_cache_and_engine_log_symlinks_cannot_escape_model_directory(tmp_path):
+def test_cache_and_engine_log_symlinks_cannot_escape_model_directory(short_root,monkeypatch):
+    tmp_path=short_root;monkeypatch.setattr(dep,'BASE',tmp_path/'base')
     profile=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/qwen3/unit-candidate')
     profile['root']=str(tmp_path/'model')
     for name in dep.CACHE_VARIABLES:profile['environment_requirements'][name]=str(tmp_path/'model/cache'/name)
     dep.validate_cache_paths(profile)
     with pytest.raises(ValueError,match='missing'):dep.validate_cache_paths(profile,require_existing=True)
     for name in dep.CACHE_VARIABLES:Path(profile['environment_requirements'][name]).mkdir(parents=True,exist_ok=True)
+    Path(profile['environment_requirements']['VLLM_RPC_BASE_PATH']).mkdir(parents=True)
     dep.validate_cache_paths(profile,require_existing=True)
     for name in dep.CACHE_VARIABLES:Path(profile['environment_requirements'][name]).rmdir()
     (tmp_path/'model/cache').rmdir();(tmp_path/'model').rmdir()
@@ -602,7 +728,8 @@ def test_native_vllm_yaml_config_keeps_effective_parameters(tmp_path,vllm027_par
     with pytest.raises(ValueError):validate_launch_args(parser.parse_args(['--config',str(config),'--enable-prefix-caching']),p)
 
 
-def test_deployment_uses_new_output_root_and_keeps_old_assets(tmp_path,native_suites,monkeypatch):
+def test_deployment_uses_new_output_root_and_keeps_old_assets(short_root,native_suites,monkeypatch):
+    tmp_path=short_root
     base=tmp_path/'baseline';monkeypatch.setattr(dep,'BASE',base)
     spec=ModelSpec('qwen3');old=base/'multimodel/qwen3/candidate-v1'
     sealed=old/'deployment/sealed-original';sealed.parent.mkdir(parents=True);sealed.write_bytes(b'UNCHANGED_OLD_CANDIDATE')
@@ -628,8 +755,9 @@ def test_deployment_uses_new_output_root_and_keeps_old_assets(tmp_path,native_su
     assert sealed.read_bytes()==b'UNCHANGED_OLD_CANDIDATE'
 
 
-def test_qualification_start_is_foreground_exec_with_bound_environment(tmp_path,monkeypatch):
+def test_qualification_start_is_foreground_exec_with_bound_environment(short_root,monkeypatch):
     from werewolf.tom_llm import gpu_probe
+    tmp_path=short_root
     base=tmp_path/'base';monkeypatch.setattr(dep,'BASE',base)
     p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel/qwen3/new-candidate')
     artifact=NS(path=Path(p['root'])/'deployment');seen={}

@@ -19,6 +19,7 @@ from werewolf.tom_llm.service_manager import Service
 from tests.tom_llm import test_physical_tools as fixtures
 
 native_suites=fixtures.native_suites
+short_root=fixtures.short_root
 
 
 def test_yaml_and_json_share_configuration_and_frozen_model_registry(tmp_path,capsys):
@@ -219,17 +220,20 @@ def test_old_v1_admission_reads_offline_after_source_update_and_stopped_service(
 
 
 @pytest.fixture(params=['historical','new'])
-def managed(tmp_path,monkeypatch,request):
+def managed(short_root,monkeypatch,request):
     from werewolf.tom_llm import service_manager as sm
+    tmp_path=short_root
     base=tmp_path/'historical';base.mkdir()
     new=tmp_path/'TomBaseline-data'
     monkeypatch.setattr(sm.sys,'platform','linux');monkeypatch.setattr(dep,'BASE',base)
     monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
     monkeypatch.setattr(dep,'require_idle_gpu',lambda p:None)
     service=(base if request.param=='historical' else new)/'service'
-    profile={'root':str(service),'argv_options':{'port':0},'gpu':{'uuid':'GPU-UNIT'},
+    rpc=(base if request.param=='historical' else new)/'multimodel/qwen3'
+    rpc.mkdir(parents=True,exist_ok=True)
+    profile={'key':'qwen3','root':str(service),'argv_options':{'port':0},'gpu':{'uuid':'GPU-UNIT'},
         'environment_prefix':str(tmp_path/'env'),
-        'environment_requirements':{k:str(service/k) for k in dep.CACHE_VARIABLES}}
+        'environment_requirements':{**{k:str(service/k) for k in dep.CACHE_VARIABLES},'VLLM_RPC_BASE_PATH':str(rpc)}}
     spec=Service(tmp_path/'run','qwen3','a'*64)
     cmd=[str(tmp_path/'env/bin/python'),'-m','werewolf.tom_llm.live_service','--execute-live']
     monkeypatch.setattr(spec,'binding',lambda **kw:(NS(manifest_digest='a'*64),{'profile':profile},cmd))
@@ -267,6 +271,41 @@ def test_explicit_start_stop_persistent_ownership_and_duplicate_refusal(managed)
     assert any(c[0]=='signal' for c in calls)
     # An exited launch can be inspected/stopped again without signalling.
     n=len(calls);manager.stop(execute=True);assert len(calls)==n
+
+
+def test_managed_launch_binds_short_rpc_parent_without_inheriting_override(managed,monkeypatch):
+    manager,child,identity,calls=managed
+    p=manager.binding()[1]['profile'];rpc=p['environment_requirements']['VLLM_RPC_BASE_PATH']
+    monkeypatch.setenv('VLLM_RPC_BASE_PATH','/UNIT/undeclared-parent')
+    manager.start(execute=True)
+    env=next(c[2]['env'] for c in calls if c[0]=='launch')
+    assert env['VLLM_RPC_BASE_PATH']==rpc
+    assert Path(rpc).is_dir() and not Path(rpc).is_relative_to(p['root'])
+    for var in dep.CACHE_VARIABLES:assert Path(env[var]).is_relative_to(p['root'])
+    assert manager.stop(execute=True)['state']=='exited'
+
+
+def test_managed_launch_refuses_unwritable_rpc_before_popen(managed,monkeypatch):
+    manager,child,identity,calls=managed
+    rpc=Path(manager.binding()[1]['profile']['environment_requirements']['VLLM_RPC_BASE_PATH'])
+    access=dep.os.access
+    monkeypatch.setattr(dep.os,'access',lambda path,mode:False if Path(path)==rpc else access(path,mode))
+    with pytest.raises(ValueError,match='existing writable RPC'):manager.start(execute=True)
+    assert not calls and manager.child is None and not manager.pending_launch.exists()
+
+
+def test_exited_launch_state_cannot_be_reused_for_another_deployment_anchor(managed,monkeypatch):
+    manager,child,identity,calls=managed
+    manager.start(execute=True);child.done=True
+    assert manager.status()['state']=='exited'
+    state=(manager.directory/'current.json').read_bytes()
+    _,record,command=manager.binding()
+    fresh=Service(manager.root,manager.key,'b'*64)
+    monkeypatch.setattr(fresh,'binding',lambda **kw:(NS(manifest_digest='b'*64),record,command))
+    with pytest.raises(ValueError,match='ownership drift'):fresh.status()
+    with pytest.raises(ValueError,match='ownership drift'):fresh.start(execute=True)
+    assert (manager.directory/'current.json').read_bytes()==state
+    assert sum(c[0]=='launch' for c in calls)==1 and not any(c[0]=='signal' for c in calls)
 
 
 @pytest.mark.parametrize('drift',['pid','group','uid','cwd','executable','argv','boot','state'])
@@ -387,8 +426,9 @@ def test_qualified_service_profile_preserves_effective_arguments_and_environment
 
 
 @pytest.mark.parametrize('reuse',[False,True])
-def test_prepare_model_reuses_existing_pipeline_and_refuses_old_candidate(tmp_path,monkeypatch,reuse):
+def test_prepare_model_reuses_existing_pipeline_and_refuses_old_candidate(short_root,monkeypatch,reuse):
     from werewolf.tom_llm import physical,qualification_inputs as qi,live_admission as live
+    tmp_path=short_root
     monkeypatch.setattr(dep,'BASE',tmp_path)
     root=tmp_path/'multimodel/yi/new';calls=[]
     def artifact(path):return NS(path=Path(path),manifest_digest='a'*64)
@@ -746,9 +786,11 @@ def test_new_candidate_profiles_keep_historical_asset_and_model_protocol_contrac
     new=dep.profile(spec,gpu_uuid='GPU-UNIT',candidate_root=root,model_directory=model,environment_prefix=shared)
     assert dep.baseline_root(root)==dep.EXPERIMENT_BASE
     assert new['argv_options']=={**old['argv_options'],'chat-template':str(root/'deployment/chat_template.jinja')}
-    ignored=set(dep.CACHE_VARIABLES)|{'PYTHONPATH'}
+    ignored=set(dep.CACHE_VARIABLES)|{'PYTHONPATH','VLLM_RPC_BASE_PATH'}
     assert {k:v for k,v in new['environment_requirements'].items() if k not in ignored}=={
         k:v for k,v in old['environment_requirements'].items() if k not in ignored}
+    assert old['environment_requirements']['VLLM_RPC_BASE_PATH']==str(dep.BASE/'multimodel'/key)
+    assert new['environment_requirements']['VLLM_RPC_BASE_PATH']==str(dep.EXPERIMENT_BASE/'multimodel'/key)
     for k in dep.CACHE_VARIABLES:assert Path(new['environment_requirements'][k]).is_relative_to(root)
     assert new['model_spec_digest']==old['model_spec_digest']==spec.digest
     # Only the output contract changed, never the allowed physical asset roots.
