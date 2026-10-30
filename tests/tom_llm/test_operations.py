@@ -1,6 +1,7 @@
 """CPU-only operation/lifecycle contracts; no physical Admission is granted."""
 
 from copy import deepcopy
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -243,10 +244,15 @@ def managed(tmp_path,monkeypatch,request):
         calls.append(('launch',args,kw));assert kw['pass_fds'];return child
     monkeypatch.setattr(sm.subprocess,'Popen',launch)
     monkeypatch.setattr(spec,'capture',lambda:{'pid':child.pid})
-    monkeypatch.setattr(sm.os,'pidfd_open',lambda pid:calls.append(('pidfd',pid)) or 7654,raising=False)
-    monkeypatch.setattr(sm.signal,'pidfd_send_signal',lambda fd,sig:setattr(child,'done',True) or calls.append(('signal',fd,sig)),raising=False)
-    realclose=os.close
-    monkeypatch.setattr(sm.os,'close',lambda fd:None if fd==7654 else realclose(fd))
+    @contextmanager
+    def pidfd(pid):
+        if pid!=os.getpid():calls.append(('pidfd',pid))
+        def send(sig):
+            if sig:setattr(child,'done',True);calls.append(('signal',7654,sig))
+        try:yield send
+        finally:
+            if pid!=os.getpid():calls.append(('close',7654))
+    monkeypatch.setattr(sm,'_pidfd',pidfd)
     return spec,child,identity,calls
 
 
@@ -263,11 +269,16 @@ def test_explicit_start_stop_persistent_ownership_and_duplicate_refusal(managed)
     n=len(calls);manager.stop(execute=True);assert len(calls)==n
 
 
-@pytest.mark.parametrize('drift',['pid','group','state'])
+@pytest.mark.parametrize('drift',['pid','group','uid','cwd','executable','argv','boot','state'])
 def test_stop_never_signals_changed_identity_or_tampered_state(managed,drift):
     manager,child,identity,calls=managed;manager.start(execute=True)
     if drift=='pid':identity['start_ticks']='reused'
     elif drift=='group':identity['pgid']+=1
+    elif drift=='uid':identity['uid']+=1
+    elif drift=='cwd':identity['cwd']+='-changed'
+    elif drift=='executable':identity['executable']+='-changed'
+    elif drift=='argv':identity['argv']=[*identity['argv'],'--changed']
+    elif drift=='boot':identity['boot_id']='changed'
     else:
         path=manager.directory/'current.json';r=json.loads(path.read_text());r['anchor']='x'*64;path.write_text(json.dumps(r))
     with pytest.raises(ValueError):manager.stop(execute=True)
@@ -655,23 +666,40 @@ def test_pending_marker_appearing_during_state_read_also_refuses_stop(managed,mo
 def test_pidfd_race_and_stop_timeout_never_signal_another_pid_or_force_kill(managed,monkeypatch):
     manager,child,identity,calls=managed;manager.start(execute=True)
     from werewolf.tom_llm import service_manager as sm
-    def raced(pid):identity['start_ticks']='reused';return 7654
-    monkeypatch.setattr(sm.os,'pidfd_open',raced)
+    original=sm._pidfd
+    @contextmanager
+    def raced(pid):
+        with original(pid) as send:
+            identity['start_ticks']='reused'
+            yield send
+    monkeypatch.setattr(sm,'_pidfd',raced)
     with pytest.raises(ValueError,match='PID identity changed'):manager.stop(execute=True)
-    assert not any(c[0]=='signal' for c in calls)
+    assert not any(c[0]=='signal' for c in calls) and calls[-1]==('close',7654)
     identity['start_ticks']='1'
-    monkeypatch.setattr(sm.os,'pidfd_open',lambda pid:7654)
-    monkeypatch.setattr(sm.signal,'pidfd_send_signal',lambda fd,sig:calls.append(('signal',fd,sig)))
+    @contextmanager
+    def unresponsive(pid):
+        with original(pid):yield lambda sig:calls.append(('signal',7654,sig))
+    monkeypatch.setattr(sm,'_pidfd',unresponsive)
     with pytest.raises(ValueError,match='no force kill'):manager.stop(execute=True,timeout=0)
     assert [(c[0],c[2]) for c in calls if c[0]=='signal']==[('signal',sm.signal.SIGTERM)]
 
 
-def test_missing_pidfd_refuses_before_launch_or_gpu_checks(managed,monkeypatch):
+def test_missing_python_pidfd_bindings_use_kernel_probe_before_launch(managed,monkeypatch):
     manager,child,identity,calls=managed
     from werewolf.tom_llm import service_manager as sm
-    monkeypatch.delattr(sm.os,'pidfd_open')
-    with pytest.raises(ValueError,match='pidfd support required'):manager.start(execute=True)
-    assert not calls and not manager.directory.exists()
+    monkeypatch.delattr(sm.os,'pidfd_open',raising=False)
+    monkeypatch.delattr(sm.signal,'pidfd_send_signal',raising=False)
+    probe=[]
+    @contextmanager
+    def pidfd(pid):
+        probe.append(('open',pid))
+        try:yield lambda sig:probe.append(('send',sig))
+        finally:probe.append(('close',pid))
+    monkeypatch.setattr(sm,'_pidfd',pidfd,raising=False)
+    monkeypatch.setattr(dep,'require_idle_gpu',lambda p:(_ for _ in ()).throw(ValueError('UNIT reached GPU gate')))
+    with pytest.raises(ValueError,match='UNIT reached GPU gate'):manager.start(execute=True)
+    assert probe==[('open',os.getpid()),('send',0),('close',os.getpid())]
+    assert not calls and not manager.pending_launch.exists()
 
 
 def test_gpu_lock_fd_survives_controller_close_until_cpu_child_exits(managed,monkeypatch,tmp_path):
@@ -817,3 +845,134 @@ def test_direct_baseline_cli_defaults_to_new_experiment_root(monkeypatch):
     baseline_cli.main(['--action','analyze','--run-id','unit-run'])
     root=dep.EXPERIMENT_BASE/'experiments/unit-run'
     assert observed==[root,(root,root/'analysis')]
+
+
+@pytest.fixture
+def pidfd_libc(monkeypatch):
+    """Inject only libc/syscall and platform; exercise the real pidfd adapter on Mac."""
+    import ctypes
+    from werewolf.tom_llm import service_manager as sm
+    observed=NS(calls=[],closed=[],loads=[],errors={},fd=7654)
+    def syscall(number,*args):
+        observed.calls.append((number,*args))
+        if number.value in observed.errors:
+            ctypes.set_errno(observed.errors[number.value]);return -1
+        assert number.value in (434,424)
+        return observed.fd if number.value==434 else 0
+    def load(name,*,use_errno):
+        observed.loads.append((name,use_errno));return NS(syscall=syscall)
+    monkeypatch.setattr(sm,'sys',NS(platform='linux'))
+    monkeypatch.setattr(sm.os,'uname',lambda:NS(machine='x86_64'))
+    monkeypatch.setattr(sm.ctypes,'CDLL',load)
+    close=os.close
+    def release(fd):
+        if fd==observed.fd:observed.closed.append(fd)
+        else:close(fd)
+    monkeypatch.setattr(sm.os,'close',release)
+    observed.syscall=syscall
+    return observed
+
+
+@pytest.mark.parametrize('fd',[0,7654])
+def test_pidfd_syscall_abi_flags_and_descriptor_release(pidfd_libc,monkeypatch,fd):
+    import ctypes
+    from werewolf.tom_llm import service_manager as sm
+    monkeypatch.delattr(sm.os,'pidfd_open',raising=False)
+    monkeypatch.delattr(sm.signal,'pidfd_send_signal',raising=False)
+    pidfd_libc.fd=fd
+    with sm._pidfd(123) as send:
+        send(0);send(sm.signal.SIGTERM)
+    assert pidfd_libc.loads==[(None,True)]
+    assert pidfd_libc.syscall.restype is ctypes.c_long
+    assert pidfd_libc.syscall.argtypes==(ctypes.c_long,)
+    calls=pidfd_libc.calls
+    assert [[a.value for a in call] for call in calls]==[
+        [434,123,0],[424,fd,0,None,0],[424,fd,int(sm.signal.SIGTERM),None,0]]
+    assert [type(a) for a in calls[0]]==[ctypes.c_long,ctypes.c_int,ctypes.c_uint]
+    assert [type(a) for a in calls[1]]==[ctypes.c_long,ctypes.c_int,ctypes.c_int,ctypes.c_void_p,ctypes.c_uint]
+    assert pidfd_libc.closed==[fd]
+
+
+@pytest.mark.parametrize('operation',[434,424])
+@pytest.mark.parametrize('error_name',['ENOSYS','EPERM','ESRCH','EINVAL','EBADF','EMFILE'])
+def test_pidfd_syscall_errors_propagate_errno_without_retry(pidfd_libc,operation,error_name):
+    import errno
+    from werewolf.tom_llm import service_manager as sm
+    code=getattr(errno,error_name);pidfd_libc.errors[operation]=code
+    with pytest.raises(OSError) as error:
+        with sm._pidfd(123) as send:send(sm.signal.SIGTERM)
+    assert error.value.errno==code and str(operation) in str(error.value)
+    assert [call[0].value for call in pidfd_libc.calls]==([434] if operation==434 else [434,424])
+    assert pidfd_libc.closed==([] if operation==434 else [pidfd_libc.fd])
+
+
+@pytest.mark.parametrize('failure',['body','interrupt'])
+def test_pidfd_descriptor_closes_on_body_error_or_interrupt(pidfd_libc,failure):
+    from werewolf.tom_llm import service_manager as sm
+    kind=ValueError if failure=='body' else KeyboardInterrupt
+    with pytest.raises(kind):
+        with sm._pidfd(123):raise kind()
+    assert pidfd_libc.closed==[pidfd_libc.fd]
+    assert [call[0].value for call in pidfd_libc.calls]==[434]
+
+
+@pytest.mark.parametrize('platform,machine,small_type',[
+    ('darwin','x86_64',None),('linux','aarch64',None),('linux','i686',None),
+    ('linux','x86_64','c_void_p'),('linux','x86_64','c_long')])
+def test_pidfd_rejects_unreviewed_platform_or_abi_before_libc(pidfd_libc,monkeypatch,platform,machine,small_type):
+    from werewolf.tom_llm import service_manager as sm
+    sm.sys.platform=platform
+    monkeypatch.setattr(sm.os,'uname',lambda:NS(machine=machine))
+    if small_type:
+        size=sm.ctypes.sizeof;small=getattr(sm.ctypes,small_type)
+        monkeypatch.setattr(sm.ctypes,'sizeof',lambda t:4 if t is small else size(t))
+    with pytest.raises(ValueError,match='Linux x86-64 LP64'):
+        with sm._pidfd(123):pytest.fail('unsupported ABI reached body')
+    assert not pidfd_libc.loads and not pidfd_libc.calls and not pidfd_libc.closed
+
+
+@pytest.mark.parametrize('pid',[0,-1,2**31,True])
+def test_pidfd_rejects_invalid_pid_without_c_integer_wrap(pidfd_libc,pid):
+    from werewolf.tom_llm import service_manager as sm
+    with pytest.raises(ValueError,match='pid_t'):
+        with sm._pidfd(pid):pytest.fail('invalid pid reached body')
+    assert not pidfd_libc.calls
+
+
+@pytest.mark.parametrize('operation',[434,424])
+def test_kernel_pidfd_probe_failure_refuses_before_binding_or_launch(tmp_path,monkeypatch,pidfd_libc,operation):
+    import errno
+    from werewolf.tom_llm import service_manager as sm
+    manager=Service(tmp_path/'run','qwen3','a'*64)
+    monkeypatch.setattr(manager,'binding',lambda **kw:pytest.fail('failed probe reached Deployment/GPU/launch state'))
+    monkeypatch.setattr(sm.subprocess,'Popen',lambda *a,**kw:pytest.fail('failed probe launched service'))
+    pidfd_libc.errors[operation]=errno.ENOSYS
+    with pytest.raises(OSError) as error:manager.start(execute=True)
+    assert error.value.errno==errno.ENOSYS
+    assert [[a.value for a in call] for call in pidfd_libc.calls]==(
+        [[434,os.getpid(),0]] if operation==434 else [[434,os.getpid(),0],[424,pidfd_libc.fd,0,None,0]])
+    assert pidfd_libc.closed==([] if operation==434 else [pidfd_libc.fd])
+    assert not (tmp_path/'run').exists()
+
+
+@pytest.mark.parametrize('operation',['open','send'])
+def test_stop_pidfd_failure_preserves_ownership_and_does_not_retry(managed,monkeypatch,operation):
+    import errno
+    from werewolf.tom_llm import service_manager as sm
+    manager,child,identity,calls=managed;manager.start(execute=True)
+    state=(manager.directory/'current.json').read_bytes();closed=[];attempts=[]
+    @contextmanager
+    def failing(pid):
+        attempts.append(('open',pid))
+        if operation=='open':raise OSError(errno.ESRCH,'UNIT target exited before pidfd_open')
+        def send(sig):
+            attempts.append(('send',sig));raise OSError(errno.EPERM,'UNIT kernel signal rejected')
+        try:yield send
+        finally:closed.append(7654)
+    monkeypatch.setattr(sm,'_pidfd',failing)
+    monkeypatch.setattr(sm.os,'kill',lambda *a:pytest.fail('ordinary PID signalling is forbidden'))
+    with pytest.raises(OSError):manager.stop(execute=True)
+    assert (manager.directory/'current.json').read_bytes()==state
+    assert attempts==([('open',child.pid)] if operation=='open' else [('open',child.pid),('send',sm.signal.SIGTERM)])
+    assert closed==([] if operation=='open' else [7654])
+    assert not any(c[0]=='signal' for c in calls) and child.done is False

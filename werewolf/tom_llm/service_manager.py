@@ -5,6 +5,7 @@ No model requests, reconnect, force kill, tmux or third-party process adoption.
 """
 
 from contextlib import contextmanager
+import ctypes
 import fcntl
 import datetime
 import os
@@ -21,6 +22,32 @@ from werewolf.artifact_io.canonical import _fsync_directory,ensure_durable_direc
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.experiment import safe_path
 from werewolf.tom_llm.model_spec import ROOT
+
+
+@contextmanager
+def _pidfd(pid):
+    """Linux x86-64 LP64 pidfd, independent of optional CPython bindings."""
+    require(sys.platform=='linux' and os.uname().machine=='x86_64'
+            and ctypes.sizeof(ctypes.c_void_p)==ctypes.sizeof(ctypes.c_long)==8,
+            'pidfd syscalls require Linux x86-64 LP64')
+    require(type(pid) is int and 0<pid<2**31,'positive pid_t required')
+    # Linux v6.14 arch/x86/entry/syscalls/syscall_64.tbl: 434=open, 424=send.
+    # https://man7.org/linux/man-pages/man2/pidfd_open.2.html
+    # https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html
+    syscall=ctypes.CDLL(None,use_errno=True).syscall
+    syscall.restype=ctypes.c_long
+    syscall.argtypes=(ctypes.c_long,)  # Variadic arguments carry explicit C types.
+    def call(number,*args):
+        result=syscall(ctypes.c_long(number),*args)
+        if result==-1:
+            error=ctypes.get_errno()
+            raise OSError(error,'pidfd syscall '+str(number)+': '+os.strerror(error))
+        return result
+    fd=call(434,ctypes.c_int(pid),ctypes.c_uint(0))  # Kernel sets close-on-exec.
+    try:
+        def send(sig):return call(424,ctypes.c_int(fd),ctypes.c_int(sig),ctypes.c_void_p(),ctypes.c_uint(0))
+        yield send
+    finally:os.close(fd)
 
 
 class Service:
@@ -111,8 +138,8 @@ class Service:
 
     def start(self, *, execute=False, timeout=900):
         require(execute and sys.platform=='linux','explicit --execute-live on Ubuntu required')
-        require(hasattr(os,'pidfd_open') and hasattr(signal,'pidfd_send_signal'),
-                'Linux pidfd support required before service launch')
+        # Probe both kernel operations before any launch state or GPU checks.
+        with _pidfd(os.getpid()) as send:send(0)
         from werewolf.tom_llm.deployment import BASE,baseline_root,CACHE_VARIABLES,require_idle_gpu,validate_cache_paths
         require(not self.pending_launch.exists(), 'incomplete launch ownership; no restart; inspect '+str(self.pending_launch))
         a,record,cmd=self.binding(physical=True);p=record['profile']
@@ -182,11 +209,9 @@ class Service:
         if current is None:return self.status()
         require(current==r['identity'] and current['pgid']==pid,'PID/group identity changed; no signal sent')
         # pidfd prevents signalling an unrelated process that reused this PID.
-        fd=os.pidfd_open(pid)
-        try:
+        with _pidfd(pid) as send:
             require(self.identity(pid)==r['identity'],'PID identity changed; no signal sent')
-            signal.pidfd_send_signal(fd,signal.SIGTERM)
-        finally:os.close(fd)
+            send(signal.SIGTERM)
         deadline=time.monotonic()+timeout
         while self.identity(pid)==r['identity']:
             require(time.monotonic()<deadline,'owned service did not exit; no force kill; inspect '+r['log'])
