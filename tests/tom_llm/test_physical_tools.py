@@ -32,6 +32,69 @@ def short_root():
         yield Path(name)
 
 
+@pytest.mark.parametrize('key,name',[
+    ('qwen3','Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218'),
+    ('yi','Yi-1.5-9B-Chat-16K'),
+    ('mistral','Mistral-7B-Instruct-v0.3'),
+])
+def test_shared_model_root_changes_only_weight_and_tokenizer_paths(key,name):
+    from werewolf.tom_llm.live_admission import service_profile
+    spec=ModelSpec(key);root=dep.EXPERIMENT_BASE/'multimodel'/key/'UNIT'
+    args={'gpu_uuid':'GPU-unit-only','candidate_root':root,
+        'environment_prefix':dep.ENV_BASE/'untrusted-network-simulation-tom-baseline'}
+    old=dep.profile(spec,model_directory=dep.BASE/'models'/name,**args)
+    model=Path('/data/yuxiao/models')/name
+    new=dep.profile(spec,model_directory=model,**args)
+    expected=deepcopy(old);expected['argv_options'].update(model=str(model),tokenizer=str(model))
+    assert new==expected
+    assert new['argv_options']['revision']==spec.record()['revision']
+    assert new['argv_options']['tokenizer-revision']==spec.record()['tokenizer_revision']
+    assert Path(new['environment_requirements']['VLLM_RPC_BASE_PATH'])==root.parent
+    live=service_profile(dep.EXPERIMENT_BASE/'experiments/UNIT',spec,{'profile':new})
+    assert live['argv_options']['model']==live['argv_options']['tokenizer']==str(model)
+    assert live['environment_requirements']['VLLM_RPC_BASE_PATH']==new['environment_requirements']['VLLM_RPC_BASE_PATH']
+    dep.validate_cache_paths(live)
+    with pytest.raises(ValueError,match='outside independent baseline roots'):
+        dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=model,model_directory=model)
+
+
+@pytest.mark.parametrize('model',[
+    '/data/yuxiao/models',
+    '/data/yuxiao/models/group/Qwen3-8B',
+    '/data/yuxiao/models/../models/Qwen3-8B',
+    '/data/yuxiao/models-extra/Qwen3-8B',
+    '/data/yuxiao/TomBaseline-data/models/Qwen3-8B',
+    '/data/yuxiao/envs/Qwen3-8B',
+    '/data/yuxiao/tom-llm-reasoner-b2',
+    '/data/yuxiao/tom-llm-reasoner-b2/models/../../outside',
+    '/tmp/Qwen3-8B',
+    'models/Qwen3-8B',
+])
+def test_model_roots_reject_bare_roots_nested_shared_paths_and_escapes(model):
+    with pytest.raises(ValueError,match='physical model path'):
+        dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',
+            candidate_root=dep.EXPERIMENT_BASE/'multimodel/qwen3/UNIT',model_directory=model)
+
+
+@pytest.mark.parametrize('location',['model','root','ancestor','historical'])
+def test_model_roots_reject_symlinks_even_to_allowed_storage(tmp_path,monkeypatch,location):
+    models=tmp_path/'storage/models';models.mkdir(parents=True)
+    target=models/'real';target.mkdir()
+    monkeypatch.setattr(dep,'MODEL_BASE',models)
+    old=tmp_path/'historical';old.mkdir();monkeypatch.setattr(dep,'BASE',old)
+    if location in ('model','historical'):
+        model=(models if location=='model' else old)/'alias';model.symlink_to(target,target_is_directory=True)
+    elif location=='root':
+        alias=tmp_path/'alias';alias.symlink_to(models,target_is_directory=True)
+        monkeypatch.setattr(dep,'MODEL_BASE',alias);model=alias/'real'
+    else:
+        alias=tmp_path/'alias';alias.symlink_to(models.parent,target_is_directory=True)
+        monkeypatch.setattr(dep,'MODEL_BASE',alias/'models');model=alias/'models/real'
+    with pytest.raises(ValueError,match='physical model path'):
+        dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',
+            candidate_root=dep.EXPERIMENT_BASE/'multimodel/qwen3/UNIT',model_directory=model)
+
+
 @pytest.mark.parametrize('key',KEYS)
 def test_rpc_base_uses_existing_model_parent_without_changing_tmp_or_caches(key):
     from uuid import UUID
@@ -320,13 +383,15 @@ def test_profiles_are_disjoint_and_cache_scoped():
 
 
 @pytest.mark.parametrize('key',KEYS)
-def test_cross_root_deployments_preserve_original_assets_and_offline_source_identity(short_root,monkeypatch,key):
+@pytest.mark.parametrize('model_store',['historical','shared'])
+def test_cross_root_deployments_preserve_original_assets_and_offline_source_identity(short_root,monkeypatch,key,model_store):
     """Real artifact/byte checks over tiny unit assets; no native/GPU evidence."""
     from werewolf.tom_llm import live_admission as live
     tmp_path=short_root
     old=tmp_path/'historical';new=tmp_path/'TomBaseline-data'
     monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
-    spec=ModelSpec(key);model=old/'models'/key;model.mkdir(parents=True)
+    models=tmp_path/'models';monkeypatch.setattr(dep,'MODEL_BASE',models)
+    spec=ModelSpec(key);model=(old/'models' if model_store=='historical' else models)/key;model.mkdir(parents=True)
     files={'config.json':b'{}','model-00001.safetensors':b'UNIT_NOT_REAL_WEIGHTS',
         'model.safetensors.index.json':canonical_json_bytes({'weight_map':{'unit':'model-00001.safetensors'}})}
     for name,raw in files.items():(model/name).write_bytes(raw)
@@ -361,6 +426,17 @@ def test_cross_root_deployments_preserve_original_assets_and_offline_source_iden
     assert record['environment']==environment and record['physical_gpu_admission'] is False
     assert record['upstream_receipts']['model']==assets.manifest_digest
     assert record['upstream_receipts']['environment']==receipt.manifest_digest
+    # A different absolute model path cannot borrow this physical receipt,
+    # even if its Profile is allowed and the original model bytes still pass.
+    switched=deepcopy(record)
+    other=models/(key+'-other');other.mkdir(parents=True)
+    switched['profile']['argv_options'].update(model=str(other),tokenizer=str(other))
+    assert digest(switched)!=digest(record)
+    with pytest.raises(ValueError,match='physical path mismatch'):dep.verify_cpu_binding(switched,spec)
+    switched['model']['directory']=str(other)
+    with pytest.raises(ValueError,match='physical model inventory'):dep.verify_cpu_binding(switched,spec)
+    with pytest.raises(ValueError,match='deployment artifact identity'):
+        dep.open_deployment(artifact.path,original.manifest_digest,current_source=False)
     _,historical=dep.open_deployment(original.path,original.manifest_digest,current_source=False)
     assert historical['source']==source and historical['profile']['root']==str(original.path.parent)
     with pytest.raises(ValueError,match='identity/domain'):dep.open_deployment(original.path,original.manifest_digest)
@@ -382,6 +458,12 @@ def test_cross_root_deployments_preserve_original_assets_and_offline_source_iden
     schema=qi.synthetic_tasks()[0]['response_schema'];params=sampling(spec,schema)
     validate_sampling(params,schema,spec)
     if key=='yi':assert params['eos_token_ids']==[2,7]
+    # A retired evidence copy keeps its original path claims and identity;
+    # moving the tiny unit Artifact does not authorize execution there.
+    archive=tmp_path/'retired-evidence';original.path.parent.rename(archive)
+    archived,historical_copy=dep.open_deployment(archive/'deployment',original.manifest_digest,current_source=False)
+    assert archived.manifest_digest==original.manifest_digest and historical_copy==historical
+    assert historical_copy['profile']['root']!=str(archive)
 
 
 @pytest.mark.parametrize('key',KEYS)

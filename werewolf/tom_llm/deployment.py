@@ -16,6 +16,7 @@ VERSION = 'classic7_multimodel_deployment_v1'
 BASE = Path('/data/yuxiao/tom-llm-reasoner-b2')
 EXPERIMENT_BASE = Path('/data/yuxiao/TomBaseline-data')
 ENV_BASE = Path('/data/yuxiao/envs')
+MODEL_BASE = Path('/data/yuxiao/models')
 RECIPE = ROOT/'configs/paper/tom-llm-qualification-recipe-v1.json'
 RECIPE_SHA = '8b664c3cceede49cc9083c64cb2a4207e8e5853352ddb51501bec20712a97aaa'
 
@@ -122,8 +123,12 @@ def profile(spec, *, gpu_uuid, candidate_root, model_directory=None, environment
             and root != base/'multimodel'/spec.key, 'isolated candidate root required')
     model = Path(model_directory) if model_directory else root/'model'
     env = Path(environment_prefix) if environment_prefix else root/'env'
-    require(model.is_absolute() and model.is_relative_to(BASE) and '..' not in model.parts,
-            'physical model path must remain inside independent base')
+    # Historical paths retain their identity; new shared weights use a direct
+    # model child. Neither a directory name nor a path alias proves its bytes.
+    require(model.is_absolute() and '..' not in model.parts
+            and ((model.is_relative_to(BASE) and model != BASE) or model.parent==MODEL_BASE)
+            and not any(p.is_symlink() for p in (model,*model.parents)),
+            'physical model path must use the historical base or a direct /data/yuxiao/models child without traversal/symlinks')
     # An explicit shared Conda prefix is a read-only physical asset. Caches and
     # every model's Deployment/round/Admission still belong to its candidate.
     require(env.is_absolute() and (env.is_relative_to(BASE) or env.parent==ENV_BASE)
