@@ -21,7 +21,10 @@ from werewolf.artifact_io import (
     sha256_bytes,
     verify_artifact,
 )
-from werewolf.artifact_io.canonical import ensure_durable_directory
+from werewolf.artifact_io.canonical import (
+    ensure_durable_directory,
+    require_sha256 as _sha256,
+)
 
 
 COLLECTION_PLAN_SCHEMA_VERSION = "classic7_collection_plan_v1"
@@ -171,16 +174,6 @@ class AttemptLedgerState:
 def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be non-empty text")
-    return value
-
-
-def _sha256(value: Any, field_name: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
     return value
 
 

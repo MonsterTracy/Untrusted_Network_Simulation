@@ -92,6 +92,17 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def require_sha256(value: Any, field_name: str) -> str:
+    """校验小写 SHA-256 文本，保留字符串子类及原输入对象。"""
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
+    return value
+
+
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant is forbidden: {value}")
 

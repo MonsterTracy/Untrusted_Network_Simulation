@@ -16,6 +16,13 @@ from werewolf.artifact_io import (
     verify_artifact,
     verify_tensor_state,
 )
+from werewolf.artifact_io.canonical import require_sha256
+from werewolf.canonical_collection import (
+    attempt_ledger,
+    failure_evidence,
+    pre,
+    trajectory_evidence,
+)
 
 
 ARTIFACT_TYPE = "artifact_fixture"
@@ -49,6 +56,78 @@ def _rewrite_manifest_with_current_digest(manifest_path: Path, manifest):
         canonical_json_bytes(manifest_without_digest)
     ).hexdigest()
     manifest_path.write_bytes(canonical_json_bytes(manifest))
+
+
+class _DigestText(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        *(character * 64 for character in "0123456789abcdef"),
+        "0123456789abcdef" * 4,
+        _DigestText("0123456789abcdef" * 4),
+    ],
+)
+def test_sha256_validation_returns_original_text_object(value):
+    assert require_sha256(value, "payload.digest") is value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        64,
+        1.0,
+        b"0" * 64,
+        bytearray(b"0" * 64),
+        memoryview(b"0" * 64),
+        [],
+        {},
+        object(),
+        "",
+        "0" * 63,
+        "0" * 65,
+        "  " + "0" * 64,
+        "0" * 64 + "\n",
+        _DigestText("A" * 64),
+    ],
+)
+def test_sha256_validation_rejects_invalid_types_and_lengths(value):
+    with pytest.raises(ValueError) as caught:
+        require_sha256(value, "payload.digest")
+    assert type(caught.value) is ValueError
+    assert str(caught.value) == "payload.digest must be a lowercase SHA-256 digest"
+
+
+@pytest.mark.parametrize("position", range(64))
+def test_sha256_validation_checks_every_character(position):
+    value = "0" * position + "g" + "0" * (63 - position)
+    with pytest.raises(ValueError, match="^digest must be a lowercase SHA-256 digest$"):
+        require_sha256(value, "digest")
+
+
+@pytest.mark.parametrize(
+    "character", [*"ABCDEF", " ", "\t", "\n", "\r", "\0", "-", "é", "０"]
+)
+def test_sha256_validation_rejects_non_lowercase_hex_characters(character):
+    with pytest.raises(ValueError, match="^摘要 must be a lowercase SHA-256 digest$"):
+        require_sha256("0" * 31 + character + "0" * 32, "摘要")
+
+
+@pytest.mark.parametrize(
+    "module", [pre, attempt_ledger, failure_evidence, trajectory_evidence]
+)
+def test_canonical_collection_keeps_legacy_sha256_names(module):
+    assert module._sha256 is require_sha256
+    value = _DigestText("a" * 64)
+    assert module._sha256(value, "source") is value
+    with pytest.raises(ValueError) as caught:
+        module._sha256("A" * 64, "source")
+    assert type(caught.value) is ValueError
+    assert str(caught.value) == "source must be a lowercase SHA-256 digest"
 
 
 def test_canonical_json_and_jsonl_are_byte_stable_without_string_rewriting():

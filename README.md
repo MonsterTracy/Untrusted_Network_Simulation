@@ -1,6 +1,6 @@
 # Classic7 observer-conditioned ToM
 
-Data Acquisition & Preprocessing: [technical lifecycle and operation](docs/research/data-acquisition-preprocessing.md) · [current branch registry](docs/BRANCHES.md).
+Data Acquisition & Preprocessing: [technical lifecycle and operation](docs/research/data-acquisition-preprocessing.md) · [historical branch registry](docs/BRANCHES.md).
 
 This repository owns canonical scientific game generation and the public-only
 Theory-of-Mind mainline for seven-player, multi-day text Werewolf:
@@ -8,7 +8,35 @@ two Werewolves, three Villagers, one Seer and one Witch, including Night0.
 
 `CONTEXT.md`, ADRs 0001–0022 and
 [the Phase-1 specification](docs/specs/phase-1-classic7-tom-mainline.md)
-are authoritative. This repository owns the current scientific mainline.
+remain authoritative for the Phase-1 scientific definitions and contracts.
+Later research modules use their explicitly approved protocols; a research draft
+or an implementation alone does not establish a formal method.
+
+## Development and documentation
+
+The sole recommended daily Mac development checkout is
+`/Users/name_yuxiao/Desktop/VscodeProjects/Untrusted_Network_Simulation`, on
+`twd/mainline`. Follow the local `AGENTS.md` and
+`docs/development-guidelines.md` before making changes. Retained branches and
+worktrees preserve research sources; their dated registry entries are not
+instructions to return to an old checkout. Temporary parallel development
+requires explicit authorization and file ownership.
+
+| Document role | Entry and scope |
+|---|---|
+| Current navigation | This README links implemented research modules; it is not a live experiment-status register. |
+| Current TomBaseline operation | [Unified operations](docs/operations/tom-llm-unified.md); `uns tom-llm` is the recommended formal operator entry. |
+| Frozen scientific contracts | `CONTEXT.md`, approved ADRs and the protocol explicitly bound to each experiment. |
+| Historical provenance | [Branch/worktree registry](docs/BRANCHES.md), read at its stated snapshot date; completed runs retain their original Source and Artifact identities. |
+| Research documents | Module-specific protocols, drafts and implementation/evidence notes have different authority; use their stated approval, date and evidence limits. |
+
+The [run](scripts/run_tom_multimodel_baseline.py) and
+[analysis](scripts/analyze_tom_multimodel_baseline.py) scripts remain compatibility
+entries to the same Baseline implementation. The
+[CPU checker](scripts/check_tom_multimodel_cpu.py) and
+[admission tool](scripts/tom_multimodel_admission.py) are lower-level tools using
+existing modules. Their historical usage documentation remains available and
+does not replace the unified operations guide.
 
 ## Implemented research modules
 
@@ -40,7 +68,7 @@ The ToM LLM unified entry supports CPU Tokenizer/Suite/full-150 context checks
 before weights or a model environment are available, then explicit service,
 qualification and formal-experiment operations. Asset download and environment
 installation are **not implemented**; the pinned-revision acquisition proposal
-and remaining Linux/vLLM pidfd, lock-FD and worker-shutdown checks are listed in
+and stage-specific checks are documented in
 [the operations guide](docs/operations/tom-llm-unified.md). CPU/Mock tests do not
 establish physical Admission or completion of the 10,714-request formal run.
 
@@ -105,7 +133,9 @@ git diff --check
 
 [Architecture](docs/architecture.md), [collection contract](docs/collection_contract.md),
 [ToM contract](docs/tom_contract.md), and
-[module ownership](docs/repository_structure.md) describe the live implementation.
+[module ownership](docs/repository_structure.md) describe the Phase-1 contracts
+and responsibilities. Use the research-module table above for later extensions;
+the Phase-1 structure documents are not a complete current module inventory.
 In the default canonical-collection path, game agents generate canonical evidence;
 trained ToM outputs do not control gameplay. The opt-in research prototypes above
 do not change default collection, language or game behavior. Phase-1 acceptance

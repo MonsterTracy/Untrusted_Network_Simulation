@@ -1,8 +1,11 @@
-# Live module responsibilities
+# Phase-1 module responsibilities
 
-Every production Python module belongs to one of these current responsibilities:
+This document covers the Phase-1 implementation and paired final lifecycle,
+not every module in the current project. See the [README](../README.md) for the
+current development entry and implemented research-module navigation, including
+TomBaseline, Observer-DTRS and later research extensions.
 
-| Modules | Current justification |
+| Modules | Phase-1 responsibility |
 | --- | --- |
 | run_random.py | Runtime assembly, profile assignment and required canonical recorder loop; no CLI |
 | werewolf/envs | Classic7 mechanics and authoritative public events |
@@ -32,6 +35,9 @@ perception path: it belongs only to the playing agent that generates raw speech.
 Call-audit fields named fallback_used/fallback_action_count remain rejection
 evidence: canonical validation requires false/zero. They expose no fallback
 execution branch.
+
+The following records Phase-1 reconstruction history; it is not an instruction
+to remove retained research modules, branches or worktrees.
 
 The former script/twd_tom runners, models/twd_tom schemas/tensorizers/models,
 standalone materializers, agent registry aliases, random rollout CLI, historical

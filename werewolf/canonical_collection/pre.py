@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.artifact_io.canonical import require_sha256 as _sha256
 from werewolf.canonical_collection.public_history import (
     PLAYER_IDS,
     PUBLIC_EVENT_SCHEMA_VERSION,
@@ -102,16 +103,6 @@ class SpeakerPREBeliefHandoff:
 def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be non-empty text")
-    return value
-
-
-def _sha256(value: Any, field_name: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
     return value
 
 

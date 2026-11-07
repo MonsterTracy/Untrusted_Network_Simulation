@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.artifact_io.canonical import require_sha256 as _sha256
 from werewolf.canonical_collection.attempt_ledger import (
     AttemptClaim,
     CollectionPlan,
@@ -166,16 +167,6 @@ def _safe_component(value: Any, field_name: str) -> str:
     value = _required_text(value, field_name)
     if _SAFE_COMPONENT.fullmatch(value) is None:
         raise ValueError(f"{field_name} must be one safe path component")
-    return value
-
-
-def _sha256(value: Any, field_name: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
     return value
 
 

@@ -1,6 +1,19 @@
 # Branch Registry
 
-Effective registry on `twd/mainline`, updated 2026-10-24. This supersedes the
+## Current development entry
+
+Daily Mac development uses
+`/Users/name_yuxiao/Desktop/VscodeProjects/Untrusted_Network_Simulation` on
+`twd/mainline`, following the local `AGENTS.md` and
+`docs/development-guidelines.md`. See the [README](../README.md) for current
+module and operation entry points. Retained branches and worktrees preserve
+historical sources; this registry authorizes no move, cleanup or source upgrade.
+
+## Historical snapshot: 2026-10-24
+
+The tables below preserve the registry recorded on `twd/mainline` on 2026-10-24.
+W1/W3 ownership, branch tips and pending-work descriptions apply to that date,
+not to the current checkout. This snapshot superseded the
 2026-10-13 Data-branch draft. The functional integration baseline before this
 documentation update is `29fba64f64b3ec310d3f12ecd4247ff46879ec54`.
 The recorded Mainline tip below is this historical snapshot; future commits may
@@ -33,7 +46,7 @@ Tips are inventory snapshots, not instructions to run an experiment from a movin
 branch. Publication below follows the last verified GitHub Push receipt on
 2026-10-24 (nine remote branches), not a new server or deployment check.
 
-| Branch | Recorded tip | Responsibility / Mainline relationship | Retention / publication |
+| Branch | Recorded tip | Responsibility / Mainline relationship at snapshot | Retention / publication at snapshot |
 |---|---|---|---|
 | `twd/mainline` | `29fba64f64b3ec310d3f12ecd4247ff46879ec54` | Current research development and integration, in W3 | Active; published |
 | `main` | `33d580cdf0700f6e38ae5b14648fcfdaa9be2b9a` | Stable release; ancestor of research Mainline | Preserve until separate release; published |
@@ -55,18 +68,18 @@ This is distinct from Experiment A's retained Analysis Source. `tom-baseline` an
 `experiment/tom-baselines` are not registered/existing branches; no new Baseline
 branch is planned. Future approved Baseline work goes to `twd/mainline`.
 
-## Seven retained Mac worktrees
+## Seven Mac worktrees recorded on 2026-10-24
 
 All seven share `~/Desktop/VscodeProjects/Untrusted_Network_Simulation/.git`.
 Here `~` denotes the original Mac user's home directory for these recorded paths.
 Paths and pending-file counts below are the 2026-10-24 snapshot before this
 three-document update; counts exclude ignored payloads.
 
-| ID | Path | Branch / current responsibility | Keep state |
+| ID | Path | Branch / responsibility at snapshot | Keep state at snapshot |
 |---|---|---|---|
 | W1 | `~/Desktop/VscodeProjects/Untrusted_Network_Simulation` | `three-way`; common-store primary checkout, two uncommitted CI/fixture drafts | Preserve original bytes; not the current development checkout |
 | W2 | `~/.codex/worktrees/canonical-split-publication-v2/Untrusted_Network_Simulation` | `feature/canonical-split-publication-v2`; 18 modified + 22 untracked Data/ToM files | Preserve; private Test seeds/campaign/split identities not approved for public release |
-| W3 | `~/.codex/worktrees/data-acquisition-preprocessing/Untrusted_Network_Simulation` | `twd/mainline`; active development/integration checkout, clean at the source snapshot | Continue here; directory name no longer denotes branch ownership |
+| W3 | `~/.codex/worktrees/data-acquisition-preprocessing/Untrusted_Network_Simulation` | `twd/mainline`; active development/integration checkout, clean at the source snapshot | The instruction to continue here applied on 2026-10-24 only; see the current development entry above |
 | W4 | `~/.codex/worktrees/tom-analysis-tools/Untrusted_Network_Simulation` | `codex/tom-analysis-tools`; deferred tools plus three untracked real-role case files | Preserve; those cases must not enter public Git history |
 | W5 | `~/.codex/worktrees/tom-llm-reasoner/Untrusted_Network_Simulation` | `codex/tom-llm-reasoner`; 3 modified + 54 untracked files, plus ignored Candidate material | Preserve d839 source + overlay and frozen Candidate v2; engineering admission precedes source migration |
 | W6 | `~/Desktop/VscodeProjects/research-worktree` | `research/main-experiments`; clean frozen Experiment A source checkout | Retain paired execution/analysis provenance and artifact dependencies |
@@ -94,8 +107,9 @@ or ignored payloads are recoverable; existing preservation limits still apply.
 
 ## Source, artifacts and maintenance
 
-- New research work defaults to W3 `twd/mainline`, with one agreed writer at a time.
-  Existing pending tasks retain their source until separately approved; do not
+- On 2026-10-24, new research work defaulted to W3 `twd/mainline`, with one agreed
+  writer at a time. This historical instruction is not the current development
+  entry. Existing pending tasks retain their source until separately approved; do not
   create branches or worktrees just to rename a research responsibility.
 - Frozen runs use full SHA plus their original manifest, config, seed, digest and
   seal contracts. A branch advance or source integration neither upgrades a
