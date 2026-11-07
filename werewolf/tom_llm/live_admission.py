@@ -13,9 +13,10 @@ from werewolf.tom_llm.physical_admission import ADMISSION_VERSION
 from werewolf.tom_llm.deployment import (baseline_root, open_deployment, profile, validate_process_environment,
     gpu_snapshot, driver_version, vllm_config_bytes, CACHE_VARIABLES)
 from werewolf.tom_llm.qualification_inputs import open_budget
+from werewolf.tom_llm.task import task_version,task_binding,SET_VERSION
 
 
-def qualified_offline(root, expected, spec):
+def qualified_offline(root, expected, spec, *, task_schema_version=None):
     """Durable qualification validation after the old second instance is shut down.
 
     This is evidence of past synthetic qualification, never a live-service identity.
@@ -28,6 +29,15 @@ def qualified_offline(root, expected, spec):
     claimed=strict_json((anchor.path/'admission.json').read_bytes())
     _,r=open_admission(root,expected_manifest=expected,expected_deployment=claimed['deployment_manifest_digest'],model_spec=spec)
     _,record=open_deployment(r['deployment_root'],r['deployment_manifest_digest'],current_source=False)
+    version=task_version(record['suite']['cases'][0]['task'])
+    if task_schema_version is not None:
+        require(version==task_schema_version, 'Admission/Run task protocol mismatch')
+    if version==SET_VERSION:
+        from werewolf.tom_llm.multimodel import source_identity
+        require(record['source']==source_identity() and record.get('task')==task_binding(SET_VERSION),
+                'V2 Admission requires the exact execution Source/task')
+        require(record['suite'].get('source')==record['budget'].get('source')==record['source']
+                and record['budget'].get('task')==record['task'], 'V2 qualified input Source/task mismatch')
     qualification_compatibility(record['source'])
     from werewolf.tom_llm.physical import verify_model
     require(record['model']==verify_model(spec,record['model']['directory']),'qualified physical model bytes drift')
@@ -87,16 +97,30 @@ def publish_permit(root, key, *, qualification, expected_qualification, tokenize
     require(run['mode'] in ('formal','technical') and run['source']['source_inventory_clean'],'committed live Source required')
     baseline_root(safe_path(root))
     spec=ModelSpec(key);require(key in run['models'],'unplanned model')
-    qualified=qualified_offline(qualification,expected_qualification,spec)
-    budget=open_budget(budget_root,spec,qualified['upstream_receipts']['budget'])
+    version=task_version(tasks[0])
+    if version==SET_VERSION:
+        qualified=qualified_offline(qualification,expected_qualification,spec,task_schema_version=version)
+        budget=open_budget(budget_root,spec,qualified['upstream_receipts']['budget'],
+            task_schema_version=version,expected_source=qualified['source'])
+    else:
+        qualified=qualified_offline(qualification,expected_qualification,spec,task_schema_version=version)
+        budget=open_budget(budget_root,spec,qualified['upstream_receipts']['budget'])
     require(budget==qualified['budget'],'qualified CPU budget payload drift')
     require(budget['cohort_digest']==run['cohort_digest'],'qualified budget is for another common cohort')
+    if version==SET_VERSION:
+        require(digest(qualified['source'])==run['live_execution']['qualification_source_digest']
+                and qualified['upstream_receipts']['budget']==run['live_execution']['budget_manifests'][key]
+                and str(safe_path(budget_root))==str(safe_path(run['configuration']['budgets'][key]['path'])),
+                'V2 qualified Source/budget differs from the Run binding')
     load_cpu_tokenizer(spec,tokenizer_assets)
     p=service_profile(root,spec,qualified)
     record={'run_root':str(Path(root).absolute()),'run_digest':a.manifest_digest,'model':key,'model_spec_digest':spec.digest,
         'source':source_v3(),'qualified_runtime':qualification_runtime(qualification),'profile':p,'qualification_root':str(Path(qualification).absolute()),
         'qualification_digest':expected_qualification,'budget_root':str(safe_path(budget_root)),
         'tokenizer_assets':str(safe_path(tokenizer_assets)),'evidence_kind':'physical_execution_binding'}
+    if version==SET_VERSION:
+        require(record['source']==run['source'],'Source changed during V2 Permit preparation')
+        record['task']=task_binding(version)
     from werewolf.tom_llm.deployment import qualification_compatibility
     record['qualification_compatibility']=qualification_compatibility(qualified['source'])
     dest=Path(root)/'models'/key/'permit';require(not dest.exists(),'permit exists')
@@ -122,10 +146,19 @@ def open_permit(root, key, expected, *, physical=True):
             and r['evidence_kind']=='physical_execution_binding' and run['mode'] in ('formal','technical'), 'live permit/source/model drift')
     require((p.path/'chat_template.jinja').read_bytes()==template_bytes(spec)
             and (p.path/'vllm.yaml').read_bytes()==vllm_config_bytes(r['profile']['argv_options']), 'live template/config drift')
+    version=task_version(tasks[0])
+    if version==SET_VERSION:
+        require(r.get('task')==task_binding(version),'V2 permit task binding drift')
+        require(str(safe_path(r['budget_root']))==str(safe_path(run['configuration']['budgets'][key]['path'])),
+                'V2 permit budget path differs from Run binding')
     if physical:
         require(sys.platform=='linux' and run['source']['source_inventory_clean'], 'live physical platform/source/path gate')
         baseline_root(safe_path(root))
-        q=qualified_offline(r['qualification_root'],r['qualification_digest'],spec)
+        q=qualified_offline(r['qualification_root'],r['qualification_digest'],spec,task_schema_version=version)
+        if version==SET_VERSION:
+            require(digest(q['source'])==run['live_execution']['qualification_source_digest']
+                    and q['upstream_receipts']['budget']==run['live_execution']['budget_manifests'][key],
+                    'V2 live qualified Source/budget binding drift')
         from werewolf.tom_llm.deployment import qualification_compatibility
         compatibility=qualification_compatibility(q['source'])
         if 'qualification_compatibility' in r:
@@ -134,7 +167,8 @@ def open_permit(root, key, expected, *, physical=True):
             from werewolf.tom_llm.multimodel import source_identity
             require(q['source']==source_identity(),
                     'legacy permit cannot inherit another Source')
-        require(open_budget(r['budget_root'],spec,q['upstream_receipts']['budget'])==q['budget'],'live budget drift')
+        options={'task_schema_version':version,'expected_source':q['source']} if version==SET_VERSION else {}
+        require(open_budget(r['budget_root'],spec,q['upstream_receipts']['budget'],**options)==q['budget'],'live budget drift')
         require(r['profile']==service_profile(root,spec,q) and q['budget']['cohort_digest']==run['cohort_digest']
                 and r['qualified_runtime']==qualification_runtime(r['qualification_root']),'live profile/budget/runtime drift')
     return p,r

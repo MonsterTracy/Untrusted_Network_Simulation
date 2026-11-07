@@ -22,6 +22,7 @@ from werewolf.tom_llm.task import VERSION as TASK_VERSION,SET_VERSION,task_bindi
 
 native_suites=fixtures.native_suites
 set_suites_mock=fixtures.set_suites_mock
+bound_set_inputs=fixtures.bound_set_inputs
 short_root=fixtures.short_root
 
 
@@ -460,8 +461,8 @@ def test_prepare_model_reuses_existing_pipeline_and_refuses_old_candidate(short_
     monkeypatch.setattr(live,'capture_bound_environment',lambda p,d:{'prefix':p,'prior_audit_digest':d})
     monkeypatch.setattr(qi,'publish_suite',lambda path,*a:artifact(path))
     monkeypatch.setattr(qi,'publish_budget',lambda path,*a:artifact(path))
-    monkeypatch.setattr(qi,'open_suite',lambda *a:None)
-    monkeypatch.setattr(qi,'open_budget',lambda *a:None)
+    monkeypatch.setattr(qi,'open_suite',lambda *a,**kw:None)
+    monkeypatch.setattr(qi,'open_budget',lambda *a,**kw:None)
     def deployment(path,spec,**kw):calls.append(('deploy',kw));return artifact(path)
     monkeypatch.setattr(dep,'prepare_deployment',deployment)
     item={'candidate_root':str(root),'model_directory':str(tmp_path/'weights'),'environment_prefix':str(tmp_path/'env'),
@@ -602,7 +603,10 @@ def test_legacy_suite_preparation_keeps_existing_behavior(tmp_path,monkeypatch,r
         calls.append(('publish',path,spec.key,assets))
         return artifact
     monkeypatch.setattr(qi,'publish_suite',publish)
-    monkeypatch.setattr(qi,'open_suite',lambda path,spec,anchor:calls.append(('open',path,spec.key,anchor)))
+    def read(path,spec,anchor,**kwargs):
+        assert kwargs=={'task_schema_version':TASK_VERSION}
+        calls.append(('open',path,spec.key,anchor))
+    monkeypatch.setattr(qi,'open_suite',read)
     monkeypatch.setattr(ops,'anchor',lambda value:artifact)
     item={'tokenizer_assets':str(tmp_path/'assets')}
     if reuse:
@@ -628,7 +632,7 @@ def test_approved_set_suite_preparation_binds_schema_without_deployment(tmp_path
     assert ops.prepare_inputs(c,key,'suite')==result
     with pytest.raises(ValueError,match='task protocol mismatch'):
         qi.open_suite(result['suite']['path'],ModelSpec(key),result['suite']['digest'],task_schema_version=TASK_VERSION)
-    with pytest.raises(ValueError,match='V2 physical deployment BLOCKED'):ops.prepare_model(c,key)
+    with pytest.raises(ValueError,match='committed clean Source'):ops.prepare_model(c,key)
 
 
 @pytest.mark.parametrize('key',['qwen3','yi','mistral'])
@@ -657,6 +661,80 @@ def test_approved_set_config_cannot_reuse_legacy_probability_suite(tmp_path,monk
     c={'task_version':SET_VERSION,'protocol_version':APPROVED_PROTOCOL_VERSION,
        'models':{'yi':{'suite':ops.ref(artifact)}}}
     with pytest.raises(ValueError,match='task protocol mismatch'):ops.prepare_inputs(c,'yi','suite')
+
+
+@pytest.mark.parametrize('stage',['suite','budget'])
+def test_v1_configuration_cannot_reuse_v2_cpu_inputs(bound_set_inputs,stage):
+    p=bound_set_inputs
+    a=(p.suites if stage=='suite' else p.budgets)['yi']
+    c={'models':{'yi':{stage:ops.ref(a)}},'cohort':ops.ref(p.cohort)}
+    before={f:f.read_bytes() for f in a.path.iterdir() if f.is_file()}
+    if stage=='budget':
+        # Cohort 锚点在此测试只提供既有合成 Manifest；输入读取器仍真实核验预算。
+        from unittest.mock import patch
+        real=ops.anchor
+        with patch.object(ops,'anchor',side_effect=lambda r:p.cohort if r==c['cohort'] else real(r)):
+            with pytest.raises(ValueError,match='task protocol mismatch'):ops.prepare_inputs(c,'yi',stage)
+    else:
+        with pytest.raises(ValueError,match='task protocol mismatch'):ops.prepare_inputs(c,'yi',stage)
+    assert all(f.read_bytes()==raw for f,raw in before.items())
+
+
+@pytest.mark.parametrize('configured_version',[TASK_VERSION,SET_VERSION])
+@pytest.mark.parametrize('action',['start','qualify','status','logs','stop'])
+def test_service_task_crossovers_stop_before_start_but_keep_owned_controls(monkeypatch,configured_version,action):
+    from werewolf.tom_llm import service_manager
+    other=SET_VERSION if configured_version==TASK_VERSION else TASK_VERSION
+    record={'profile':{'environment_prefix':'UNIT'},'task':task_binding(other)}
+    manager=NS(binding=lambda:(None,record,None))
+    monkeypatch.setattr(service_manager,'Service',lambda *a,**kw:manager)
+    monkeypatch.setattr(ops,'anchor',lambda r:NS(path=Path('/UNIT'),manifest_digest='a'*64))
+    c={'task_version':configured_version,'models':{'qwen3':{'deployment':{},'environment_prefix':'UNIT'}}}
+    record['profile']['environment_prefix']=str(Path('UNIT').absolute())
+    args=NS(purpose='qualification',operation='qualify' if action=='qualify' else 'serve',service_action=action)
+    if action in ('start','qualify'):
+        with pytest.raises(ValueError,match='configured/qualified task protocol mismatch'):ops.service(args,c,'qwen3')
+    else:assert ops.service(args,c,'qwen3') is manager
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_set_model_preparation_reuses_physical_receipts_and_new_bound_inputs(bound_set_inputs,tmp_path,monkeypatch,key):
+    """仅检查编排；Deployment 的物理校验由单独测试覆盖。"""
+    from werewolf.tom_llm import physical,live_admission as live
+    from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+    p=bound_set_inputs;root=dep.BASE/'multimodel'/key/'UNIT-V2'
+    assets=NS(path=tmp_path/'old-assets',manifest_digest='a'*64)
+    environment=NS(path=tmp_path/'old-environment',manifest_digest='b'*64)
+    deployment=NS(path=root/'deployment',manifest_digest='d'*64)
+    inputs=[p.cohort,assets,environment,p.suites[key],p.budgets[key]]
+    monkeypatch.setattr(ops,'anchor',lambda r:next(a for a in inputs if str(a.path)==r['path'] and a.manifest_digest==r['digest']))
+    monkeypatch.setattr(physical,'read_receipt',lambda *a:{'UNIT_ONLY':True})
+    def forbidden(*a,**kw):pytest.fail('reuse path rebuilt physical assets or environment')
+    monkeypatch.setattr(physical,'verify_model',forbidden)
+    monkeypatch.setattr(physical,'publish_receipt',forbidden)
+    monkeypatch.setattr(live,'capture_bound_environment',forbidden)
+    seen=[]
+    def prepare(path,spec,**kwargs):
+        seen.append(kwargs)
+        assert spec.key==key and path==deployment.path
+        assert kwargs['expected_suite']==p.suites[key].manifest_digest
+        assert kwargs['expected_budget']==p.budgets[key].manifest_digest
+        return deployment
+    monkeypatch.setattr(dep,'prepare_deployment',prepare)
+    item={'candidate_root':str(root),'model_directory':str(dep.BASE/'models'/key),
+          'environment_prefix':str(dep.BASE/'env'),'tokenizer_assets':str(tmp_path/'tokens'),
+          'gpu_uuid':'GPU-unit-only','assets':ops.ref(assets),'environment':ops.ref(environment),
+          'suite':ops.ref(p.suites[key]),'budget':ops.ref(p.budgets[key])}
+    c={'task_version':SET_VERSION,'protocol_version':APPROVED_PROTOCOL_VERSION,
+       'cohort':ops.ref(p.cohort),'models':{key:item}}
+    result=ops.prepare_model(c,key)
+    assert result=={name:ops.ref(a) for name,a in [('assets',assets),('environment',environment),
+                     ('suite',p.suites[key]),('budget',p.budgets[key]),('deployment',deployment)]}
+    assert len(seen)==1
+    p.source['source_inventory_clean']=False
+    with pytest.raises(ValueError,match='committed clean Source'):ops.prepare_model(c,key)
+    p.source['source_inventory_clean']=True;c.pop('protocol_version')
+    with pytest.raises(ValueError,match='approved research protocol'):ops.prepare_model(c,key)
 
 
 @pytest.mark.parametrize('version',[TASK_VERSION,SET_VERSION])
@@ -1033,7 +1111,7 @@ def test_linux_cli_new_output_root_and_cpu_inputs_share_the_same_path_gate(tmp_p
     monkeypatch.setattr(ops,'sys',NS(platform='linux'))
     outputs=[]
     monkeypatch.setattr(qi,'publish_suite',lambda path,*a:outputs.append(path) or NS(path=path,manifest_digest='a'*64))
-    monkeypatch.setattr(qi,'open_suite',lambda *a:None)
+    monkeypatch.setattr(qi,'open_suite',lambda *a,**kw:None)
     cfg=new/'Qwen3-8b.yaml'
     c={'output_root':str(new/'experiments'),'models':{key:{'tokenizer_assets':str(old/'tokens'/key)}}}
     cfg.write_text(json.dumps(c))

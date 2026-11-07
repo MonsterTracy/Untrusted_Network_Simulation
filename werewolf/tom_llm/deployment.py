@@ -11,6 +11,7 @@ from werewolf.tom_llm.model_spec import ModelSpec, ROOT, template_bytes
 from werewolf.tom_llm.multimodel import source_identity
 from werewolf.tom_llm.physical import read_receipt, verify_model
 from werewolf.tom_llm.qualification_inputs import open_suite, open_budget
+from werewolf.tom_llm.task import task_version,task_binding,SET_VERSION
 
 VERSION = 'classic7_multimodel_deployment_v1'
 BASE = Path('/data/yuxiao/tom-llm-reasoner-b2')
@@ -218,11 +219,20 @@ def prepare_deployment(destination,spec,*,gpu_uuid,model_root,model_receipt,expe
         model_directory=model_root,environment_prefix=environment_root)
     model = read_receipt(model_receipt,'model',expected_model)
     environment = read_receipt(environment_receipt,'environment',expected_environment)
-    suite = open_suite(suite_root,spec,expected_suite); budget = open_budget(budget_root,spec,expected_budget)
-    record = {'schema_version':VERSION,'key':spec.key,'model_spec':spec.record(),'source':source_identity(),
+    suite = open_suite(suite_root,spec,expected_suite)
+    version=task_version(suite['cases'][0]['task']);source=source_identity()
+    options={'task_schema_version':version}
+    if version==SET_VERSION:
+        require(source['source_inventory_clean'],'V2 Deployment requires committed clean Source')
+        from werewolf.tom_llm.qualification_inputs import validate_suite
+        validate_suite(suite,spec,expected_source=source)
+        options['expected_source']=source
+    budget = open_budget(budget_root,spec,expected_budget,**options)
+    record = {'schema_version':VERSION,'key':spec.key,'model_spec':spec.record(),'source':source,
         'profile':p,'model':model,'environment':environment,'suite':suite,'budget':budget,
         'upstream_receipts':{'model':expected_model,'environment':expected_environment,'suite':expected_suite,'budget':expected_budget},
         'purpose':'synthetic_gpu_qualification_only','physical_gpu_admission':False}
+    if version==SET_VERSION:record['task']=task_binding(version)
     verify_cpu_binding(record,spec)
     return publish_artifact(destination,manifest_fields={'artifact_type':'mm_deployment_candidate','schema_version':VERSION,
         'deployment_digest':digest(record),'model_spec_digest':spec.digest,'gpu_qualification_passed':False},
@@ -253,6 +263,19 @@ def open_deployment(root,expected_digest,*,physical_recheck=False,current_source
             and (a.path/'vllm.yaml').read_bytes()==vllm_config_bytes(p['argv_options']), 'deployment template/config drift')
     from werewolf.tom_llm.qualification_inputs import validate_suite
     validate_suite(r['suite'],spec)
+    version=task_version(r['suite']['cases'][0]['task'])
+    if version==SET_VERSION:
+        from werewolf.tom_llm.multimodel import read_cohort
+        cohort,_=read_cohort(r['budget']['cohort_root'],r['budget']['cohort_digest'],current_source=False)
+        require(cohort.manifest['task']==task_binding(version), 'Deployment Suite/budget/cohort task mismatch')
+    if version==SET_VERSION:
+        require(r.get('task')==task_binding(version) and r['source']['source_inventory_clean'],
+                'V2 Deployment task/clean Source binding required')
+        validate_suite(r['suite'],spec,expected_source=r['source'])
+        require(r['budget'].get('task')==r['task'] and r['budget'].get('source')==r['source']==cohort.manifest['source'],
+                'V2 Deployment budget/cohort Source mismatch')
+    elif 'task' in r['budget']:
+        require(r['budget']['task']==task_binding(version), 'Deployment Suite/budget task mismatch')
     if physical_recheck:verify_cpu_binding(r,spec)
     return a,r
 

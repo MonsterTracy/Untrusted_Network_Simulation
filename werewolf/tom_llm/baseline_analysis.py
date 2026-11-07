@@ -97,6 +97,11 @@ def compute(reference,run,tasks,predictions):
             formal_game_ids=run['selection']['game_ids'],
             approved=run['protocol']['schema_version']==APPROVED_PROTOCOL_VERSION,
             engineering_only=run['mode']=='fake')
+        if run['mode']!='fake':
+            require(run.get('live_execution') and run['source']['source_inventory_clean'],
+                    'V2 physical analysis requires the validated live execution binding')
+            result['live_execution']=run['live_execution']
+            result['sets'].update(formal_result=run['mode']=='formal',physical_qualification=True)
     return result
 
 
@@ -282,6 +287,8 @@ def analyze_cross_runs(sealed_runs, destination):
     context={**first,'run_id':None,'models':{key:configurations[key]['models'][key] for key in keys},'model_order':list(keys)}
     reference=open_reference(first['publication'],first['evaluation'],expected_seal_digest=first['reference']['seal_digest'])
     result=compute(reference,context,tasks,predictions)
+    if first['mode']!='fake':
+        result['live_execution']={key:configurations[key]['live_execution'] for key in keys}
     result.update(analysis_scope='three_independent_runs',independent_runs=inputs,experiment_configurations=configurations,
                   prediction_seals=prediction_seals,analysis_source=source_v3(),
                   model_specs={key:ModelSpec(key).record() for key in keys})

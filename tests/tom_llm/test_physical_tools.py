@@ -197,7 +197,8 @@ def test_pre_rpc_deployment_remains_offline_only_and_unchanged(short_root,monkey
     spec=ModelSpec(key);p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
     p['environment_requirements'].pop('VLLM_RPC_BASE_PATH')
     record={'schema_version':dep.VERSION,'key':key,'model_spec':spec.record(),'source':dep.source_identity(),
-        'profile':p,'model':{'UNIT_ONLY':True},'environment':{'UNIT_ONLY':True},'suite':{'UNIT_ONLY':True},
+        'profile':p,'model':{'UNIT_ONLY':True},'environment':{'UNIT_ONLY':True},
+        'suite':{'UNIT_ONLY':True,'cases':[{'task':qi.synthetic_tasks()[0]}]},
         'budget':{},'upstream_receipts':{},'purpose':'synthetic_gpu_qualification_only','physical_gpu_admission':False}
     a=candidate_artifact(short_root,record)
     before={f:f.read_bytes() for f in a.path.iterdir()}
@@ -237,6 +238,148 @@ def set_suites_mock(monkeypatch):
                               for t in qi.synthetic_tasks(version=SET_VERSION)}) for key in KEYS}
     monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda spec,path:tokenizers[spec.key])
     return {key:qi.build_suite(ModelSpec(key),'UNIT_MOCK',task_schema_version=SET_VERSION) for key in KEYS}
+
+
+@pytest.fixture
+def bound_set_inputs(tmp_path,short_root,monkeypatch,set_suites_mock):
+    """真实封存接口＋合成人口；Tokenizer、Source 和物理资源均为 Mock。"""
+    from werewolf.tom_llm import experiment as ex
+    from werewolf.tom_llm.task import SET_VERSION,task_binding
+    from werewolf.tom_llm.common import identity
+    source={**mm.source_identity(),'source_inventory_clean':True,'source_status_digest':digest('')}
+    monkeypatch.setattr(mm,'source_identity',lambda:source)
+    monkeypatch.setattr(dep,'source_identity',lambda:source)
+    monkeypatch.setattr(dep,'BASE',short_root/'base')
+    games=[f'UNIT-{i:03}' for i in range(150)]
+    tasks=[{'game_id':games[i%150],'boundary_id':f'UNIT-{i}','observer':i%7,
+            'fold':(i%150)//30,'prefix_digest':digest(['p',i]),'plan_digest':digest(['s',i])}
+           for i in range(10714)]
+    rows=digest([identity(t) for t in tasks]);monkeypatch.setattr(ex,'FORMAL_PUBLIC_ROWS_DIGEST',rows)
+    manifest={'task':task_binding(SET_VERSION),'source':source,'row_identity_digest':rows,
+              'selection':{'game_ids':games},'reference':{'seal_digest':'b'*64}}
+    cohort=NS(path=tmp_path/'cohort',manifest_digest='c'*64,manifest=manifest)
+    monkeypatch.setattr(mm,'read_cohort',lambda *a,**kw:(cohort,tasks))
+    suites={};budgets={}
+    for key in KEYS:
+        spec=ModelSpec(key);suite=deepcopy(set_suites_mock[key]);suite['source']=source
+        suites[key]=publish_artifact(tmp_path/key/'suite',manifest_fields={
+            'artifact_type':'mm_native_suite','schema_version':qi.SET_SUITE_VERSION,
+            'model_spec_digest':spec.digest,'suite_digest':digest(suite),'qualification':'INPUTS_ONLY_NOT_GPU_ADMISSION'},
+            files={'suite.json':canonical_json_bytes(suite)})
+        report={'schema_version':qi.VERSION+'_budget','model_spec_digest':spec.digest,
+                'cohort_digest':cohort.manifest_digest,'cohort_root':str(cohort.path),
+                'selection':manifest['selection'],'reference':manifest['reference'],
+                'task':manifest['task'],'source':source,'request_count':len(tasks),
+                'row_identity_digest':rows,'input_token_counts':[100]*len(tasks),
+                'input_tokens_total':100*len(tasks),'maximum_input_tokens':100,
+                'p50':100.,'p95':100.,'p99':100.,'context_length':8192,'output_cap':512}
+        budgets[key]=publish_budget_record(tmp_path/key/'budget',report)
+    return NS(source=source,cohort=cohort,tasks=tasks,suites=suites,budgets=budgets)
+
+
+def publish_budget_record(path,report):
+    return publish_artifact(path,manifest_fields={'artifact_type':'mm_cpu_budget','schema_version':qi.VERSION,
+        'model_spec_digest':report['model_spec_digest'],'record_digest':digest(report),'qualification':'CPU_BUDGET_ONLY'},
+        files={'budget.json':canonical_json_bytes(report)})
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_set_deployment_reuses_assets_but_binds_new_suite_budget_source(bound_set_inputs,tmp_path,monkeypatch,key):
+    from werewolf.tom_llm.task import SET_VERSION,task_binding
+    p=bound_set_inputs;spec=ModelSpec(key)
+    root=dep.BASE/'multimodel'/key/'UNIT-V2';model=dep.BASE/'models'/key;environment=dep.BASE/'env'
+    monkeypatch.setattr(dep,'read_receipt',lambda path,kind,expected:
+                        {'directory':str(model)} if kind=='model' else {'prefix':str(environment)})
+    verified=[];monkeypatch.setattr(dep,'verify_cpu_binding',lambda r,s:verified.append(r))
+    a=dep.prepare_deployment(root/'deployment',spec,gpu_uuid='GPU-unit-only',
+        model_root=model,model_receipt=tmp_path,expected_model='a'*64,
+        environment_root=environment,environment_receipt=tmp_path,expected_environment='b'*64,
+        suite_root=p.suites[key].path,expected_suite=p.suites[key].manifest_digest,
+        budget_root=p.budgets[key].path,expected_budget=p.budgets[key].manifest_digest)
+    _,record=dep.open_deployment(a.path,a.manifest_digest)
+    assert record['task']==task_binding(SET_VERSION)
+    assert record['source']==record['suite']['source']==record['budget']['source']==p.source
+    assert record['budget']['request_count']==10714 and len(record['budget']['selection']['game_ids'])==150
+    assert len(verified)==1 and record['physical_gpu_admission'] is False
+    assert record['upstream_receipts']['budget']==p.budgets[key].manifest_digest
+
+
+@pytest.mark.parametrize('change',['v1_suite','v1_cohort','suite_source','budget_source','legacy_budget',
+                                  'dirty_source','missing_row','over_budget'])
+def test_set_inputs_reject_version_source_and_capacity_mismatch(bound_set_inputs,tmp_path,change):
+    from werewolf.tom_llm.task import SET_VERSION,task_binding
+    from werewolf.tom_llm.common import strict_json
+    p=bound_set_inputs;key='qwen3';spec=ModelSpec(key)
+    suite=strict_json((p.suites[key].path/'suite.json').read_bytes())
+    report=strict_json((p.budgets[key].path/'budget.json').read_bytes())
+    if change=='v1_suite':
+        old=qi.legacy_suite()
+        # 原冻结 Qwen IDs 和 Wire 不变；只按 V1 Suite 合同封装。
+        suite={'schema_version':qi.VERSION,'purpose':'synthetic_gpu_qualification_only',
+            'key':key,'model_spec_digest':spec.digest,'legacy_public_suite_sha256':qi.LEGACY_SHA,
+            'cases':[{'case_index':i,'task':task,'input_ids':old['cases'][i]['input_ids'],
+                      'wire_digest':old['cases'][i]['wire_digest'],'rendered_sha256':qi.render(task,spec)['text_sha256']}
+                     for i,task in enumerate(qi.synthetic_tasks())],
+            'schedule':qi.SCHEDULE,'vocabulary_size':200000,'cpu_native_tokenizer_verified':True}
+    elif change=='v1_cohort':p.cohort.manifest['task']=task_binding()
+    elif change=='suite_source':suite['source']={**p.source,'source_revision':'f'*40}
+    elif change=='budget_source':report['source']={**p.source,'source_revision':'f'*40}
+    elif change=='legacy_budget':report.pop('task');report.pop('source')
+    elif change=='dirty_source':p.source['source_inventory_clean']=False
+    elif change=='missing_row':report['request_count']-=1
+    elif change=='over_budget':report['input_token_counts'][0]=7681
+    if change in ('v1_suite','suite_source'):
+        with pytest.raises(ValueError):qi.validate_suite(suite,spec,expected_source=p.source)
+    else:
+        a=publish_budget_record(tmp_path/'bad-budget',report)
+        with pytest.raises(ValueError):
+            qi.open_budget(a.path,spec,a.manifest_digest,task_schema_version=SET_VERSION,expected_source=p.source)
+
+
+def test_old_cpu_set_suite_remains_readable_but_cannot_qualify(set_suites_mock):
+    suite=deepcopy(set_suites_mock['qwen3']);source=suite.pop('source')
+    assert qi.validate_suite(suite,ModelSpec('qwen3'))==suite
+    with pytest.raises(ValueError,match='Source binding'):
+        qi.validate_suite(suite,ModelSpec('qwen3'),expected_source=source)
+
+
+@pytest.mark.parametrize('cohort_version',[qi.TASK_VERSION,qi.SET_VERSION])
+@pytest.mark.parametrize('configured_version',[qi.TASK_VERSION,qi.SET_VERSION])
+def test_budget_task_version_binding_in_both_directions(bound_set_inputs,tmp_path,cohort_version,configured_version):
+    from werewolf.tom_llm.task import task_binding
+    from werewolf.tom_llm.common import strict_json
+    p=bound_set_inputs;a=p.budgets['yi'];report=strict_json((a.path/'budget.json').read_bytes())
+    p.cohort.manifest['task']=task_binding(cohort_version)
+    if cohort_version==qi.TASK_VERSION:
+        report.pop('task');report.pop('source')
+    a=publish_budget_record(tmp_path/'task-budget',report)
+    options={'task_schema_version':configured_version}
+    if configured_version==qi.SET_VERSION:options['expected_source']=p.source
+    if cohort_version==configured_version:
+        assert qi.open_budget(a.path,ModelSpec('yi'),a.manifest_digest,**options)==report
+    else:
+        with pytest.raises(ValueError,match='task protocol mismatch'):
+            qi.open_budget(a.path,ModelSpec('yi'),a.manifest_digest,**options)
+
+
+def test_set_budget_publisher_refuses_partial_population_before_tokenizer(bound_set_inputs,tmp_path,monkeypatch):
+    p=bound_set_inputs;p.tasks.pop()
+    monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda *a:pytest.fail('partial cohort reached Tokenizer'))
+    with pytest.raises(ValueError,match='complete frozen 10714'):
+        qi.publish_budget(tmp_path/'refused-budget',p.cohort.path,p.cohort.manifest_digest,ModelSpec('yi'),'UNIT')
+    assert not (tmp_path/'refused-budget').exists()
+
+
+@pytest.mark.parametrize('suite_version,run_version',[(qi.TASK_VERSION,qi.SET_VERSION),(qi.SET_VERSION,qi.TASK_VERSION)])
+def test_physical_admission_rejects_both_task_crossovers_before_assets(tmp_path,monkeypatch,suite_version,run_version):
+    from werewolf.tom_llm import live_admission as live,physical_admission as admission
+    a=publish_artifact(tmp_path/'admission',manifest_fields={'artifact_type':'mm_physical_gpu_admission',
+        'schema_version':admission.ADMISSION_VERSION},files={'admission.json':canonical_json_bytes({'deployment_manifest_digest':'a'*64})})
+    monkeypatch.setattr(admission,'open_admission',lambda *a,**kw:(None,{'deployment_root':'UNIT','deployment_manifest_digest':'a'*64}))
+    monkeypatch.setattr(live,'open_deployment',lambda *a,**kw:(None,{'suite':{'cases':[{'task':qi.synthetic_tasks(version=suite_version)[0]}]}}))
+    monkeypatch.setattr(physical,'verify_model',lambda *a:pytest.fail('task mismatch reached physical assets'))
+    with pytest.raises(ValueError,match='Admission/Run task protocol mismatch'):
+        live.qualified_offline(a.path,a.manifest_digest,ModelSpec('qwen3'),task_schema_version=run_version)
 
 
 @pytest.mark.parametrize('key',KEYS)
@@ -459,9 +602,9 @@ def test_cross_root_deployments_preserve_original_assets_and_offline_source_iden
     assets=physical.publish_receipt(old/'receipts/assets','model',physical.verify_model(spec,model))
     receipt=physical.publish_receipt(old/'receipts/environment','environment',environment)
     # Native suite/budget construction is outside this path/identity unit test.
-    suite={'UNIT_ONLY':key};budget={'UNIT_ONLY':key}
+    suite={'UNIT_ONLY':key,'cases':[{'task':qi.synthetic_tasks()[0]}]};budget={'UNIT_ONLY':key}
     monkeypatch.setattr(dep,'open_suite',lambda *a:suite)
-    monkeypatch.setattr(dep,'open_budget',lambda *a:budget)
+    monkeypatch.setattr(dep,'open_budget',lambda *a,**kw:budget)
     monkeypatch.setattr(qi,'validate_suite',lambda s,spec:s)
     source=dep.source_identity();source['source_inventory_clean']=True
     monkeypatch.setattr(dep,'source_identity',lambda:source)
@@ -745,7 +888,8 @@ def test_old_w5_or_mock_admission_domains_are_never_upgraded(tmp_path):
 def test_budget_artifact_full_150_rows_and_model_binding(tmp_path,monkeypatch):
     task=qi.synthetic_tasks()[0]
     tasks=[{**deepcopy(task),'game_id':f'UNIT-{i:03}','fold':i//30} for i in range(150)]
-    manifest={'selection':{'game_ids':[t['game_id'] for t in tasks]},'reference':{'seal_digest':'b'*64}}
+    from werewolf.tom_llm.task import task_binding
+    manifest={'selection':{'game_ids':[t['game_id'] for t in tasks]},'reference':{'seal_digest':'b'*64},'task':task_binding()}
     cohort=NS(manifest=manifest,manifest_digest='a'*64,path=tmp_path/'cohort')
     monkeypatch.setattr(mm,'read_cohort',lambda *_:(cohort,tasks))
     class Tokens:
@@ -874,7 +1018,7 @@ def test_deployment_uses_new_output_root_and_keeps_old_assets(short_root,native_
     model=old/'model';env=old/'env';destination=base/'multimodel/qwen3/candidate-yaml-v1/deployment'
     monkeypatch.setattr(dep,'read_receipt',lambda path,kind,expected:{'directory':str(model)} if kind=='model' else {'prefix':str(env)})
     monkeypatch.setattr(dep,'open_suite',lambda *a:native_suites['qwen3'])
-    monkeypatch.setattr(dep,'open_budget',lambda *a:{'UNIT_ONLY':'budget'})
+    monkeypatch.setattr(dep,'open_budget',lambda *a,**kw:{'UNIT_ONLY':'budget'})
     checked=[];monkeypatch.setattr(dep,'verify_cpu_binding',lambda record,spec:checked.append(record))
     args=dict(gpu_uuid='GPU-unit-only',model_root=model,model_receipt=tmp_path,expected_model='a'*64,
         environment_root=env,environment_receipt=tmp_path,expected_environment='b'*64,

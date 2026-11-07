@@ -1,8 +1,345 @@
 # 多模型 ToM Baseline：实现与研究协议
 
+## V2 正式执行最小适配与用户服务器操作手册
+
+本节对应 `094d0033d8839da6d3e9610381acd16652139f73` 之后的 Mac 本地开发。Codex 仅修改本地代码、运行 CPU/Mock；没有执行下列服务器命令。新 Commit 尚须用户审阅、授权提交和推送。以下命令仅供用户在 Ubuntu 的 Bash 中逐阶段执行；每阶段成功后再进入下一阶段。命令不是新的服务器或 GPU 授权。
+
+科研协议 `classic7_suspicion_set_research_protocol_v2` 的原字典及摘要 `e135168b1927c1542d7e0c991aaeb5fe9dc8814317b9316071dd1ffc655b71dc` 保持不变，包括原有 CPU 阶段状态文字。正式执行另绑定 `classic7_suspicion_set_live_execution_v1`：获批 Task、科研协议摘要、同一干净提交的 Source v2/v3、冻结 Cohort 和每模型 Budget Manifest。它是软件合同，不是物理资格，也不替代 Admission、Permit 或 `--execute-live`。
+
+V2 的新 Suite 和 Budget 记录实际 Source。旧 V1 和早期无 Source 字段的 V2 CPU 输入仍可离线核读；后者不得用于新 V2 物理资格。新链条不继承 V1 Suite、Budget、Deployment、Admission 或 Permit；历史权重、官方 Tokenizer 和 Conda 环境可只读复用。`CONTROL_FILES` 及资格兼容算法未扩大。
+
+### A. 固定新提交并核验服务器 Source
+
+前提：新代码已经用户批准并提交、推送到既有 `origin/twd/mainline`；唯一 checkout 仍是下列目录，原 HEAD 为 `094d0033…`，干净且 detached。以下阶段只写该 checkout 的 Git 对象和受控工作树；不更新其他 checkout。若任一检查失败，停止，不 Reset、Clean、Stash、Merge、Rebase 或强制 Checkout。
+
+```bash
+set -euo pipefail
+PROJECT=/home/dell/yuxiao/Untrusted_Network_Simulation_mainline_6249485c56cc
+BASELINE_PY=/data/yuxiao/envs/untrusted-network-simulation-tom-baseline/bin/python
+V2_COMMIT='填写用户批准并已推送的新40位Commit'
+export PROJECT BASELINE_PY V2_COMMIT
+export PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1
+[[ "$V2_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+cd "$PROJECT"
+test "$(pwd -P)" = "$PROJECT"
+test "$(git rev-parse --show-toplevel)" = "$PROJECT"
+git rev-parse --git-common-dir
+test "$(git rev-parse HEAD)" = 094d0033d8839da6d3e9610381acd16652139f73
+if git symbolic-ref -q HEAD; then exit 1; fi
+test -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)"
+git diff --cached --quiet
+ORIGIN=$(git remote get-url origin)
+case "$ORIGIN" in
+  https://github.com/MonsterTracy/Untrusted_Network_Simulation|https://github.com/MonsterTracy/Untrusted_Network_Simulation.git|git@github.com:MonsterTracy/Untrusted_Network_Simulation.git) ;;
+  *) exit 1 ;;
+esac
+test "$(git ls-remote --heads origin refs/heads/twd/mainline | cut -f1)" = "$V2_COMMIT"
+if git config --get-regexp '^filter\..*\.(smudge|process|required)$'; then
+  echo '发现外部过滤器；停止，先核验副作用'
+  exit 1
+fi
+test ! -x "$(git rev-parse --git-path hooks/post-checkout)"
+git fetch --no-tags origin twd/mainline
+test "$(git rev-parse FETCH_HEAD)" = "$V2_COMMIT"
+git merge-base --is-ancestor HEAD "$V2_COMMIT"
+git checkout --detach "$V2_COMMIT"
+test "$(git rev-parse HEAD)" = "$V2_COMMIT"
+if git symbolic-ref -q HEAD; then exit 1; fi
+test -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)"
+git diff --cached --quiet
+"$BASELINE_PY" -B - <<'PY'
+import json,os
+from werewolf.tom_llm.multimodel import source_identity
+from werewolf.tom_llm.experiment import source_v3,protocol,APPROVED_PROTOCOL_VERSION
+from werewolf.tom_llm.task import SET_VERSION
+from werewolf.tom_llm.deployment import validate_source_evidence
+from werewolf.tom_llm.common import digest
+assert digest(protocol(SET_VERSION,protocol_version=APPROVED_PROTOCOL_VERSION))=='e135168b1927c1542d7e0c991aaeb5fe9dc8814317b9316071dd1ffc655b71dc'
+for source in (source_identity(),source_v3()):
+    validate_source_evidence(source)
+    assert source['source_revision']==os.environ['V2_COMMIT']
+    assert source['source_inventory_clean'] and source['source_status_digest']==digest('')
+    print(json.dumps({k:source[k] for k in ('schema_version','source_revision','commit_tree',
+        'implementation_digest','source_inventory_clean','source_status_digest')},sort_keys=True))
+    print('inventory_count',len(source['file_digests']))
+PY
+```
+
+成功判据：精确目标 SHA、detached、工作区及 index 干净，Source v2/v3 同 Revision/Tree、库存为 210/213，输出实际摘要。不要用 Mac 含 DTRS 开发修改的摘要替代服务器结果。此后直至三个 Run 封存完成，不再修改 Source；Source 改变就必须在新路径重新准备 V2 输入与资格，不能重签旧证据。
+
+### B. 新配置、真实 CPU Parity、Cohort、Suite 与全量 Budget
+
+前提：A 通过；用户已批准新的目录名、Candidate 名、三个 Run ID 和实际 GPU UUID。以下变量由用户填写，均不是本手册声称存在的 Artifact、服务或设备。三个历史 YAML 只读，必须是已验收的 V1 来源配置。
+
+```bash
+V2_ROOT='/data/yuxiao/TomBaseline-data/填写用户批准的新V2目录名'
+CANDIDATE_ID='填写用户批准的新Candidate名'
+RUN_QWEN3='填写用户批准的Qwen3新RunID'
+RUN_YI='填写用户批准的Yi新RunID'
+RUN_MISTRAL='填写用户批准的Mistral新RunID'
+GPU_UUID='填写用户确认的实际GPU-UUID'
+CFG="$V2_ROOT/operations.json"
+export V2_ROOT CANDIDATE_ID RUN_QWEN3 RUN_YI RUN_MISTRAL GPU_UUID CFG
+"$BASELINE_PY" -B - <<'PY'
+import os,re
+from pathlib import Path
+base=Path('/data/yuxiao/TomBaseline-data');root=Path(os.environ['V2_ROOT'])
+assert root.parent==base and not root.exists()
+assert not any(p.is_symlink() for p in (root,*root.parents))
+for name in ('CANDIDATE_ID','RUN_QWEN3','RUN_YI','RUN_MISTRAL'):
+    assert re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,79}',os.environ[name])
+assert len({os.environ[n] for n in ('RUN_QWEN3','RUN_YI','RUN_MISTRAL')})==3
+assert os.environ['GPU_UUID'].startswith('GPU-') and '填写' not in os.environ['GPU_UUID']
+root.mkdir()
+for name in ('cpu-cache','tmp','logs','results'):(root/name).mkdir()
+PY
+export CUDA_VISIBLE_DEVICES=''
+export HF_HOME="$V2_ROOT/cpu-cache/huggingface"
+export HF_HUB_CACHE="$V2_ROOT/cpu-cache/hub"
+export HF_MODULES_CACHE="$V2_ROOT/cpu-cache/modules"
+export XDG_CACHE_HOME="$V2_ROOT/cpu-cache/xdg"
+export TORCH_HOME="$V2_ROOT/cpu-cache/torch"
+export TMPDIR="$V2_ROOT/tmp"
+uns() { "$BASELINE_PY" -B -m werewolf.cli "$@"; }
+"$BASELINE_PY" -B - <<'PY'
+import os
+from pathlib import Path
+from copy import deepcopy
+from werewolf.artifact_io import canonical_json_bytes
+from werewolf.tom_llm.operations import load_config,anchor
+from werewolf.tom_llm.physical import read_receipt
+from werewolf.tom_llm.deployment import open_deployment,profile
+from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+from werewolf.tom_llm.task import SET_VERSION
+from werewolf.tom_llm.model_spec import ModelSpec
+base=Path('/data/yuxiao/TomBaseline-data');root=Path(os.environ['V2_ROOT'])
+names={'qwen3':'Qwen3-8B','yi':'Yi-1.5-9B-Chat-16K','mistral':'Mistral-7B-Instruct-v0.3'}
+science=('publication','prepared','evaluation','expected_reference','selection','expected_selection_json',
+         'selection_provenance_json','pre_reference_evidence','reconciliation_evidence')
+config=None
+for key,name in names.items():
+    old=load_config(base/(name+'.yaml'))
+    shared={field:old[field] for field in science}
+    if config is None:
+        config={**shared,'output_root':str(root/'experiments'),'task_version':SET_VERSION,
+                'protocol_version':APPROVED_PROTOCOL_VERSION,'models':{}}
+    else:assert all(config[field]==shared[field] for field in science)
+    item=old['models'][key]
+    dep=anchor(item['deployment'])
+    _,record=open_deployment(dep.path,dep.manifest_digest,current_source=False)
+    candidate=base/'multimodel'/key/os.environ['CANDIDATE_ID']
+    assert not candidate.exists()
+    p=record['profile']
+    new={'candidate_root':str(candidate),'cpu_root':str(root/'cpu'/key),
+         'model_directory':record['model']['directory'],'environment_prefix':p['environment_prefix'],
+         'prior_audit_digest':record['environment']['prior_audit_digest'],
+         'tokenizer_assets':str(Path('/data/yuxiao/models/tokenizer-assets')/key),
+         'gpu_uuid':os.environ['GPU_UUID']}
+    assert new['model_directory']==item['model_directory']
+    assert new['environment_prefix']==item['environment_prefix']
+    assert new['model_directory'].startswith('/data/yuxiao/models/')
+    assert Path(new['tokenizer_assets']).is_dir()
+    for field,kind,payload in (('assets','model','model'),('environment','environment','environment')):
+        receipt=anchor(item[field])
+        assert read_receipt(receipt.path,kind,receipt.manifest_digest)==record[payload]
+        new[field]=deepcopy(item[field])
+    profile(ModelSpec(key),gpu_uuid=new['gpu_uuid'],candidate_root=candidate,
+            model_directory=new['model_directory'],environment_prefix=new['environment_prefix'])
+    config['models'][key]=new
+path=Path(os.environ['CFG'])
+with path.open('xb') as stream:stream.write(canonical_json_bytes(config))
+print(path)
+PY
+for MODEL in qwen3 yi mistral; do
+  uns tom-llm --config "$CFG" prepare --stage tokenizer --models "$MODEL" \
+    | tee "$V2_ROOT/results/tokenizer-$MODEL.json"
+done
+uns tom-llm --config "$CFG" prepare --stage cohort --save-config \
+  | tee "$V2_ROOT/results/cohort.json"
+for MODEL in qwen3 yi mistral; do
+  uns tom-llm --config "$CFG" prepare --stage suite --models "$MODEL" --save-config \
+    | tee "$V2_ROOT/results/suite-$MODEL.json"
+  uns tom-llm --config "$CFG" prepare --stage budget --models "$MODEL" --games 150 --save-config \
+    | tee "$V2_ROOT/results/budget-$MODEL.json"
+done
+"$BASELINE_PY" -B - <<'PY'
+import json,os
+from werewolf.tom_llm.operations import load_config
+from werewolf.tom_llm.qualification_inputs import synthetic_tasks,open_suite,open_budget,budget_matrix
+from werewolf.tom_llm.task import SET_VERSION,task_binding
+from werewolf.tom_llm.common import digest
+from werewolf.tom_llm.multimodel import source_identity,read_cohort
+from werewolf.tom_llm.model_spec import ModelSpec
+from werewolf.tom_llm.experiment import FORMAL_PUBLIC_ROWS_DIGEST,protocol,APPROVED_PROTOCOL_VERSION
+c=load_config(os.environ['CFG']);source=source_identity();reports={}
+assert source['source_inventory_clean']
+cohort,tasks=read_cohort(c['cohort']['path'],c['cohort']['digest'],current_source=True)
+assert len(tasks)==10714 and len(cohort.manifest['selection']['game_ids'])==150
+assert cohort.manifest['row_identity_digest']==FORMAL_PUBLIC_ROWS_DIGEST
+assert cohort.manifest['reference']==protocol(SET_VERSION,protocol_version=APPROVED_PROTOCOL_VERSION)['fixed_oof']['reference']
+for key,item in c['models'].items():
+    with open(os.path.join(os.environ['V2_ROOT'],'results','tokenizer-'+key+'.json')) as stream:parity=json.load(stream)[key]['tokenizer']
+    assert parity['status']=='CPU_PARITY_PASS' and parity['task']==task_binding(SET_VERSION)
+    assert parity['task_sequence_digest']==digest(synthetic_tasks(version=SET_VERSION))
+    s=item['suite'];open_suite(s['path'],ModelSpec(key),s['digest'],task_schema_version=SET_VERSION,expected_source=source)
+    b=item['budget'];reports[key]=open_budget(b['path'],ModelSpec(key),b['digest'],task_schema_version=SET_VERSION,expected_source=source)
+print(json.dumps(budget_matrix(reports),sort_keys=True))
+PY
+```
+
+成功判据：每模型 12 条真实 V2 原生模板 Token IDs Parity；新集合 Task/Prompt/System 绑定完整；三个 Suite 各含 12 cases/38 calls 的资格日程；每个 Budget 覆盖同一 10,714 行/150 局，最大输入 ≤7,680、输出预留 512、上下文 8,192。逐行 IDs 比较用于 Parity/预算验证；Budget 持久化长度序列和统计，不声称存储全部 Token IDs。缺资产、缺行、超预算立即阻断，不筛行、不截断、不继承 V1 预算。
+
+本阶段写入白名单：新 `$CFG` 及其原子保存临时文件、`$V2_ROOT/{cpu-cache,tmp,results}`、`$V2_ROOT/experiments/cohort`、`$V2_ROOT/cpu/<model>/{suite,budget}`。官方 Tokenizer 加载及 Python 依赖可能创建 HF/XDG 缓存和临时文件，全部定向到上述新根。`-B`/`PYTHONDONTWRITEBYTECODE=1` 禁止源码字节码；离线选项禁止下载。不安装依赖、不修改历史 YAML、权重或 Conda 环境。若旧配置缺少已封存 Receipt 或字段不一致，停止，报告实际缺项，不虚构 Digest 或重写历史。
+
+### C. 同源新 Deployment，沿用模型和环境
+
+前提：B 全部通过，三个新 Candidate 不存在，旧模型/环境与读取的 Receipt 字节一致。
+
+```bash
+for MODEL in qwen3 yi mistral; do
+  uns tom-llm --config "$CFG" prepare --stage model --models "$MODEL" --save-config \
+    | tee "$V2_ROOT/results/deployment-$MODEL.json"
+done
+```
+
+写入：`/data/yuxiao/TomBaseline-data/multimodel/<model>/$CANDIDATE_ID/deployment` 和新 `$CFG`；使用 B 已生成的 Suite/Budget 与历史 assets/environment Receipt，不重新下载、上传或训练模型。既有严格物理检查仍会流式读取权重 SHA、核验环境版本和关键源码，属于 CPU/I/O，不加载模型张量；不能用 Receipt 存在替代当前物理一致性。成功判据：三个新 Deployment 的 Task/Source 与同源 Cohort/Suite/Budget 一致，`physical_gpu_admission=false`。此时尚不具备 GPU 资格。
+
+### D. 两个不同服务实例的 GPU Qualification 与 Admission
+
+前提：用户已独立批准实际 GPU 操作，设备及端口由现有 Manager 核验为空闲；三个模型串行使用原服务参数。下面整段一次只执行一个模型，分别令 `MODEL=qwen3`、`MODEL=yi`、`MODEL=mistral`，每次核查成功后再继续。不能在一个实例重复两轮。
+
+```bash
+MODEL=qwen3
+uns tom-llm --config "$CFG" serve start --purpose qualification --model "$MODEL" --execute-live
+uns tom-llm --config "$CFG" qualify --model "$MODEL" --round 0 --execute-live \
+  | tee "$V2_ROOT/results/qualification-$MODEL-round-0.json"
+uns tom-llm --config "$CFG" serve stop --purpose qualification --model "$MODEL" --execute-live
+uns tom-llm --config "$CFG" serve start --purpose qualification --model "$MODEL" --execute-live
+uns tom-llm --config "$CFG" qualify --model "$MODEL" --round 1 --execute-live \
+  | tee "$V2_ROOT/results/qualification-$MODEL-round-1.json"
+uns tom-llm --config "$CFG" serve stop --purpose qualification --model "$MODEL" --execute-live
+uns tom-llm --config "$CFG" admit --models "$MODEL" --save-config \
+  | tee "$V2_ROOT/results/admission-$MODEL.json"
+```
+
+写入：各新 Candidate 的 `service-control` 日志/所有权状态、`cache`、`tmp`、`qualification/engine`、`qualification/round-{0,1}`、`qualification/admission`；GPU Manager 还使用历史独立基线根 `/data/yuxiao/tom-llm-reasoner-b2/baseline-gpu.lock` 和本模型父目录 `/data/yuxiao/TomBaseline-data/multimodel/<model>` 内的短 RPC socket。`profile.environment_requirements` 给出精确缓存路径，由 Manager 创建；不写权重或环境。成功判据：每轮 38 calls 完整封存、实际新集合 Schema 合法、采样/原生 Token IDs/数值/显存审计通过；两轮进程生命身份不同；新 Admission 绑定此 Deployment 与两个 Round Seal。V1 Admission 或 CPU/Mock Artifact 均不能通过。任一轮失败或结果未知，保留证据，停止，不重发、不删除 Round、不伪造资格。
+
+### E. 三个独立正式 Run 的 Contract 和 Permit
+
+前提：三模型 D 全部通过，Source 未变。三个 Run 共用一个 Cohort，各自只含一个模型；新 ID 不复用历史三 Run。准备合同是 CPU/服务器写入，Permit 仍会核验真实 Admission、环境、模型及 Budget，不产生推理。
+
+```bash
+for MODEL in qwen3 yi mistral; do
+  case "$MODEL" in
+    qwen3) RUN_ID="$RUN_QWEN3" ;;
+    yi) RUN_ID="$RUN_YI" ;;
+    mistral) RUN_ID="$RUN_MISTRAL" ;;
+  esac
+  uns tom-llm --config "$CFG" prepare --stage run --models "$MODEL" \
+    --run-id "$RUN_ID" --games 150 --mode formal \
+    | tee "$V2_ROOT/results/contract-$MODEL.json"
+  uns tom-llm --config "$CFG" prepare --stage permit --models "$MODEL" --run-id "$RUN_ID" \
+    | tee "$V2_ROOT/results/permit-$MODEL.json"
+done
+```
+
+写入：`$V2_ROOT/experiments/<RunID>/contract` 和 `models/<model>/permit/{permit.json,vllm.yaml,chat_template.jinja}`，以及命令结果目录。成功判据：正式 150 局、10,714 请求、固定科学行摘要 `8fd129c892d9657ed429d984c83acc278792637a5e96e06eb9c148f3b98e80c8`；研究协议摘要不变；Source v3 与 Qualification Source v2 来自同一干净提交，共享文件逐字节匹配；Permit 绑定准确的模型、Run、Source、Task、Admission 和同一个 Budget Manifest/路径。合同的执行绑定不授予资格，Permit 缺失仍不得启动。
+
+### F. 串行启动、进度、停止与恢复
+
+前提：用户已明确批准正式推理，E 全部通过。一次只运行一个模型；下列示例先 Qwen3，再显式替换为 Yi/Mistral 及对应 Run ID。
+
+```bash
+MODEL=qwen3
+RUN_ID="$RUN_QWEN3"
+uns tom-llm --config "$CFG" run --models "$MODEL" --run-id "$RUN_ID" \
+  --execute-live --manage-services | tee "$V2_ROOT/logs/run-$MODEL.json"
+```
+
+该命令前台运行，由原 Manager 管理服务并在正常退出路径停止自身服务。可在第二个 Bash 使用相同变量查看进度（仅用户在已授权独占服务器资源上执行）：
+
+```bash
+uns tom-llm --config "$CFG" status --models "$MODEL" --run-id "$RUN_ID"
+uns tom-llm --config "$CFG" serve logs --purpose run --model "$MODEL" --run-id "$RUN_ID" --lines 100
+uns tom-llm --config "$CFG" serve status --purpose run --model "$MODEL" --run-id "$RUN_ID"
+```
+
+`status`/`serve status` 的既有实现也读取 GPU occupancy；不是只读取请求数。若只需请求进度且不做 GPU 枚举，用既有底层 CPU status（不写 Run）：
+
+```bash
+export RUN_ID
+"$BASELINE_PY" -B - <<'PY'
+import json,os
+from pathlib import Path
+from werewolf.tom_llm.live_runner import status
+print(json.dumps(status(Path(os.environ['V2_ROOT'])/'experiments'/os.environ['RUN_ID']),sort_keys=True))
+PY
+```
+
+人工需要中止时，先在前台控制终端用一次 Ctrl-C 停止控制器，再核对服务状态；若自身服务仍运行，才执行：
+
+```bash
+uns tom-llm --config "$CFG" serve stop --purpose run --model "$MODEL" --run-id "$RUN_ID" --execute-live
+```
+
+原 Manager 只对已记录的自身进程、匹配生命身份使用 SIGTERM；超时或身份不明时停止，不强杀、不接管其他进程。已有请求可能正在执行，手动停止不保证可恢复。出现 `unknown`、未配对 dispatch、`launch_incomplete`、`pending_launch` 或所有权异常时，禁止自动恢复或手工删除文件；先保全证据，单独审查。仅当已有检查证明未执行或已完整收到响应、没有未知请求、Permit/Source/预算均不变时，才能显式恢复同一 Run：
+
+```bash
+uns tom-llm --config "$CFG" run --models "$MODEL" --run-id "$RUN_ID" \
+  --execute-live --manage-services --resume | tee "$V2_ROOT/logs/resume-$MODEL.json"
+```
+
+写入：Run 内 `execution.lock`、`models/<model>/{service,requests,sessions,seal}`、Run Seal 及控制日志；service 的所有缓存位于该 Run 的 service 根，短 RPC socket 仍位于已绑定模型父目录。有效与非法模型输出都占正式请求位置；未知结果不造 fallback，不补发。成功判据：每模型 completed_requests=10,714、blocked_requests=0、errors 为空、Prediction Seal 和 Run Seal 均通过读取链；不以 HTTP 成功或进度文件存在替代封存验收。
+
+### G. 三个 Run Seal 核验与跨 Run Set-F1 报告
+
+前提：三个 Run 独立完整封存。下面先通过既有读取链获得实际 Seal 摘要并输出；须与运行完成时保存的可信结果摘要相等后，再传给分析 CLI。不能只从目录名或新算一个未经锚定的值宣称已核验。
+
+```bash
+"$BASELINE_PY" -B - <<'PY'
+import os,json
+from pathlib import Path
+from werewolf.tom_llm.baseline_analysis import sealed_inputs
+from werewolf.tom_llm.common import strict_json
+root=Path(os.environ['V2_ROOT'])
+for key,var in [('qwen3','RUN_QWEN3'),('yi','RUN_YI'),('mistral','RUN_MISTRAL')]:
+    completed=strict_json((root/'logs'/('run-'+key+'.json')).read_bytes())
+    assert set(completed)=={'path','digest'}
+    _,run,tasks,seal,rows,_=sealed_inputs(root/'experiments'/os.environ[var],completed['digest'])
+    assert set(run['models'])=={key} and run['mode']=='formal' and len(tasks)==10714
+    assert len(rows[key])==10714 and run['game_count']==150
+    print(json.dumps({'model':key,'run':run['run_id'],'run_seal':seal.manifest_digest},sort_keys=True))
+PY
+QWEN3_SEAL='填写上一步与可信运行记录核对后的实际摘要'
+YI_SEAL='填写上一步与可信运行记录核对后的实际摘要'
+MISTRAL_SEAL='填写上一步与可信运行记录核对后的实际摘要'
+uns tom-llm --config "$CFG" report --output "$V2_ROOT/cross-run-analysis" \
+  --sealed-run "qwen3=$V2_ROOT/experiments/$RUN_QWEN3" --sealed-run-digest "qwen3=$QWEN3_SEAL" \
+  --sealed-run "yi=$V2_ROOT/experiments/$RUN_YI" --sealed-run-digest "yi=$YI_SEAL" \
+  --sealed-run "mistral=$V2_ROOT/experiments/$RUN_MISTRAL" --sealed-run-digest "mistral=$MISTRAL_SEAL" \
+  | tee "$V2_ROOT/results/cross-run-analysis.json"
+```
+
+若曾恢复运行，`run-<model>.json` 可能是中止的空/部分输出；应改为读取实际成功封存那次命令的可信输出（例如 `resume-<model>.json`），不要覆盖、拼接或伪造旧日志。若返回的是已封存 Run 的 status 而非新 Seal 引用，使用此前成功封存时保存的外部锚点，不能将 status 当 Seal。
+
+分析仅写新 `$V2_ROOT/cross-run-analysis`，其父目录允许短期 `.report-cache-*` 绘图缓存；不产生聚合模型 Run Seal。成功判据：三独立单模型 Seal、相同 Source/Task/协议/Cohort/Reference/Selection/科学行与请求顺序；Full/NU 同分母、游戏等权，Full 10 对、NU 15 对及既定比较层级；固定 OOF 合同通过；实际核对 Full 7,480/150、NU 5,502/150 和 10,000 次配对 Bootstrap。报告给出 Set-F1、其他集合指标及补充概率指标，保留两个确定性派生基线的 `model_run_seal:null`。不改变历史三个概率结果，不把本次已观察 150 局的方法比较表述为独立泛化或因果效应。
+
+全流程计算量：CPU Parity 每模型 12 条；完整 Budget 每模型 10,714 条分词，共 32,142 条；物理 Qualification 每模型两实例共 76 calls，三模型 228 calls；正式预测每模型 10,714 条，共 32,142 条。墙钟时间取决于真实 Tokenizer、磁盘、模型及 GPU；本地 Mock 结果不能估算真实吞吐或授予任何物理资格。
+
+### 本轮 Mac CPU/Mock 验收与保护记录
+
+最终源码下，两组不重叠回归合计 **787 passed、54 skipped、0 failed**：三个入口/物理边界/端到端测试文件为 376 passed、39 skipped；其余 TomBaseline 与任务 A canonical Artifact 测试为 411 passed、15 skipped。此前整套 775 passed 后补齐的双向入口拒绝已在最终两组中覆盖，不能将多轮重复通过数相加。54 个跳过项中 48 项缺少显式提供的官方 Tokenizer 小资产，6 项缺少官方 vLLM 0.27 argparse 源文件；真实 CPU Parity、全量正式 Budget、物理 Qualification、Admission 和 GPU 推理均未在本轮运行。
+
+测试覆盖同源新 V2 输入、150/10,714 合同边界、获批协议、版本双向错配、dirty Source、缺行/多行/重复行、超预算、固定 OOF 锚点、缺失或 Fake 资格、Permit 缺失/错绑、旧 V1/Mock、三个独立 Run 与原始封存读取。物理边界的正例使用明确标记的合成 Source/Tokenizer/资源桩，不构成真实物理资格。运行命令使用 Mac 既有 `3wd` Python、`CUDA_VISIBLE_DEVICES=''`、`-B`、禁用 pytest cache/自动插件及离线模式；loopback/Unix socket 仅限本机 Mock。
+
+本轮修改范围为五个已审计入口、`baseline_analysis.py` 的执行状态/逐 Run 绑定透传、三个现有测试及本手册，共十文件。冻结科研协议函数、`CONTROL_FILES`、资格兼容算法经 AST 比较保持不变；Prompt、标签、投影、评分、Runner、模型注册表和 Admission 类型未修改。手册中 21 条 `uns tom-llm` 命令通过现有 CLI Parser 静态解析；11 段 Bash 与 6 段嵌入 Python 通过语法检查，没有执行服务器命令。
+
+核对本轮起点、已登记的受保护文件哈希和当前 640 个项目文件后，差异仅上述十文件；DTRS 三文件与 `AGENTS.md`、`docs/development-guidelines.md` 五项字节/工作区身份保持不变，任务 A 九文件未改。分支仍为 `twd/mainline`、HEAD 仍为 `094d0033d8839da6d3e9610381acd16652139f73`，暂存区为空，index SHA256 仍为 `5a5e4bf43269b7cbc06a6624e9dbec9a979e5e3eced474d385a492fa4098b013`。未 Commit、Push、SSH 或修改服务器；当前 Mac Source 仍 dirty，不是可执行的正式 Source。下一步等待用户审阅代码并授权明确白名单的提交/推送，服务器更新、CPU 资产核验和 GPU 全部由用户另行手动执行。
+
 ## 已批准的怀疑集合 V2 协议与本地 CPU 实现
 
-本节记录任务 B 本轮的受控实现。用户已批准科研方法和本地 CPU/Mock 实现，未批准 Git 提交、服务器写入、物理 Qualification 或正式 GPU 实验。下文第一阶段记录保留为历史快照；本节不重新评分历史三个 Direct-Probability Run。历史实验继续以各自 Contract/Seal 记录的 Source 为准，不能由当前开发 HEAD 推定。
+本节保留此前任务 B 协议与 CPU 实现阶段的历史记录；执行准备以本文件最前的新手册为准。下文不重新评分历史三个 Direct-Probability Run。历史实验继续以各自 Contract/Seal 记录的 Source 为准，不能由当前开发 HEAD 推定。
 
 ### 协议身份与数值合同
 

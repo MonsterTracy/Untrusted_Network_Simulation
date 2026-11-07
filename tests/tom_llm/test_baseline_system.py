@@ -33,6 +33,128 @@ from werewolf.tom_llm.output import parse_output
 from werewolf.tom_llm.provider_semantics import NotExecuted
 
 
+@pytest.fixture
+def live_set_plan(tmp_path,monkeypatch):
+    """仅模拟合同边界；保留 150/10714 规模，不提供物理资格。"""
+    from werewolf.tom_llm import qualification_inputs as qi,multimodel as mm
+    from werewolf.tom_llm.task import task_binding
+    from werewolf.tom_llm.common import identity
+    s2=deepcopy(mm.source_identity());s3=deepcopy(ex.source_v3())
+    for source in (s2,s3):
+        source.update(source_inventory_clean=True,source_status_digest=digest(''))
+    games=[f'UNIT-{i:03}' for i in range(150)]
+    tasks=[{'schema_version':SET_VERSION,'game_id':games[i%150],'boundary_id':f'UNIT-{i}',
+            'prefix_digest':digest(['prefix',i]),'plan_digest':digest(['plan',i]),
+            'observer':i%7,'fold':(i%150)//30} for i in range(10714)]
+    rows_digest=digest([identity(t) for t in tasks])
+    selection={'scope':'subset150','game_ids':games,
+               'folds':[{'game_ids':games[i*30:(i+1)*30]} for i in range(5)]}
+    selected=tmp_path/'selection';selected.mkdir()
+    (selected/'selection.json').write_bytes(canonical_json_bytes(selection))
+    common=tmp_path/'cohort';common.mkdir()
+    reference=ex.protocol(SET_VERSION,protocol_version=ex.APPROVED_PROTOCOL_VERSION)['fixed_oof']['reference']
+    manifest={'task':task_binding(SET_VERSION),'source':s2,'selection':selection,'selection_root':str(selected),
+              'reference':reference,'row_identity_digest':rows_digest}
+    cohort=NS(path=common,manifest_digest='c'*64,manifest=manifest)
+    budgets={k:{'path':str(tmp_path/k/'budget'),'digest':digest(['UNIT budget',k])}
+             for k in ('qwen3','yi','mistral')}
+    reports={k:{'cohort_digest':cohort.manifest_digest,'cohort_root':str(common),'request_count':len(tasks),
+                'row_identity_digest':rows_digest,'task':task_binding(SET_VERSION),'source':s2} for k in budgets}
+    monkeypatch.setattr(ex,'source_v3',lambda:s3)
+    monkeypatch.setattr(ex,'FORMAL_PUBLIC_ROWS_DIGEST',rows_digest)
+    monkeypatch.setattr(ex,'read_cohort',lambda *a,**kw:(cohort,tasks))
+    def read_budget(path,spec,expected,**kwargs):
+        assert kwargs=={'task_schema_version':SET_VERSION,'expected_source':s2}
+        assert str(path)==budgets[spec.key]['path'] and expected==budgets[spec.key]['digest']
+        return reports[spec.key]
+    monkeypatch.setattr(qi,'open_budget',read_budget)
+    arguments={'run_id':'UNIT-live','models':['qwen3'],'games':150,'mode':'formal',
+        'cohort_root':common,'expected_cohort':cohort.manifest_digest,'publication':tmp_path/'publication',
+        'evaluation':tmp_path/'evaluation','expected_reference':reference['seal_digest'],
+        'configuration':{'input_config':{'task_version':SET_VERSION,'protocol_version':ex.APPROVED_PROTOCOL_VERSION},
+                         'budgets':{'qwen3':budgets['qwen3']}}}
+    return NS(cohort=cohort,tasks=tasks,s2=s2,s3=s3,args=arguments,budgets=budgets,reports=reports)
+
+
+def test_live_set_contract_preserves_frozen_research_and_requires_separate_permit(live_set_plan,tmp_path,monkeypatch):
+    from werewolf.tom_llm import live_admission as live
+    p=live_set_plan;root=tmp_path/'UNIT-live'
+    ex.prepare_run(root,**p.args)
+    _,run,tasks=ex.open_run(root)
+    assert len(tasks)==10714 and len(run['games'])==150
+    assert digest(run['protocol'])=='e135168b1927c1542d7e0c991aaeb5fe9dc8814317b9316071dd1ffc655b71dc'
+    assert run['protocol']['status']=='RESEARCH_APPROVED_CPU_ONLY_FORMAL_EXECUTION_BLOCKED'
+    assert run['live_execution']['schema_version']==ex.LIVE_SET_VERSION
+    assert run['live_execution']['qualification_source_digest']==digest(p.s2)
+    assert run['live_execution']['budget_manifests']=={'qwen3':p.budgets['qwen3']['digest']}
+    with pytest.raises(ValueError):
+        live.open_permit(root,'qwen3','a'*64,physical=False)
+    monkeypatch.setattr(live,'sys',NS(platform='linux'))
+    monkeypatch.setattr(live,'baseline_root',lambda *_:None)
+    monkeypatch.setattr(live,'load_cpu_tokenizer',lambda *a:pytest.fail('missing qualification must stop before tokenizer'))
+    with pytest.raises(ValueError):
+        live.publish_permit(root,'qwen3',qualification=tmp_path/'missing',expected_qualification='a'*64,
+                            tokenizer_assets=tmp_path/'tokens',budget_root=p.budgets['qwen3']['path'])
+    fake=ex.publish_record(tmp_path/'fake-admission','llm_multimodel_mock_contract',{'UNIT_ONLY':True})
+    with pytest.raises(ValueError):
+        live.publish_permit(root,'qwen3',qualification=fake.path,expected_qualification=fake.manifest_digest,
+                            tokenizer_assets=tmp_path/'tokens',budget_root=p.budgets['qwen3']['path'])
+    assert not (root/'models/qwen3/permit').exists()
+    changed=deepcopy(run);changed.pop('live_execution')
+    ex.publish_record(tmp_path/'bad-live/contract','mm_baseline_experiment',changed)
+    with pytest.raises(ValueError,match='execution binding'):ex.open_run(tmp_path/'bad-live')
+
+
+@pytest.mark.parametrize('change',['protocol','task','run_dirty','cohort_dirty','revision','inventory','reference',
+                                  'missing_row','extra_row','duplicate_row','row_digest','missing_budget','budget_cohort'])
+def test_live_set_contract_rejects_invalid_inputs_before_publication(live_set_plan,tmp_path,change):
+    p=live_set_plan
+    if change=='protocol':p.args['configuration']['input_config'].pop('protocol_version')
+    elif change=='task':p.args['configuration']['input_config']['task_version']='classic7_llm_shared_public_task_v1'
+    elif change=='run_dirty':p.s3['source_inventory_clean']=False
+    elif change=='cohort_dirty':p.s2['source_inventory_clean']=False
+    elif change=='revision':p.s2['source_revision']='f'*40
+    elif change=='inventory':
+        p.s2['file_digests']['werewolf/tom_llm/output.py']='f'*64
+        p.s2['implementation_digest']=digest(p.s2['file_digests'])
+    elif change=='reference':p.cohort.manifest['reference']={**p.cohort.manifest['reference'],'scope':'UNIT-wrong'}
+    elif change=='missing_row':p.tasks.pop()
+    elif change=='extra_row':p.tasks.append(deepcopy(p.tasks[-1]))
+    elif change=='duplicate_row':p.tasks[-1]=deepcopy(p.tasks[0])
+    elif change=='row_digest':p.cohort.manifest['row_identity_digest']='f'*64
+    elif change=='missing_budget':p.args['configuration']['budgets']={}
+    elif change=='budget_cohort':p.reports['qwen3']['cohort_digest']='f'*64
+    destination=tmp_path/'refused'
+    with pytest.raises(ValueError):ex.prepare_run(destination,**p.args)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize('cohort',[SET_VERSION],indirect=True)
+def test_formal_set_report_metadata_needs_live_binding_without_changing_scores(study,fake_http,monkeypatch):
+    """只检查报告元数据；合成输入不发布正式分析或物理资格。"""
+    from werewolf.tom_llm import baseline_analysis as analysis
+    root,tasks,ref=study;endpoint,_=fake_http
+    runner.run_model(root,'qwen3',runner.HttpTransport(endpoint))
+    _,run,_=ex.open_run(root)
+    run=deepcopy(run);run.update(mode='formal',models={'qwen3':run['models']['qwen3']},model_order=['qwen3'])
+    run['source']['source_inventory_clean']=True
+    run['protocol']=ex.protocol(SET_VERSION,protocol_version=ex.APPROVED_PROTOCOL_VERSION)
+    predictions={'qwen3':runner.read_predictions(root,'qwen3')[1]}
+    calls=[]
+    def compare(*args,**kwargs):
+        calls.append(kwargs)
+        return {'formal_result':False,'physical_qualification':False,'UNIT_SCORES_UNCHANGED':[.25,.75]}
+    monkeypatch.setattr(analysis,'compare_sets',compare)
+    with pytest.raises(ValueError,match='live execution binding'):analysis.compute(ref,run,tasks,predictions)
+    run['live_execution']={'UNIT_ONLY':'not_a_physical_qualification'}
+    result=analysis.compute(ref,run,tasks,predictions)
+    assert result['sets']['formal_result'] is True and result['sets']['physical_qualification'] is True
+    assert result['sets']['UNIT_SCORES_UNCHANGED']==[.25,.75]
+    assert calls[-1]['approved'] is True and calls[-1]['engineering_only'] is False
+    assert result['live_execution']==run['live_execution']
+    assert not (root/'analysis').exists() and not (root/'seal').exists()
+
+
 @pytest.mark.parametrize('cohort',[SET_VERSION],indirect=True)
 @pytest.mark.parametrize('sealed_reference',[empty_and_full_reports],indirect=True)
 def test_approved_three_independent_runs_use_existing_seals_and_uns_report(cohort,sealed_reference,fake_http,tmp_path):
@@ -237,7 +359,7 @@ def test_set_baseline_uses_existing_runner_seals_and_analysis(cohort,sealed_refe
     target.write_bytes(target.read_bytes()+b'\n')
     with pytest.raises(ValueError):
         runner.read_predictions(root,'qwen3')
-    with pytest.raises(ValueError,match='independent development'):
+    with pytest.raises(ValueError,match='complete frozen 150'):
         ex.prepare_run(tmp_path/'not-admitted',run_id='test-run',models=['qwen3'],games=5,mode='formal',
             cohort_root=cohort[0].path,expected_cohort=cohort[0].manifest_digest,publication=publication.path,
             evaluation=evaluation,expected_reference=ref.seal_digest)
@@ -597,7 +719,8 @@ def test_cli_prepare_reuses_real_readers_and_existing_selection(study,cohort,sea
 @pytest.mark.parametrize('mode',['formal','technical'])
 @pytest.mark.parametrize('key',['qwen3','yi','mistral'])
 @pytest.mark.parametrize('domain',['historical','new'])
-def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tmp_path,monkeypatch,mode,key,domain):
+@pytest.mark.parametrize('version',['classic7_llm_shared_public_task_v1',SET_VERSION])
+def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tmp_path,monkeypatch,mode,key,domain,version):
     """Unit-only physical boundary stubs: this artifact is not real Admission."""
     from werewolf.tom_llm import live_admission as admission
     historical=tmp_path/'historical';new=tmp_path/'TomBaseline-data'
@@ -606,17 +729,32 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     contract=NS(manifest_digest='a'*64)
     run={'mode':mode,'source':source,'models':{key:spec.digest},'cohort_digest':'c'*64}
     budget={'cohort_digest':run['cohort_digest']};qualified={'budget':budget,'upstream_receipts':{'budget':'b'*64},'source':source}
+    if version==SET_VERSION:
+        from werewolf.tom_llm.multimodel import source_identity
+        from werewolf.tom_llm.task import task_binding
+        qualified['source']={**source_identity(),'source_inventory_clean':True,'source_status_digest':digest('')}
+        budget.update(task=task_binding(version),source=qualified['source'])
+        run.update(live_execution={'qualification_source_digest':digest(qualified['source']),
+                                  'budget_manifests':{key:'b'*64}},
+                   configuration={'budgets':{key:{'path':str(tmp_path/'budget'),'digest':'b'*64}}})
     from werewolf.tom_llm import deployment
     monkeypatch.setattr(deployment,'qualification_compatibility',lambda s:{'UNIT_ONLY':digest(s)})
     profile={'argv_options':{'UNIT_ONLY':'not_a_real_vllm_config'}};observed=[]
     monkeypatch.setattr(admission,'sys',NS(platform='linux'))
     monkeypatch.setattr(deployment,'BASE',historical);monkeypatch.setattr(deployment,'EXPERIMENT_BASE',new)
-    monkeypatch.setattr(admission,'open_run',lambda *a,**kw:(contract,run,[]))
+    from werewolf.tom_llm.qualification_inputs import synthetic_tasks
+    monkeypatch.setattr(admission,'open_run',lambda *a,**kw:(contract,run,synthetic_tasks(version=version)[:1]))
     monkeypatch.setattr(admission,'source_v3',lambda:source)
-    def physical_check(path,expected,model):
+    def physical_check(path,expected,model,**kwargs):
+        assert kwargs['task_schema_version']==version
         observed.append((path,expected,model.key));return qualified
     monkeypatch.setattr(admission,'qualified_offline',physical_check)
-    monkeypatch.setattr(admission,'open_budget',lambda path,model,expected:budget if expected=='b'*64 else None)
+    def budget_check(path,model,expected,**kwargs):
+        if version==SET_VERSION:
+            assert kwargs=={'task_schema_version':version,'expected_source':qualified['source']}
+        else:assert not kwargs
+        return budget if expected=='b'*64 else None
+    monkeypatch.setattr(admission,'open_budget',budget_check)
     monkeypatch.setattr(admission,'load_cpu_tokenizer',lambda *a:object())
     monkeypatch.setattr(admission,'service_profile',lambda *a:profile)
     monkeypatch.setattr(admission,'qualification_runtime',lambda *a:{'driver':'UNIT_DRIVER','kernel':'UNIT_KERNEL'})
@@ -625,12 +763,23 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     artifact=admission.publish_permit(root,key,**args)
     assert set(artifact.manifest['file_table'])=={'permit.json','vllm.yaml','chat_template.jinja'}
     _,record=admission.open_permit(root,key,artifact.manifest_digest)
-    assert set(record)=={'run_root','run_digest','model','model_spec_digest','source','qualified_runtime','profile',
+    fields={'run_root','run_digest','model','model_spec_digest','source','qualified_runtime','profile',
         'qualification_root','qualification_digest','budget_root','tokenizer_assets','evidence_kind','qualification_compatibility'}
+    assert set(record)==fields|({'task'} if version==SET_VERSION else set())
     assert record['run_digest']==contract.manifest_digest and record['model_spec_digest']==spec.digest
     assert record['source']==source and record['qualification_digest']=='d'*64 and record['profile']==profile
     assert record['evidence_kind']=='physical_execution_binding'
     assert observed==[(args['qualification'],'d'*64,key),(str(args['qualification']),'d'*64,key)]
+    if version==SET_VERSION:
+        assert record['task']==budget['task']
+        run['live_execution']['budget_manifests'][key]='e'*64
+        with pytest.raises(ValueError,match='qualified Source/budget'):
+            admission.open_permit(root,key,artifact.manifest_digest)
+        run['live_execution']['budget_manifests'][key]='b'*64
+        run['configuration']['budgets'][key]['path']=str(tmp_path/'foreign')
+        with pytest.raises(ValueError,match='budget path'):
+            admission.open_permit(root,key,artifact.manifest_digest,physical=False)
+        run['configuration']['budgets'][key]['path']=str(tmp_path/'budget')
     assert not any(hasattr(admission,name) for name in ('approval_fields','active_qualification','technical_evidence'))
     with pytest.raises(ValueError,match='anchor'):
         admission.open_permit(root,key,'e'*64)
@@ -641,7 +790,7 @@ def test_permit_binds_sealed_qualification_without_previous_run_or_human_file(tm
     with pytest.raises(ValueError,match='committed'):
         admission.publish_permit(root.parent/'dirty-run',key,**args)
     source['source_inventory_clean']=True
-    def invalid_qualification(*args):raise ValueError('sealed physical qualification rejected')
+    def invalid_qualification(*args,**kwargs):raise ValueError('sealed physical qualification rejected')
     monkeypatch.setattr(admission,'qualified_offline',invalid_qualification)
     with pytest.raises(ValueError,match='sealed physical'):
         admission.publish_permit(root.parent/'invalid-physical-run',key,**args)

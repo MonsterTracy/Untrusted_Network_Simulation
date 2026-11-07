@@ -29,6 +29,10 @@ def synthetic_tasks(*, version=TASK_VERSION):
 
 def build_suite(spec, tokenizer_assets, *, task_schema_version=TASK_VERSION):
     task_binding(task_schema_version)
+    source=None
+    if task_schema_version==SET_VERSION:
+        from werewolf.tom_llm.multimodel import source_identity
+        source=source_identity()
     tokenizer = load_cpu_tokenizer(spec,tokenizer_assets)
     tasks = synthetic_tasks(version=task_schema_version); cases = []
     for i,task in enumerate(tasks):
@@ -42,17 +46,19 @@ def build_suite(spec, tokenizer_assets, *, task_schema_version=TASK_VERSION):
              'key':spec.key,'legacy_public_suite_sha256':LEGACY_SHA,'cases':cases,'schedule':SCHEDULE,
              'vocabulary_size':len(tokenizer),'cpu_native_tokenizer_verified':True}
     if task_schema_version==SET_VERSION:
-        suite.update(schema_version=SET_SUITE_VERSION,task=task_binding(SET_VERSION))
+        require(source_identity()==source,'Source changed during V2 Suite preparation')
+        suite.update(schema_version=SET_SUITE_VERSION,task=task_binding(SET_VERSION),source=source)
     validate_suite(suite,spec)
     return suite
 
 
-def validate_suite(suite,spec):
+def validate_suite(suite,spec, *, expected_source=None):
     is_set = suite.get('schema_version')==SET_SUITE_VERSION
     version = SET_VERSION if is_set else TASK_VERSION
     fields = {'schema_version','purpose','model_spec_digest','key','legacy_public_suite_sha256',
               'cases','schedule','vocabulary_size','cpu_native_tokenizer_verified'}
     if is_set: fields.add('task')
+    if is_set and 'source' in suite: fields.add('source')
     require(set(suite)==fields and
             suite['schema_version'] in (VERSION,SET_SUITE_VERSION) and suite['purpose']=='synthetic_gpu_qualification_only'
             and suite['model_spec_digest']==spec.digest and suite['key']==spec.key
@@ -60,6 +66,11 @@ def validate_suite(suite,spec):
             and suite['cpu_native_tokenizer_verified'] is True and type(suite['vocabulary_size']) is int
             and suite['vocabulary_size']>0 and len(suite['cases'])==12, 'model native suite identity drift')
     if is_set: require(suite['task']==task_binding(SET_VERSION), 'set suite task binding drift')
+    if 'source' in suite:
+        from werewolf.tom_llm.deployment import validate_source_evidence
+        validate_source_evidence(suite['source'])
+    if expected_source is not None:
+        require(is_set and suite.get('source')==expected_source, 'set suite Source binding drift')
     for i,(case,task) in enumerate(zip(suite['cases'],synthetic_tasks(version=version),strict=True)):
         require(set(case)=={'case_index','task','input_ids','wire_digest','rendered_sha256'}
                 and case['case_index']==i and case['task']==task
@@ -82,19 +93,19 @@ def publish_suite(destination,spec,tokenizer_assets, *, task_schema_version=TASK
         files={'suite.json':canonical_json_bytes(suite)})
 
 
-def open_suite(root,spec,expected_digest, *, task_schema_version=None):
+def open_suite(root,spec,expected_digest, *, task_schema_version=None,expected_source=None):
     require_digest(expected_digest)
     schema = strict_json((Path(root)/'manifest.json').read_bytes())['schema_version']
     require(schema in (VERSION,SET_SUITE_VERSION), 'unknown native suite schema')
+    if task_schema_version is not None:
+        task_binding(task_schema_version)
+        actual = SET_VERSION if schema==SET_SUITE_VERSION else TASK_VERSION
+        require(actual==task_schema_version, 'configured/native suite task protocol mismatch')
     a = verify_artifact(root,expected_artifact_type='mm_native_suite',expected_schema_version=schema)
     require(a.manifest_digest==expected_digest and set(a.manifest['file_table'])=={'suite.json'}
             and a.manifest['model_spec_digest']==spec.digest, 'native suite artifact drift')
-    suite = validate_suite(strict_json((a.path/'suite.json').read_bytes()),spec)
+    suite = validate_suite(strict_json((a.path/'suite.json').read_bytes()),spec,expected_source=expected_source)
     require(digest(suite)==a.manifest['suite_digest'] and suite['schema_version']==a.manifest['schema_version'], 'native suite payload drift')
-    if task_schema_version is not None:
-        task_binding(task_schema_version)
-        actual = SET_VERSION if suite['schema_version']==SET_SUITE_VERSION else TASK_VERSION
-        require(actual==task_schema_version, 'configured/native suite task protocol mismatch')
     return suite
 
 
@@ -124,16 +135,26 @@ def publish_budget(destination,cohort_root,expected_cohort,spec,tokenizer_assets
     folds = {}
     for task in tasks:folds.setdefault(task['fold'],set()).add(task['game_id'])
     require(set(folds)==set(range(5)) and all(len(g)==30 for g in folds.values()), 'fixed 30 games/fold required')
+    is_set=cohort.manifest['task']['schema_version']==SET_VERSION
+    if is_set:
+        from werewolf.tom_llm.multimodel import source_identity
+        from werewolf.tom_llm.experiment import FORMAL_PUBLIC_REQUESTS,FORMAL_PUBLIC_ROWS_DIGEST
+        require(cohort.manifest['source']==source_identity(), 'V2 Budget requires the current Cohort Source')
+        require(len(tasks)==FORMAL_PUBLIC_REQUESTS and cohort.manifest['row_identity_digest']==FORMAL_PUBLIC_ROWS_DIGEST,
+                'V2 Budget requires the complete frozen 10714-row cohort')
     report = budget_record(tasks,spec,load_cpu_tokenizer(spec,tokenizer_assets))
     record = {'schema_version':VERSION+'_budget','model_spec_digest':spec.digest,
               'cohort_digest':cohort.manifest_digest,'cohort_root':str(cohort.path),
               'selection':selection,'reference':cohort.manifest['reference'],**report}
+    if is_set:
+        require(cohort.manifest['source']==source_identity(), 'Source changed during V2 Budget preparation')
+        record.update(task=cohort.manifest['task'],source=cohort.manifest['source'])
     return publish_artifact(destination,manifest_fields={'artifact_type':'mm_cpu_budget','schema_version':VERSION,
         'record_digest':digest(record),'model_spec_digest':spec.digest,'qualification':'CPU_BUDGET_ONLY'},
         files={'budget.json':canonical_json_bytes(record)})
 
 
-def open_budget(root,spec,expected_digest):
+def open_budget(root,spec,expected_digest, *, task_schema_version=None,expected_source=None):
     from werewolf.tom_llm.multimodel import read_cohort
     require_digest(expected_digest)
     a = verify_artifact(root,expected_artifact_type='mm_cpu_budget',expected_schema_version=VERSION)
@@ -142,6 +163,21 @@ def open_budget(root,spec,expected_digest):
     require(record['model_spec_digest']==spec.digest and a.manifest['model_spec_digest']==spec.digest
             and digest(record)==a.manifest['record_digest'], 'CPU budget ModelSpec/payload drift')
     cohort,tasks = read_cohort(record['cohort_root'],record['cohort_digest'])
+    require(str(cohort.path)==record['cohort_root'], 'CPU budget cohort path drift')
+    if task_schema_version is not None:
+        require(cohort.manifest['task']==task_binding(task_schema_version), 'budget/cohort task protocol mismatch')
+    if 'task' in record:
+        require(record['task']==cohort.manifest['task'], 'CPU budget task binding drift')
+    if 'source' in record:
+        require(record['source']==cohort.manifest['source'], 'CPU budget Source binding drift')
+    if expected_source is not None:
+        from werewolf.tom_llm.experiment import FORMAL_PUBLIC_REQUESTS,FORMAL_PUBLIC_ROWS_DIGEST
+        require(cohort.manifest['task']==record.get('task')==task_binding(SET_VERSION)
+                and record.get('source')==cohort.manifest['source']==expected_source,
+                'set budget Source/task binding drift')
+        require(record['request_count']==FORMAL_PUBLIC_REQUESTS
+                and record['row_identity_digest']==FORMAL_PUBLIC_ROWS_DIGEST,
+                'V2 Budget requires the complete frozen 10714-row cohort')
     require(record['selection']==cohort.manifest['selection'] and record['reference']==cohort.manifest['reference']
             and len(record['selection']['game_ids'])==150 and record['request_count']==len(tasks)
             and record['row_identity_digest']==digest([identity(t) for t in tasks])

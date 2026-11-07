@@ -126,15 +126,19 @@ def prepare_inputs(c,key,stage):
             assets=item.get('tokenizer_assets')
             require(item.get('suite') or (assets and Path(assets).is_dir()), 'V2 suite BLOCKED: official local tokenizer assets required')
             a=anchor(item['suite']) if item.get('suite') else publish_suite(destination(),spec,assets,task_schema_version=version)
-            open_suite(a.path,spec,a.manifest_digest,task_schema_version=version)
+            from werewolf.tom_llm.multimodel import source_identity
+            open_suite(a.path,spec,a.manifest_digest,task_schema_version=version,expected_source=source_identity())
         else:
             a=anchor(item['suite']) if item.get('suite') else publish_suite(destination(),spec,item['tokenizer_assets'])
-            open_suite(a.path,spec,a.manifest_digest)
+            open_suite(a.path,spec,a.manifest_digest,task_schema_version=version)
         return {'suite':ref(a)}
     require(stage=='budget','unknown CPU preparation stage')
     cohort=anchor(c['cohort'])
     a=anchor(item['budget']) if item.get('budget') else publish_budget(destination(),cohort.path,cohort.manifest_digest,spec,item['tokenizer_assets'])
-    budget=open_budget(a.path,spec,a.manifest_digest)
+    if version==SET_VERSION:
+        from werewolf.tom_llm.multimodel import source_identity
+        budget=open_budget(a.path,spec,a.manifest_digest,task_schema_version=version,expected_source=source_identity())
+    else:budget=open_budget(a.path,spec,a.manifest_digest,task_schema_version=version)
     require(budget['cohort_digest']==cohort.manifest_digest,'configured budget belongs to another common cohort')
     summary={k:budget[k] for k in ('request_count','row_identity_digest','input_tokens_total','maximum_input_tokens','p50','p95','p99','context_length','output_cap')}
     return {'budget':ref(a),'token_budget':summary}
@@ -166,6 +170,13 @@ def check_environment_binding(item,profile):
                 'configured environment differs from sealed binding; new Deployment and GPU Admission required')
 
 
+def check_execution_task(c,record):
+    """旧 V1 缺省绑定保持 V1，禁止配置借用另一任务的物理证据。"""
+    from werewolf.tom_llm.task import VERSION as TASK_VERSION,task_binding
+    require(record.get('task',task_binding(TASK_VERSION))==task_binding(c.get('task_version',TASK_VERSION)),
+            'configured/qualified task protocol mismatch')
+
+
 def service(args,c,key):
     from werewolf.tom_llm.service_manager import Service
     if args.purpose=='qualification':
@@ -177,7 +188,9 @@ def service(args,c,key):
         manager=Service(root,key,p.manifest_digest)
     # Status/logs/stop must remain usable for an already owned historical service.
     if getattr(args,'operation',None)=='qualify' or getattr(args,'service_action',None)=='start':
-        check_environment_binding(c['models'][key],manager.binding()[1]['profile'])
+        record=manager.binding()[1]
+        check_environment_binding(c['models'][key],record['profile'])
+        check_execution_task(c,record)
     return manager
 
 
@@ -187,13 +200,23 @@ def prepare_model(c,key):
     from werewolf.tom_llm.live_admission import capture_bound_environment
     from werewolf.tom_llm.qualification_inputs import publish_suite,publish_budget,open_suite,open_budget
     from werewolf.tom_llm.deployment import prepare_deployment,profile
-    from werewolf.tom_llm.task import SET_VERSION
-    require(c.get('task_version')!=SET_VERSION, 'V2 physical deployment BLOCKED: CPU suite preparation does not authorize qualification')
+    from werewolf.tom_llm.task import SET_VERSION,VERSION as TASK_VERSION,task_binding
+    version=c.get('task_version',TASK_VERSION)
+    source=None
+    if version==SET_VERSION:
+        from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+        from werewolf.tom_llm.multimodel import source_identity,read_cohort
+        require(c.get('protocol_version')==APPROVED_PROTOCOL_VERSION, 'V2 physical preparation requires the approved research protocol')
+        source=source_identity()
+        require(source['source_inventory_clean'], 'V2 physical preparation requires committed clean Source')
     item=c['models'][key];spec=ModelSpec(key);root=safe_path(item['candidate_root'])
     require(not (root/'deployment').exists(),'deployment exists; select a NEW candidate_root, never overwrite')
     profile(spec,gpu_uuid=item.get('gpu_uuid',c.get('gpu_uuid')),candidate_root=root,
         model_directory=item['model_directory'],environment_prefix=item['environment_prefix'])
     cohort=anchor(c['cohort'])
+    if version==SET_VERSION:
+        common,_=read_cohort(cohort.path,cohort.manifest_digest,current_source=True)
+        require(common.manifest['task']==task_binding(version), 'configured/cohort task protocol mismatch')
     def receipt(name,kind,build):
         if item.get(name):
             a=anchor(item[name]);read_receipt(a.path,kind,a.manifest_digest);return a
@@ -202,11 +225,20 @@ def prepare_model(c,key):
     environment=receipt('environment','environment',lambda:capture_bound_environment(item['environment_prefix'],
         item['prior_audit_digest']))
     if item.get('suite'):
-        suite=anchor(item['suite']);open_suite(suite.path,spec,suite.manifest_digest)
+        suite=anchor(item['suite'])
+    elif version==SET_VERSION:
+        suite=publish_suite(root/'receipts'/'suite',spec,item['tokenizer_assets'],task_schema_version=version)
     else:suite=publish_suite(root/'receipts'/'suite',spec,item['tokenizer_assets'])
+    if version==SET_VERSION:
+        open_suite(suite.path,spec,suite.manifest_digest,task_schema_version=version,expected_source=source)
+    elif item.get('suite'):open_suite(suite.path,spec,suite.manifest_digest,task_schema_version=version)
     if item.get('budget'):
-        budget=anchor(item['budget']);open_budget(budget.path,spec,budget.manifest_digest)
+        budget=anchor(item['budget'])
     else:budget=publish_budget(root/'receipts'/'budget',cohort.path,cohort.manifest_digest,spec,item['tokenizer_assets'])
+    if version==SET_VERSION:
+        report=open_budget(budget.path,spec,budget.manifest_digest,task_schema_version=version,expected_source=source)
+        require(report['cohort_digest']==cohort.manifest_digest,'configured budget belongs to another common cohort')
+    elif item.get('budget'):open_budget(budget.path,spec,budget.manifest_digest,task_schema_version=version)
     deployment=prepare_deployment(root/'deployment',spec,gpu_uuid=item.get('gpu_uuid',c.get('gpu_uuid')),
         model_root=item['model_directory'],model_receipt=assets.path,expected_model=assets.manifest_digest,
         environment_root=item['environment_prefix'],environment_receipt=environment.path,expected_environment=environment.manifest_digest,
@@ -297,6 +329,13 @@ def dispatch(args):
             return ref(a)
         root=run_root(args,c)
         if args.stage=='run':
+            if c.get('task_version')==SET_VERSION and args.mode!='fake':
+                from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+                from werewolf.tom_llm.multimodel import source_identity
+                require(c.get('protocol_version')==APPROVED_PROTOCOL_VERSION,
+                        'V2 real execution requires the approved research protocol')
+                require(source_identity()['source_inventory_clean'],
+                        'V2 real execution requires committed clean Source')
             from werewolf.tom_llm.baseline_cli import prepare
             return prepare(SimpleNamespace(config=args.config,models=keys,games=args.games,mode=args.mode,run_id=args.run_id),root)
         from werewolf.tom_llm.live_admission import publish_permit
@@ -308,6 +347,7 @@ def dispatch(args):
             require(claimed['deployment_manifest_digest']==d.manifest_digest,'configured Admission/Deployment mismatch')
             _,record=open_deployment(d.path,d.manifest_digest,current_source=False)
             check_environment_binding(item,record['profile'])
+            check_execution_task(c,record)
             budget=anchor(item['budget'])
             require(budget.manifest_digest==record['upstream_receipts']['budget'],'configured qualified budget drift')
             result[key]=ref(publish_permit(root,key,qualification=admission.path,expected_qualification=admission.manifest_digest,
@@ -350,6 +390,7 @@ def dispatch(args):
         result={}
         for key in keys:
             d=anchor(c['models'][key]['deployment']);_,r=open_deployment(d.path,d.manifest_digest)
+            check_execution_task(c,r)
             q=Path(r['profile']['root'])/'qualification';rounds=[q/('round-'+str(i)) for i in (0,1)]
             seals=[verify_artifact(p/'seal',expected_artifact_type='mm_probe_round_seal',expected_schema_version=QUALIFICATION_VERSION) for p in rounds]
             result[key]=ref(publish_admission(q/'admission',d.path,d.manifest_digest,
@@ -372,6 +413,7 @@ def dispatch(args):
             from werewolf.tom_llm.live_admission import open_permit
             _,record=open_permit(root,key,p.manifest_digest,physical=False)
             check_environment_binding(c['models'][key],record['profile'])
+            check_execution_task(c,record)
             permits.append(key+'='+p.manifest_digest)
             if not args.manage_services:
                 manager=service(SimpleNamespace(purpose='run',run_id=args.run_id),c,key)

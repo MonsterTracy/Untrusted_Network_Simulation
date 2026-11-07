@@ -13,6 +13,9 @@ from werewolf.tom_llm.task import VERSION as TASK_VERSION, SET_VERSION, task_bin
 
 VERSION = 'classic7_multimodel_experiment_v1'
 APPROVED_PROTOCOL_VERSION = 'classic7_suspicion_set_research_protocol_v2'
+LIVE_SET_VERSION = 'classic7_suspicion_set_live_execution_v1'
+FORMAL_PUBLIC_REQUESTS = 10714
+FORMAL_PUBLIC_ROWS_DIGEST = '8fd129c892d9657ed429d984c83acc278792637a5e96e06eb9c148f3b98e80c8'
 POLICY = {'schema_version':VERSION,'formal_games':150,
     'technical_selection':{'version':'tom_llm_technical_subset_v1','seed':20261026},
     'metrics':['KL','TV','Top-1_NU'],'difference_direction':'left_minus_right',
@@ -114,14 +117,55 @@ def choose_games(selection, count, mode):
     return sorted(sorted(games,key=lambda g:(digest([rule['version'],rule['seed'],g]),g))[:count])
 
 
+def live_set_binding(run,cohort,tasks):
+    """验证真实 V2 输入及 Source；执行绑定不改冻结科研协议。"""
+    from werewolf.tom_llm.deployment import validate_source_evidence
+    from werewolf.tom_llm.qualification_inputs import open_budget
+    m=cohort.manifest;source=run['source'];qualified=m['source']
+    require(run['protocol']==protocol(SET_VERSION,protocol_version=APPROVED_PROTOCOL_VERSION),
+            'V2 real execution requires the approved research protocol')
+    require(run['configuration'].get('input_config',{}).get('task_version')==SET_VERSION,
+            'V2 real execution requires the explicit configured set task')
+    require(m['task']==task_binding(SET_VERSION), 'V2 live cohort task mismatch')
+    for value in (source,qualified):
+        validate_source_evidence(value)
+        require(value['source_inventory_clean'] and value['source_status_digest']==digest(''),
+                'V2 real execution requires committed clean Source')
+    require(source['schema_version']=='classic7_multimodel_source_v3'
+            and qualified['schema_version']=='classic7_multimodel_source_v2', 'V2 live Source schema mismatch')
+    require(all(source[k]==qualified[k] for k in ('source_revision','commit_tree','integration_base_commit')),
+            'V2 run/cohort Source revision mismatch')
+    extra={'scripts/run_tom_multimodel_baseline.py','scripts/analyze_tom_multimodel_baseline.py',
+           'configs/paper/tom-llm-experiment-v1.json'}
+    require(set(source['file_digests'])-set(qualified['file_digests'])==extra
+            and all(source['file_digests'].get(p)==h for p,h in qualified['file_digests'].items()),
+            'V2 run/cohort Source inventory mismatch')
+    require(m['reference']==run['protocol']['fixed_oof']['reference'], 'V2 live fixed OOF mismatch')
+    require(len(m['selection']['game_ids'])==150 and len(tasks)==FORMAL_PUBLIC_REQUESTS
+            and digest([identity(t) for t in tasks])==m['row_identity_digest']==FORMAL_PUBLIC_ROWS_DIGEST,
+            'V2 live requires the complete frozen 150-game/10714-row cohort')
+    budgets=run['configuration'].get('budgets',{})
+    require(set(budgets)==set(run['models']), 'V2 live requires every planned model budget')
+    for key,item in budgets.items():
+        require(type(item) is dict and set(item)=={'path','digest'}, 'V2 live budget anchor required')
+        budget=open_budget(item['path'],ModelSpec(key),item['digest'],
+            task_schema_version=SET_VERSION,expected_source=qualified)
+        require(budget['cohort_digest']==run['cohort_digest'] and budget['cohort_root']==str(cohort.path)
+                and budget['request_count']==FORMAL_PUBLIC_REQUESTS
+                and budget['row_identity_digest']==m['row_identity_digest'], 'V2 live budget/cohort coverage mismatch')
+    return {'schema_version':LIVE_SET_VERSION,'task':m['task'],'research_protocol_digest':digest(run['protocol']),
+            'qualification_source_digest':digest(qualified),'cohort_digest':run['cohort_digest'],
+            'budget_manifests':{key:item['digest'] for key,item in budgets.items()},
+            'authority':'physical_admission_and_per_model_execution_permit_required'}
+
+
 def prepare_run(destination, *, run_id, models, games, mode, cohort_root, expected_cohort,
                 publication, evaluation, expected_reference, configuration=None):
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,79}',run_id) is not None, 'invalid run-id')
     require(models and len(set(models)) == len(models), 'empty/duplicate model list')
     cohort,tasks = read_cohort(cohort_root,expected_cohort,current_source=False)
+    all_tasks=tasks
     task_schema_version = cohort.manifest['task']['schema_version']
-    require(task_schema_version != SET_VERSION or mode == 'fake',
-            'Suspicion-Set V2 real execution BLOCKED: independent development and protocol freeze required')
     selection = strict_json((Path(cohort.manifest['selection_root'])/'selection.json').read_bytes())
     selected = choose_games(selection,games,mode)
     tasks = [t for t in tasks if t['game_id'] in set(selected)]
@@ -137,6 +181,8 @@ def prepare_run(destination, *, run_id, models, games, mode, cohort_root, expect
         'publication':str(Path(publication).absolute()),'evaluation':str(Path(evaluation).absolute()),
         'source':source_v3(),'protocol':selected_protocol,'task_digests':[digest(t) for t in tasks],
         'row_identity_digest':digest([identity(t) for t in tasks]),'request_count':len(tasks)}
+    if task_schema_version==SET_VERSION and mode!='fake':
+        record['live_execution']=live_set_binding(record,cohort,all_tasks)
     return publish_record(Path(destination)/'contract','mm_baseline_experiment',record)
 
 
@@ -149,8 +195,8 @@ def open_run(root, expected=None, *, current_source=True):
     version = r['protocol'].get('schema_version')
     require(r['protocol'] == protocol(c.manifest['task']['schema_version'],
             protocol_version=version if version==APPROVED_PROTOCOL_VERSION else None), 'fixed metrics/protocol drift')
-    require(c.manifest['task']['schema_version'] != SET_VERSION or r['mode'] == 'fake',
-            'Suspicion-Set V2 real execution BLOCKED: independent development and protocol freeze required')
+    if c.manifest['task']['schema_version']==SET_VERSION and r['mode']!='fake':
+        require(r.get('live_execution')==live_set_binding(r,c,tasks), 'V2 live execution binding drift')
     require(r['selection'] == c.manifest['selection'] and r['reference'] == c.manifest['reference'], 'common cohort anchors drift')
     selection = strict_json((Path(c.manifest['selection_root'])/'selection.json').read_bytes())
     require(r['games'] == choose_games(selection,r['game_count'],r['mode']), 'game selection drift')
