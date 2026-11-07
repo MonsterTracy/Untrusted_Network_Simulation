@@ -9,8 +9,10 @@ from werewolf.artifact_io import publish_artifact, verify_artifact, canonical_js
 from werewolf.tom_llm.common import digest, identity, require, strict_json
 from werewolf.tom_llm.model_spec import ROOT, ModelSpec
 from werewolf.tom_llm.multimodel import source_identity, read_cohort
+from werewolf.tom_llm.task import VERSION as TASK_VERSION, SET_VERSION, task_binding
 
 VERSION = 'classic7_multimodel_experiment_v1'
+APPROVED_PROTOCOL_VERSION = 'classic7_suspicion_set_research_protocol_v2'
 POLICY = {'schema_version':VERSION,'formal_games':150,
     'technical_selection':{'version':'tom_llm_technical_subset_v1','seed':20261026},
     'metrics':['KL','TV','Top-1_NU'],'difference_direction':'left_minus_right',
@@ -18,10 +20,44 @@ POLICY = {'schema_version':VERSION,'formal_games':150,
     'efficiency_scope':'per_attempt_client_wall_includes_request_conversion_http_service; request_loop_wall_includes_per_row_artifacts; excludes_startup_physical_preparation_final_seal_analysis; TTFT_allocator_peak_not_measured'}
 
 
-def protocol():
+def protocol(task_schema_version=TASK_VERSION, *, protocol_version=None):
     require(strict_json((ROOT/'configs/paper/tom-llm-experiment-v1.json').read_bytes()) == POLICY,
             'experiment policy drift')
-    return POLICY
+    task_binding(task_schema_version)
+    require(protocol_version is None or
+            (task_schema_version==SET_VERSION and protocol_version==APPROVED_PROTOCOL_VERSION),
+            'unsupported research protocol/task binding')
+    if task_schema_version == TASK_VERSION:
+        return POLICY
+    from copy import deepcopy
+    result = deepcopy(POLICY)
+    result.update(schema_version='classic7_multimodel_suspicion_set_experiment_v2',
+        status='CPU_MOCK_ONLY_NOT_FROZEN_NOT_EXECUTABLE', task_schema_version=SET_VERSION,
+        metrics=['Set-F1', 'Set-Precision', 'Set-Recall', 'Jaccard', 'Exact-Set-Match', 'Valid-Output-Rate'],
+        supplementary_metrics=['KL', 'TV', 'Top-1_NU'],
+        set_metrics={'both_empty':1, 'exactly_one_empty':0, 'invalid_prediction':0,
+                     'missing_prediction':'incomplete_run_no_analysis',
+                     'unobserved_gold':'excluded_with_explicit_label_coverage'},
+        probability_conversion={'nonempty':'uniform_on_predicted_set', 'empty':'uniform_non_self',
+                                'epsilon':1e-6, 'invalid':'failure_uniform_not_a_predicted_set'},
+        probability_to_set='BLOCKED_UNTIL_INDEPENDENT_DEVELOPMENT_RULE_SUPPLIED',
+        calibration='independent_game_ids_and_source_qualification_required',
+        comparison_scope='previously_observed_formal_games_method_comparison_not_independent_generalization_or_causal_effect',
+        statistical_inference={'bootstrap':10000, 'confidence':.95, 'unit':'game',
+                               'interval_method':'percentile_linear', 'simultaneous_intervals':False})
+    if protocol_version==APPROVED_PROTOCOL_VERSION:
+        from werewolf.tom_llm.output import fixed_projection_rule
+        from werewolf.tom_llm.reference import fixed_oof_contract
+        result.update(schema_version=APPROVED_PROTOCOL_VERSION,
+            status='RESEARCH_APPROVED_CPU_ONLY_FORMAL_EXECUTION_BLOCKED',
+            probability_to_set=fixed_projection_rule(), fixed_oof=fixed_oof_contract(),
+            calibration='none_no_1350_game_fitting',
+            primary_endpoint='full_primary_raw/set_f1', key_comparison='primary_comparable_nu/set_f1',
+            baselines=['Always Empty','Always All-Six'],
+            comparisons={'full_primary_raw':{'simple_baseline':6,'exploratory':4},
+                         'primary_comparable_nu':{'key_method':3,'simple_baseline':8,'exploratory':4}},
+            inference='descriptive_exploratory_pointwise_only_no_joint_superiority')
+    return result
 
 
 def source_v3():
@@ -83,27 +119,38 @@ def prepare_run(destination, *, run_id, models, games, mode, cohort_root, expect
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,79}',run_id) is not None, 'invalid run-id')
     require(models and len(set(models)) == len(models), 'empty/duplicate model list')
     cohort,tasks = read_cohort(cohort_root,expected_cohort,current_source=False)
+    task_schema_version = cohort.manifest['task']['schema_version']
+    require(task_schema_version != SET_VERSION or mode == 'fake',
+            'Suspicion-Set V2 real execution BLOCKED: independent development and protocol freeze required')
     selection = strict_json((Path(cohort.manifest['selection_root'])/'selection.json').read_bytes())
     selected = choose_games(selection,games,mode)
     tasks = [t for t in tasks if t['game_id'] in set(selected)]
     require({t['game_id'] for t in tasks} == set(selected), 'whole-game public request coverage mismatch')
     require(cohort.manifest['reference']['seal_digest'] == expected_reference, 'Reference anchor drift')
+    selected_protocol = protocol(task_schema_version,protocol_version=(configuration or {}).get('input_config',{}).get('protocol_version'))
+    if selected_protocol['schema_version']==APPROVED_PROTOCOL_VERSION:
+        require((configuration or {}).get('input_config',{}).get('probability_to_set') is None,
+                'approved protocol forbids a calibrated or legacy threshold override')
     record = {'run_id':run_id,'mode':mode,'models':{k:ModelSpec(k).digest for k in models},
         'model_order':list(models),'configuration':configuration or {},'games':selected,'game_count':games,'cohort_root':str(cohort.path),'cohort_digest':cohort.manifest_digest,
         'selection':cohort.manifest['selection'],'reference':cohort.manifest['reference'],
         'publication':str(Path(publication).absolute()),'evaluation':str(Path(evaluation).absolute()),
-        'source':source_v3(),'protocol':protocol(),'task_digests':[digest(t) for t in tasks],
+        'source':source_v3(),'protocol':selected_protocol,'task_digests':[digest(t) for t in tasks],
         'row_identity_digest':digest([identity(t) for t in tasks]),'request_count':len(tasks)}
     return publish_record(Path(destination)/'contract','mm_baseline_experiment',record)
 
 
 def open_run(root, expected=None, *, current_source=True):
     a,r = read_record(Path(root)/'contract','mm_baseline_experiment',expected)
-    require(r['protocol'] == protocol(), 'fixed metrics/protocol drift')
     if current_source: require(r['source'] == source_v3(), 'experiment Source v3 drift; rebuild, never re-sign')
     from werewolf.tom_llm.deployment import validate_source_evidence
     validate_source_evidence(r['source'])
     c,tasks = read_cohort(r['cohort_root'],r['cohort_digest'],current_source=False)
+    version = r['protocol'].get('schema_version')
+    require(r['protocol'] == protocol(c.manifest['task']['schema_version'],
+            protocol_version=version if version==APPROVED_PROTOCOL_VERSION else None), 'fixed metrics/protocol drift')
+    require(c.manifest['task']['schema_version'] != SET_VERSION or r['mode'] == 'fake',
+            'Suspicion-Set V2 real execution BLOCKED: independent development and protocol freeze required')
     require(r['selection'] == c.manifest['selection'] and r['reference'] == c.manifest['reference'], 'common cohort anchors drift')
     selection = strict_json((Path(c.manifest['selection_root'])/'selection.json').read_bytes())
     require(r['games'] == choose_games(selection,r['game_count'],r['mode']), 'game selection drift')

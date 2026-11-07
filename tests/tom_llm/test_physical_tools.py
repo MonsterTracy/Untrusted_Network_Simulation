@@ -221,6 +221,56 @@ def native_suites():
     return result
 
 
+@pytest.fixture
+def set_suites_mock(monkeypatch):
+    """只验证新 Suite 与证据接口；不替代官方 Tokenizer 或 GPU 资格。"""
+    from werewolf.tom_llm.task import SET_VERSION
+    from werewolf.tom_llm.model_spec import render
+    class Tokenizer:
+        def __init__(self,texts):self.texts=texts
+        def __len__(self):return 1000
+        def encode(self,text,**kwargs):return [1,*hashlib.sha256(text.encode()).digest()[:16]]
+        def apply_chat_template(self,messages,*,tokenize,**kwargs):
+            text=self.texts[digest(messages)]
+            return self.encode(text) if tokenize else text
+    tokenizers={key:Tokenizer({digest(t['messages']):render(t,ModelSpec(key))['text']
+                              for t in qi.synthetic_tasks(version=SET_VERSION)}) for key in KEYS}
+    monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda spec,path:tokenizers[spec.key])
+    return {key:qi.build_suite(ModelSpec(key),'UNIT_MOCK',task_schema_version=SET_VERSION) for key in KEYS}
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_set_schema_suite_and_mock_two_round_evidence(set_suites_mock,tmp_path,key):
+    from werewolf.tom_llm.task import SET_VERSION
+    suite=set_suites_mock[key];spec=ModelSpec(key)
+    assert suite['schema_version']==qi.SET_SUITE_VERSION and suite['task']['schema_version']==SET_VERSION
+    assert len(suite['cases'])==12 and suite['schedule']==qi.SCHEDULE
+    for case in suite['cases']:
+        schema=case['task']['response_schema']['properties']['suspected_players']
+        assert schema['minItems']==0 and schema['maxItems']==6 and schema['uniqueItems'] is True
+        validate_sampling(sampling(spec,case['task']['response_schema']),case['task']['response_schema'],spec)
+    record=model_record(key,set_suites_mock);rounds=[]
+    for run in range(2):
+        path=tmp_path/str(run);path.mkdir()
+        client,events,_=fake_candidate(path,record,run)
+        root=path/'round'
+        artifact=collect_round(root,client,run=run,event_reader=lambda:events,memory_monitor=Memory)
+        rounds.append(open_round(root,artifact.manifest_digest,record,
+                                 deployment_manifest_digest=client.deployment.manifest_digest)[1])
+    report=validate_qualification(record,rounds)
+    assert report['formal_execution_authorized'] is False and report['dispatches']==76
+    assert report['conversion_status_counts']=={'valid':76}
+    invalid=deepcopy(rounds)
+    invalid[0]['events'][2]['content']=invalid[0]['calls'][0]['content']='{"suspected_players":["player1","player1"]}'
+    with pytest.raises(ValueError,match='set schema'):validate_qualification(record,invalid)
+
+
+def test_set_suite_rejects_task_drift(set_suites_mock):
+    suite=deepcopy(set_suites_mock['yi'])
+    suite['task']['system_sha256']='0'*64
+    with pytest.raises(ValueError,match='binding drift'):qi.validate_suite(suite,ModelSpec('yi'))
+
+
 def model_record(key,suites):
     spec=ModelSpec(key)
     return {'schema_version':dep.VERSION,'key':key,'model_spec':spec.record(),'source':mm.source_identity(),
@@ -276,8 +326,13 @@ def fake_candidate(tmp_path,record,run,*,failure=None,after_response_failure=Fal
         count['calls']+=1
         if failure:raise failure
         item=record['suite']['cases'][qi.SCHEDULE[count['calls']-1][1]]
-        seats=item['task']['response_schema']['properties']['probabilities']['required']
-        content=json.dumps({'probabilities':{p:1/6 for p in seats}})
+        properties=item['task']['response_schema']['properties']
+        if 'suspected_players' in properties:
+            seats=properties['suspected_players']['items']['enum']
+            content=json.dumps({'suspected_players':seats[:qi.SCHEDULE[count['calls']-1][1]%7]})
+        else:
+            seats=properties['probabilities']['required']
+            content=json.dumps({'probabilities':{p:1/6 for p in seats}})
         external=f'UNIT-{run}-{count["calls"]}'
         core=NS(prompt_embeds=None,mm_features=[],pooling_params=None,lora_request=None,cache_salt=None,
             reasoning_ended=None,reasoning_parser_kwargs=None,resumable=False,priority=0,
@@ -719,7 +774,8 @@ def test_cohort_export_builds_public_tasks_before_opening_reference(tmp_path,mon
     (tmp_path/'selection.json').write_bytes(canonical_json_bytes({'game_ids':games}))
     public=NS(public_view=NS(games=[NS(game_id=g,authoritative_pre_prefixes=[g]) for g in games+['EXCLUDED']]))
     monkeypatch.setattr(publication,'open_publication',lambda _:public)
-    def build(prefixes,membership):
+    def build(prefixes,membership,*,version):
+        assert version == task_module.VERSION
         calls.append('public');assert prefixes==games and len(membership)==150
         return ['UNIT_PUBLIC_TASKS']
     monkeypatch.setattr(task_module,'public_tasks',build)

@@ -24,8 +24,8 @@ def tiny_historical_counts(monkeypatch):
 
 
 @pytest.fixture
-def sealed_reference(tmp_path):
-    _, handles = _publication(tmp_path / "fixture")
+def sealed_reference(tmp_path, request):
+    _, handles = _publication(tmp_path / "fixture", transform_evidence=getattr(request, "param", None))
     publication = handles.public
     view = publication.public_view
     population = select_primary_population(publication)
@@ -111,6 +111,28 @@ def sealed_reference(tmp_path):
         "cells": {}, "supplementary_top1_nu": {}}, files={"bootstrap_indices.bin": indices.tobytes()})
     reference = open_reference(publication.path, root, expected_seal_digest=report.manifest_digest)
     return reference, publication, root, report
+
+
+def empty_and_full_reports(evidence):
+    """独立人工轨迹：两个非狼观察者分别成功报告空集和全六席。"""
+    from dataclasses import replace
+    from werewolf.canonical_collection import construct_belief_observation
+    from werewolf.canonical_collection.public_history import PLAYER_IDS
+    observations = []
+    for observation in evidence.belief_observations:
+        support = observation.suspicion_support
+        if observation.observer_id == 'player3':
+            support = ()
+        elif observation.observer_id == 'player4':
+            support = tuple(p for p in PLAYER_IDS if p != observation.observer_id)
+        observations.append(construct_belief_observation(
+            game_id=observation.game_id, attempt_id=observation.attempt_id,
+            boundary_id=observation.boundary_id, prefix_digest=observation.prefix_digest,
+            observation_id=observation.observation_id, observer_id=observation.observer_id,
+            observer_alive=observation.observer_alive, day=observation.day, phase=observation.phase,
+            status=observation.status, suspicion_support=support,
+            attempts=tuple(a.to_record() for a in observation.attempts)))
+    return replace(evidence, belief_observations=tuple(observations))
 
 
 def predictions_for(reference, *, failure=False):

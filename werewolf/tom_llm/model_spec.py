@@ -8,7 +8,7 @@ from jinja2 import Environment, StrictUndefined
 from werewolf.artifact_io import sha256_bytes
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.policy import policy_binding
-from werewolf.tom_llm.task import validate_task, to_legacy
+from werewolf.tom_llm.task import validate_task, to_legacy, task_version, SET_VERSION
 from werewolf.tom_llm.server_fixed import wire_request_v2
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,16 +70,17 @@ def render(request, spec):
 def wire(request, spec):
     validate_task(request)
     row = spec.record()
-    if spec.key == 'qwen3':
+    if spec.key == 'qwen3' and task_version(request) != SET_VERSION:
         return wire_request_v2(to_legacy(request))  # Exact original Wire v2 bytes, no extra fields.
     d = row['decoding']
-    extra = {'chat_template_kwargs': {}, 'top_k': d['top_k'], 'min_p': d['min_p']}
+    extra = {'chat_template_kwargs': dict(row['chat_template']['kwargs']), 'top_k': d['top_k'], 'min_p': d['min_p']}
     if row['termination']['extra_stop_token_ids']:
         extra['stop_token_ids'] = row['termination']['extra_stop_token_ids']
     return {'model': row['model'], 'messages': request['messages'], 'temperature': d['temperature'],
             'top_p': d['top_p'], 'n': d['n'], 'max_tokens': d['max_tokens'], 'seed': d['seed'],
             'response_format': {'type': 'json_schema', 'json_schema': {
-                'name': 'non_self_suspicion', 'strict': True, 'schema': request['response_schema']}},
+                'name': 'non_self_suspicion_set' if task_version(request) == SET_VERSION else 'non_self_suspicion',
+                'strict': True, 'schema': request['response_schema']}},
             'extra_body': extra}
 
 
@@ -133,7 +134,7 @@ def check_cpu_parity(requests, spec, directory):
         require(ours == official and actual == expected, 'native template/text/input_ids mismatch')
         texts.append(ours)
         token_ids.append(actual)
-        if spec.key == 'qwen3':
+        if spec.key == 'qwen3' and task_version(request) != SET_VERSION:
             require(wire(request, spec) == wire_request_v2(to_legacy(request)), 'frozen Qwen wire compatibility failure')
             require(ours == to_legacy(request)['rendered_prompt'] and actual[-7:] == [151644,77091,198,151667,271,151668,271],
                     'frozen Qwen text/token compatibility failure')
@@ -141,4 +142,4 @@ def check_cpu_parity(requests, spec, directory):
     return {'status': 'CPU_PARITY_PASS', 'model_spec_digest': spec.digest, 'weights_verified': False,
             'gpu_admission': False, 'model': spec_row['model'], 'revision': spec_row['revision'],
             'text_sequence_digest': digest(texts), 'input_ids_sequence_digest': digest(token_ids),
-            'legacy_qwen_compatibility': spec.key == 'qwen3', **counts}
+            'legacy_qwen_compatibility': spec.key == 'qwen3' and all(task_version(r) != SET_VERSION for r in requests), **counts}

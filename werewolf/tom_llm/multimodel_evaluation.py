@@ -14,7 +14,7 @@ from werewolf.tom_llm.multimodel import (COHORT_VERSION, VERSION, source_identit
                                         open_model_predictions, open_model_mock)
 from werewolf.tom_llm.policy import POLICY
 from werewolf.tom_llm.selection_binding import open_selection_binding
-from werewolf.tom_llm.task import task_binding, validate_task
+from werewolf.tom_llm.task import task_binding, validate_task, task_version
 
 
 def reference_binding(reference):
@@ -46,9 +46,11 @@ def publish_mock_cohort(destination, tasks, reference, *, selection_root, expect
     raw_selection = strict_json((Path(selection_root)/'selection.json').read_bytes())
     games = raw_selection['game_ids']
     validate_public_coverage(tasks,reference,games)
+    version = task_version(tasks[0])
+    require(all(task_version(t) == version for t in tasks), 'mixed cohort task protocols')
     return publish_artifact(destination,manifest_fields={
         'artifact_type':'llm_multimodel_public_cohort','schema_version':COHORT_VERSION,'engineering_only':True,
-        'task':task_binding(),'source':source_identity(), 'reference':reference_binding(reference),
+        'task':task_binding(version),'source':source_identity(), 'reference':reference_binding(reference),
         'selection':{**selection,'game_ids':games},'selection_root':str(Path(selection_root).absolute()),
         'requests_digest':digest(tasks),'row_identity_digest':digest([identity(t) for t in tasks])},
         files={'requests.jsonl':canonical_jsonl_bytes(tasks)})

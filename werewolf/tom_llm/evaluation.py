@@ -14,8 +14,8 @@ from werewolf.tom_llm.output import validate_prediction
 from werewolf.tom_llm.policy import POLICY
 
 
-def compare(reference, predictions, game_ids):
-    """All public-alive requests must match exactly; Primary is selected afterwards."""
+def _aligned_predictions(reference, predictions, game_ids):
+    """所有指标共用完整公开请求核对，不按预测是否成功取交集。"""
     games = tuple(sorted(game_ids))
     expected = reference.selected(games)
     required_keys = {key for key in reference.alive_keys if key[0] in set(games)}
@@ -35,6 +35,12 @@ def compare(reference, predictions, game_ids):
         require(type(row["fold"]) is int and row["fold"] == ref["fold"]
                 and row["plan_digest"] == ref["plan_digest"] and type(row["canonical_shift"]) is int and row["canonical_shift"] == 0
                 and row["temporal_condition"] == ref["temporal_condition"], "LLM/reference semantics mismatch")
+    return games, expected, indexed
+
+
+def compare(reference, predictions, game_ids):
+    """All public-alive requests must match exactly; Primary is selected afterwards."""
+    games, expected, indexed = _aligned_predictions(reference, predictions, game_ids)
     selected, statuses = [], []
     for ref in expected:
         prediction = indexed[identity(ref)]["prediction"]
@@ -108,6 +114,195 @@ def compare(reference, predictions, game_ids):
             "bootstrap_indices_digest": sha256_bytes(indices.tobytes()), "nu_game_ids": nu_games,
             "nu_bootstrap_indices_digest": None if nu_indices is None else sha256_bytes(nu_indices.tobytes()),
             "limitations": POLICY["limitations"]}
+
+
+SET_METRICS = ("set_f1", "set_precision", "set_recall", "jaccard", "exact_set_match", "valid_output_rate")
+
+
+def set_scores(prediction, gold):
+    """空空记一，单边空记零；非法输出在全部集合指标中记零。"""
+    from werewolf.canonical_collection.public_history import PLAYER_IDS
+    from werewolf.tom_llm.output import SET_OUTPUT_VERSION
+    validate_prediction(prediction)
+    require(prediction.get('schema_version') == SET_OUTPUT_VERSION, 'set metrics require set output protocol')
+    require(type(gold) is list and all(p in PLAYER_IDS for p in gold) and len(set(gold)) == len(gold)
+            and PLAYER_IDS[prediction['observer']] not in gold, 'invalid raw gold set')
+    result = dict.fromkeys(SET_METRICS, 0.)
+    if prediction['status'] != 'valid':
+        return result
+    result['valid_output_rate'] = 1.
+    actual, target = set(prediction['suspected_players']), set(gold)
+    if not actual and not target:
+        return dict.fromkeys(SET_METRICS, 1.)
+    if not actual or not target:
+        return result
+    overlap = len(actual & target)
+    result.update(set_precision=overlap / len(actual), set_recall=overlap / len(target),
+                  set_f1=2 * overlap / (len(actual) + len(target)),
+                  jaccard=overlap / len(actual | target), exact_set_match=float(actual == target))
+    return result
+
+
+def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to_set_rule=None,
+                 formal_game_ids, approved=False, engineering_only=False):
+    """共用原始集合人口、游戏级统计与完整预测分母的多模型评价。"""
+    from itertools import combinations
+    from werewolf.canonical_collection.public_history import PLAYER_IDS
+    from werewolf.tom_llm.output import SET_OUTPUT_VERSION, parse_set_output, probability_to_set
+    from werewolf.artifact_io import canonical_json_bytes
+
+    games = tuple(sorted(game_ids))
+    require(raw_labels['publication_digest'] == reference.publication_digest
+            and raw_labels['reference_seal_digest'] == reference.seal_digest
+            and digest(raw_labels['labels']) == raw_labels['labels_digest'], 'raw-set source binding mismatch')
+    refs = {identity(r):r for r in reference.rows
+            if r['game_id'] in set(games) and r['primary_eligible'] and r['observer_alive']}
+    labels = {identity(r):r for r in raw_labels['labels']}
+    require(len(labels) == len(raw_labels['labels']) and set(labels) == set(refs), 'raw-set Primary coverage mismatch')
+    indexed = {}
+    for model, rows in predictions.items():
+        _, _, indexed[model] = _aligned_predictions(reference, rows, games)
+        require(all(r['prediction'].get('schema_version') == SET_OUTPUT_VERSION for r in rows),
+                'mixed probability/set result protocols')
+    require(indexed, 'set evaluation requires model predictions')
+    derived_methods = {}
+    if approved:
+        require(set(indexed)<={'qwen3','yi','mistral'} and probability_to_set_rule is None,
+                'approved set evaluation forbids legacy threshold or extra model runs')
+        original = next(iter(indexed.values()))
+        for name in ('Always Empty','Always All-Six'):
+            derived = {}
+            for key, row in original.items():
+                players = [] if name=='Always Empty' else [p for j,p in enumerate(PLAYER_IDS) if j!=row['observer']]
+                fields = ('game_id','boundary_id','prefix_digest','plan_digest','observer','fold','canonical_shift','temporal_condition')
+                derived[key] = {k:row[k] for k in fields}
+                derived[key]['prediction'] = parse_set_output(
+                    canonical_json_bytes({'suspected_players':players}).decode(),row['observer']).to_record()
+            indexed[name] = derived
+            derived_methods[name] = {'kind':'deterministic_reference', 'model_run_seal':None,
+                'parent_public_row_identity_digest':digest(list(original)),
+                'predictions_digest':digest([[list(k),r['prediction']['suspected_players']] for k,r in derived.items()])}
+    groups = {name:[] for name in ('full_primary_raw', 'primary_comparable_nu', 'empty', 'nonempty_proper', 'all_six')}
+    unavailable = []
+    label_statuses = Counter()
+    for key, label in labels.items():
+        ref = refs[key]
+        require(label['plan_digest'] == ref['plan_digest'] and label['fold'] == ref['fold'], 'raw-set plan/fold drift')
+        require(label['status'] in ('observed','unobservable','not_recoverable'), 'unknown raw-set label status')
+        label_statuses[label['status']] += 1
+        if label['status'] != 'observed':
+            require(label['suspected_players'] is None, 'unobservable report cannot supply a gold set')
+            unavailable.append(list(key))
+            continue
+        gold = label['suspected_players']
+        require(type(gold) is list and len(set(gold)) == len(gold)
+                and all(p in PLAYER_IDS for p in gold) and PLAYER_IDS[ref['observer']] not in gold,
+                'invalid raw report support')
+        require(ref['label_observed'], 'raw-set/Reference observability conflict')
+        expected = set(gold) or {p for j,p in enumerate(PLAYER_IDS) if j != ref['observer']}
+        require(expected == {p for p,q in zip(PLAYER_IDS,ref['q'],strict=True) if q > 0},
+                'raw-set/Reference support conflict')
+        groups['full_primary_raw'].append(key)
+        group = 'nonempty_proper'
+        if not gold:
+            group = 'empty'
+        elif len(gold) == 6:
+            group = 'all_six'
+        groups[group].append(key)
+        if group == 'nonempty_proper':
+            groups['primary_comparable_nu'].append(key)
+    mapper = {'status':'BLOCKED_INDEPENDENT_DEVELOPMENT_NOT_VERIFIED', 'rule':None}
+    tom_sets = {}
+    if approved:
+        from werewolf.tom_llm.output import uniform_reference_projection, fixed_projection_rule
+        from werewolf.tom_llm.reference import projection_source
+        source = projection_source(reference,engineering_only=engineering_only)
+        tom_sets = {key:uniform_reference_projection(ref['probability'],ref['observer']) for key,ref in refs.items()}
+        rule = fixed_projection_rule()
+        mapper = {'status':source['status'], 'rule':rule, 'rule_digest':digest(rule), 'source':source,
+                  'predictions_digest':digest([[list(k),v] for k,v in tom_sets.items()])}
+        derived_methods['Observer-ToM'] = {'kind':'fixed_oof_projection', 'model_run_seal':None,
+                                          'source_digest':source['actual_digest'], 'rule_digest':digest(rule)}
+    elif probability_to_set_rule is not None:
+        # Mock 只证明接口，摘要及分离名单不提升为真实开发来源资格。
+        for key, ref in refs.items():
+            tom_sets[key] = probability_to_set(ref['probability'], ref['observer'], probability_to_set_rule,
+                                                formal_game_ids=formal_game_ids)
+        mapper = {'status':'ENGINEERING_ONLY_NOT_CALIBRATED', 'rule':probability_to_set_rule,
+                  'rule_digest':digest(probability_to_set_rule)}
+    populations = {}
+    for name, keys in groups.items():
+        hit_games = sorted({key[0] for key in keys})
+        indices = bootstrap_indices(hit_games, POLICY['bootstrap']['replicates'], POLICY['bootstrap']['seed']) if hit_games else None
+        models = list(indexed)
+        if name == 'primary_comparable_nu' and tom_sets:
+            models.append('Observer-ToM')
+        cells, row_values = {}, {}
+        for model in models:
+            scores = []
+            for key in keys:
+                if model == 'Observer-ToM':
+                    content = canonical_json_bytes({'suspected_players':tom_sets[key]}).decode('utf-8')
+                    prediction = parse_set_output(content, refs[key]['observer']).to_record()
+                else:
+                    prediction = indexed[model][key]['prediction']
+                scores.append({'identity':list(key), **set_scores(prediction, labels[key]['suspected_players'])})
+            per_game = {g:{metric:float(np.mean([s[metric] for s in scores if s['identity'][0] == g]))
+                           for metric in SET_METRICS} for g in hit_games}
+            metrics = {metric:game_macro_summary([per_game[g][metric] for g in hit_games], indices, .95)
+                       for metric in SET_METRICS} if hit_games else {metric:None for metric in SET_METRICS}
+            cells[model] = {'row_count':len(keys), 'game_count':len(hit_games), 'metrics':metrics,
+                            'game_scores':per_game, 'row_scores':scores}
+            row_values[model] = per_game
+        pairs = []
+        for left, right in combinations(models, 2):
+            pair = {'left':left, 'right':right, 'direction':'left_minus_right'}
+            if approved:
+                simple = {'Always Empty','Always All-Six'}
+                if name not in ('full_primary_raw','primary_comparable_nu'):
+                    pair['tier'] = 'diagnostic'
+                elif 'Observer-ToM' in (left,right) and not ({left,right}&simple):
+                    pair['tier'] = 'key_method'
+                elif len({left,right}&simple)==1:
+                    pair['tier'] = 'simple_baseline'
+                else:
+                    pair['tier'] = 'exploratory'
+            pair['metrics'] = {metric:paired_summary([row_values[left][g][metric] for g in hit_games],
+                [row_values[right][g][metric] for g in hit_games], indices, .95) if hit_games else None
+                for metric in SET_METRICS}
+            pairs.append(pair)
+        populations[name] = {'row_count':len(keys), 'game_ids':hit_games,
+            'zero_sample_games':sorted(set(games) - set(hit_games)), 'row_identity_digest':digest(keys),
+            'bootstrap_replicates':POLICY['bootstrap']['replicates'],
+            'bootstrap_indices_digest':None if indices is None else sha256_bytes(indices.tobytes()),
+            'cells':cells, 'paired':pairs}
+        if approved:
+            populations[name]['reporting_tier'] = ('primary_descriptive' if name=='full_primary_raw' else
+                'key_secondary' if name=='primary_comparable_nu' else 'diagnostic')
+    coverage = {}
+    for model, rows in predictions.items():
+        valid = [r['prediction'] for r in rows if r['prediction']['status'] == 'valid']
+        failures = Counter(r['prediction']['failure_type'] for r in rows if r['prediction']['status'] != 'valid')
+        coverage[model] = {'rows':len(rows), 'valid':len(valid), 'invalid':sum(failures.values()),
+            'valid_output_rate':len(valid)/len(rows), 'failure_types':dict(failures),
+            'valid_empty_predictions':sum(p['suspected_players'] == [] for p in valid),
+            'valid_all_six_predictions':sum(len(p['suspected_players']) == 6 for p in valid),
+            'valid_nonempty_proper_predictions':sum(0 < len(p['suspected_players']) < 6 for p in valid)}
+    result = {'schema_version':'classic7_llm_suspicion_set_evaluation_v2', 'formal_result':False,
+            'raw_label_sources':{k:v for k,v in raw_labels.items() if k != 'labels'},
+            'primary_candidate_rows':len(refs), 'unobservable_or_unrecoverable_rows':len(unavailable),
+            'unobservable_row_identities':unavailable, 'label_status_counts':dict(label_statuses),
+            'raw_reports':raw_labels['labels'], 'populations':populations,
+            'probability_to_set':mapper,
+            'public_output_coverage':coverage,
+            'interval_scope':'fixed_predictions_game_bootstrap_not_simultaneous',
+            'uniform_reference_limitation':'empty_and_all_six_raw_reports_share_q; Observer-ToM set comparison is NU only'}
+    if approved:
+        result.update(research_protocol_approved=True, physical_qualification=False,
+            derived_methods=derived_methods, comparison_complete=set(predictions)=={'qwen3','yi','mistral'},
+            primary_endpoint='full_primary_raw/set_f1',
+            valid_output_definitions={'public':'row_micro_all_public_alive', 'populations':'game_macro_same_gold_denominator'})
+    return result
 
 
 def analyze_mock(reference, study_root, game_ids, destination):

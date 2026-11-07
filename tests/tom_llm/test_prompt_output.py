@@ -18,6 +18,45 @@ from werewolf.tom_llm.policy import load_policy, validate_policy, ASSET_DIGESTS
 from werewolf.tom_llm.study import make_request, wire_request, public_requests, validate_request
 
 
+def test_fixed_projection_recovers_all_proper_targets_and_excludes_self():
+    from itertools import combinations
+    from werewolf.tom_llm.output import uniform_reference_projection
+    for observer in range(7):
+        seats=[j for j in range(7) if j!=observer]
+        for size in range(1,6):
+            for support in combinations(seats,size):
+                p=[1/size if j in support else 0. for j in range(7)]
+                assert uniform_reference_projection(p,observer)==[f'player{j+1}' for j in support]
+        for value in (1/6,0.1666666716337204):
+            p=[0. if j==observer else value for j in range(7)]
+            assert uniform_reference_projection(p,observer)==[]
+
+
+def test_fixed_projection_compares_canonical_decimal_without_float_margin():
+    from werewolf.tom_llm.output import uniform_reference_projection,fixed_projection_rule
+    p=[0.,.16666666666666666,.2,.2,.2,.11666666666666664,.11666666666666665]
+    assert 6*p[1]==math.fsum(p)
+    assert uniform_reference_projection(p,0)==['player2','player3','player4','player5']
+    p[5]=.11666666666666665
+    assert uniform_reference_projection(p,0)==['player3','player4','player5']
+    assert uniform_reference_projection(p,0)==uniform_reference_projection(p.copy(),0)
+    assert len(uniform_reference_projection(p,0))<6
+    from werewolf.tom_llm.common import digest
+    rule=fixed_projection_rule();fingerprint=digest(rule);rule['calibration']='tampered'
+    assert digest(fixed_projection_rule())==fingerprint
+    assert set(inspect.signature(uniform_reference_projection).parameters)=={'probability','observer'}
+
+
+@pytest.mark.parametrize('p',[
+    None,[],[1/7]*7,[0.]*7,[0,True,.2,.2,.2,.2,.2],
+    [0,float('nan'),.2,.2,.2,.2,.2],[0,-.1,.2,.2,.2,.2,.3],
+    [0,1.1,0,0,0,0,0],[0,.3,.3,.3,.3,.3,.3]])
+def test_fixed_projection_rejects_invalid_probabilities(p):
+    from werewolf.tom_llm.output import uniform_reference_projection
+    with pytest.raises(ValueError,match='fixed projection'):
+        uniform_reference_projection(p,0)
+
+
 def response(observer=0, values=None):
     return json.dumps({"probabilities": {f"player{j+1}": v for j, v in zip(
         (j for j in range(7) if j != observer), values or [1/6] * 6, strict=True)}})
@@ -199,6 +238,110 @@ def test_actual_pre_raw_text_and_label_links_cannot_influence_messages():
 def test_current_speech_is_rejected_by_authoritative_pre_owner():
     with pytest.raises(ValueError, match="turn_start"):
         rebound_prefix(include_current_speech=True)
+
+
+@pytest.mark.parametrize('players', [[], ['player2'], ['player7','player2','player4'],
+                                    [f'player{i}' for i in range(2,8)]])
+def test_set_output_canonical_conversion_and_raw_binding(players):
+    from werewolf.tom_llm.output import parse_set_output, SET_OUTPUT_VERSION
+    from werewolf.tom_llm.common import digest
+    raw = json.dumps({'suspected_players':players})
+    result = parse_set_output(raw, 0).to_record()
+    assert result['schema_version'] == SET_OUTPUT_VERSION and result['status'] == 'valid'
+    assert result['suspected_players'] == sorted(players)
+    assert result['raw_response_digest'] == digest({'content':raw,'finish_reason':'stop'})
+    assert result == parse_set_output(raw, 0).to_record()
+    assert validate_prediction(result) == result
+    raw_probability = [1/len(players) if f'player{j+1}' in players else 0 for j in range(1,7)] if players else [1/6]*6
+    assert result['raw_probability'] == raw_probability
+    assert result['probability'][0] == 0 and sum(result['probability']) == pytest.approx(1)
+    assert all(p > 0 for p in result['probability'][1:])
+
+
+@pytest.mark.parametrize('raw,reason', [
+    ('{"suspected_players":["player1"]}', 'self_suspicion'),
+    ('{"suspected_players":["player8"]}', 'invalid_player'),
+    ('{"suspected_players":["player2","player2"]}', 'duplicate_player'),
+    ('{}', 'invalid_schema'),
+    ('{"suspected_players":[],"explanation":"no"}', 'invalid_schema'),
+    ('{"suspected_players":"player2"}', 'invalid_schema'),
+    ('{"suspected_players":[2]}', 'invalid_schema'),
+    ('{"suspected_players":[],"suspected_players":["player2"]}', 'invalid_json'),
+    ('```json\n{"suspected_players":[]}\n```', 'invalid_json'),
+    ('I refuse', 'invalid_json'), ('', 'empty_or_refusal'), (None, 'empty_or_refusal')])
+def test_set_output_invalid_is_never_a_valid_empty_set(raw, reason):
+    from werewolf.tom_llm.output import parse_set_output
+    result = parse_set_output(raw, 0).to_record()
+    assert result['status'] == 'fallback_uniform' and result['failure_type'] == reason
+    assert result['suspected_players'] is None and result['raw_probability'] is None
+    assert validate_prediction(result) == result
+    assert parse_set_output('{"suspected_players":[]}',0).to_record()['status'] == 'valid'
+
+
+@pytest.mark.parametrize('finish,reason', [('length','length'), ('content_filter','invalid_finish')])
+def test_set_finish_failure_and_forged_prediction_rejected(finish, reason):
+    from werewolf.tom_llm.output import parse_set_output
+    result = parse_set_output('{"suspected_players":[]}',0,finish_reason=finish).to_record()
+    assert result['failure_type'] == reason and result['suspected_players'] is None
+    result['suspected_players'] = []
+    with pytest.raises(ValueError):
+        validate_prediction(result)
+
+
+@pytest.mark.parametrize('key', ['qwen3','yi','mistral'])
+def test_set_task_native_model_render_and_public_information_boundary(key):
+    from werewolf.tom_llm.task import from_legacy, SET_VERSION, validate_task
+    from werewolf.tom_llm.model_spec import ModelSpec, render, wire
+    task = from_legacy(make_request(rebound_prefix(),0,fold=0),version=SET_VERSION)
+    changed = from_legacy(make_request(rebound_prefix(raw_text='PRIVATE',observation_marker='SECRET'),0,fold=0),version=SET_VERSION)
+    assert task['messages'] == changed['messages']
+    assert 'PRIVATE' not in str(task['messages']) and 'SECRET' not in str(task['messages'])
+    assert task['public_plan']['tokens'][-1]['token_type'] == 'turn_start'
+    assert validate_task(task) == task
+    body = wire(task, ModelSpec(key))
+    assert body['messages'] == task['messages']
+    assert body['response_format']['json_schema']['name'] == 'non_self_suspicion_set'
+    array = task['response_schema']['properties']['suspected_players']
+    assert array['minItems'] == 0 and array['maxItems'] == 6 and array['uniqueItems'] is True
+    assert array['items']['enum'] == [f'player{i}' for i in range(2,8)]
+    assert render(task,ModelSpec(key))['task_digest'] != render(changed,ModelSpec(key))['task_digest']
+    task['q'] = [0,1,0,0,0,0,0]
+    with pytest.raises(ValueError,match='forbids'):
+        validate_task(task)
+
+
+def test_legacy_parser_matches_frozen_git_source(monkeypatch):
+    """直接与历史 Git blob 比较，覆盖旧合法、非法、零坐标及截断响应。"""
+    import subprocess
+    import sys
+    from types import ModuleType
+    source = subprocess.check_output(['git','show','98d8e038c86c35b87490c433acb9d97caf886c2d:werewolf/tom_llm/output.py'],text=True)
+    frozen = ModuleType('frozen_tom_output')
+    monkeypatch.setitem(sys.modules, frozen.__name__, frozen)
+    exec(compile(source, '<frozen_git_output>', 'exec'), frozen.__dict__)
+    for observer in range(7):
+        for raw in (response(observer), response(observer,[1.,0,0,0,0,0]), 'invalid', '{}', None):
+            for finish in ('stop','length'):
+                assert parse_output(raw,observer,finish_reason=finish).to_record() == frozen.parse_output(raw,observer,finish_reason=finish).to_record()
+
+
+@pytest.mark.parametrize('change', ['protocol','message','schema','future'])
+def test_set_task_rejects_version_message_schema_and_future_drift(change):
+    from werewolf.tom_llm.task import from_legacy, SET_VERSION, validate_task
+    from werewolf.tom_llm.common import digest
+    task = from_legacy(make_request(_prefix(),0,fold=0),version=SET_VERSION)
+    if change == 'protocol':
+        task['schema_version'] = 'unknown'
+    elif change == 'message':
+        task['messages'][1]['content'] += '\nfuture result: player3'
+    elif change == 'schema':
+        task['response_schema']['properties']['suspected_players']['minItems'] = 2
+    else:
+        task['public_plan']['tokens'][-1]['token_type'] = 'public_speech'
+        body = {k:v for k,v in task['public_plan'].items() if k != 'plan_digest'}
+        task['plan_digest'] = task['public_plan']['plan_digest'] = digest(body)
+    with pytest.raises(ValueError):
+        validate_task(task)
 
 
 def test_full_capacity_plan_retains_all_tokens_without_summary():

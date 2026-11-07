@@ -5,7 +5,8 @@ import math
 
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.model_spec import ModelSpec
-from werewolf.tom_llm.output import parse_output
+from werewolf.tom_llm.output import parse_task_output
+from werewolf.tom_llm.task import task_version, SET_VERSION
 from werewolf.tom_llm.qualification_inputs import validate_suite, SCHEDULE
 
 VERSION = 'classic7_multimodel_gpu_evidence_v1'
@@ -75,13 +76,17 @@ def validate_round(deployment,suite,instance,events,calls,run):
         reason=out['stop_reason']
         termination=inp['sampling']['eos_token_ids']
         require(reason is None or type(reason) is int and reason in termination,'undeclared stop reason')
+        prediction=parse_task_output(out['content'],expected['task'],finish_reason=out['finish_reason']).to_record()
         if out['finish_reason']=='stop':
-            value=strict_json(out['content']);seats=expected['task']['response_schema']['properties']['probabilities']['required']
-            require(type(value) is dict and set(value)=={'probabilities'} and type(value['probabilities']) is dict
-                and set(value['probabilities'])==set(seats) and all(type(v) in (int,float) and math.isfinite(v) and 0<=v<=1
-                for v in value['probabilities'].values()), 'served JSON violates schema')
+            if task_version(expected['task'])==SET_VERSION:
+                require(prediction['status']=='valid', 'served JSON violates set schema')
+            else:
+                value=strict_json(out['content']);seats=expected['task']['response_schema']['properties']['probabilities']['required']
+                require(type(value) is dict and set(value)=={'probabilities'} and type(value['probabilities']) is dict
+                    and set(value['probabilities'])==set(seats) and all(type(v) in (int,float) and math.isfinite(v) and 0<=v<=1
+                    for v in value['probabilities'].values()), 'served JSON violates schema')
             schema_cases.add(case)
-        statuses[parse_output(out['content'],expected['task']['observer'],finish_reason=out['finish_reason']).status]+=1
+        statuses[prediction['status']]+=1
         usage={'input_tokens':len(expected['input_ids']),'output_tokens':len(tokens),'total_tokens':len(expected['input_ids'])+len(tokens)}
         require(call['usage']==usage and type(call['elapsed_seconds']) in (int,float) and math.isfinite(call['elapsed_seconds'])
             and call['elapsed_seconds']>=0 and call['memory_measurement']==MEMORY,'usage/timing/memory method mismatch')

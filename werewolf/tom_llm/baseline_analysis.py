@@ -12,9 +12,9 @@ import tempfile
 
 from werewolf.artifact_io import publish_artifact, canonical_json_bytes
 from werewolf.tom_llm.common import digest, require
-from werewolf.tom_llm.experiment import VERSION, protocol, open_run, read_record, safe_path
+from werewolf.tom_llm.experiment import VERSION, APPROVED_PROTOCOL_VERSION, protocol, open_run, read_record, safe_path
 from werewolf.tom_llm.live_runner import read_predictions, owned
-from werewolf.tom_llm.evaluation import compare
+from werewolf.tom_llm.evaluation import compare, compare_sets
 from werewolf.tom_llm.multimodel_evaluation import paired_extras, nonuniform_prediction_rows, reference_binding, validate_public_coverage
 from werewolf.tom_llm.reference import open_reference
 from werewolf.tom.protocol import bootstrap_indices
@@ -83,10 +83,21 @@ def compute(reference,run,tasks,predictions):
         row['Delta_Top1_NU']=None if not nu_games else paired_summary([nu[left][g]['argmax_in_target_support'] for g in nu_games],
             [nu[right][g]['argmax_in_target_support'] for g in nu_games],nu_indices,.95)
         pairs.append(row)
-    return {'formal_result':run['mode']=='formal','mode':run['mode'],'run_id':run['run_id'],
+    result = {'formal_result':run['mode']=='formal','mode':run['mode'],'run_id':run['run_id'],
         'game_count':len(games),'selection':run['selection'],'reference':run['reference'],'source':run['source'],
-        'protocol':protocol(),'models':results,'llm_pairwise':pairs,
+        'protocol':run['protocol'],'models':results,'llm_pairwise':pairs,
         'direction':'LLM_minus_Qwen3_block_Observer_ToM; pairwise left_minus_right; lower KL/TV and higher Top-1_NU are better'}
+    from werewolf.tom_llm.task import task_version, SET_VERSION
+    if task_version(tasks[0]) == SET_VERSION:
+        from werewolf.tom_llm.reference import raw_set_labels
+        labels = raw_set_labels(reference, run['publication'], games)
+        configuration = run['configuration'].get('input_config', {})
+        result['sets'] = compare_sets(reference, predictions, games, labels,
+            probability_to_set_rule=configuration.get('probability_to_set'),
+            formal_game_ids=run['selection']['game_ids'],
+            approved=run['protocol']['schema_version']==APPROVED_PROTOCOL_VERSION,
+            engineering_only=run['mode']=='fake')
+    return result
 
 
 def csv_bytes(rows):
@@ -112,15 +123,57 @@ def report_files(result):
             v=pair[name];differences.append({'left':pair['left'],'right':pair['right'],'metric':name,
                 'point':None if v is None else v['point'],'ci95_low':None if v is None else v['interval'][0],
                 'ci95_high':None if v is None else v['interval'][1],'direction':'left_minus_right'})
+    if 'sets' in result:
+        set_metrics = []
+        for population, group in result['sets']['populations'].items():
+            for model, cell in group['cells'].items():
+                for name, value in cell['metrics'].items():
+                    set_metrics.append({'model':model, 'metric':population+'/'+name,
+                        'point':None if value is None else value['point'],
+                        'ci95_low':None if value is None else value['interval'][0],
+                        'ci95_high':None if value is None else value['interval'][1],
+                        'games':cell['game_count'], 'rows':cell['row_count'], 'mode':result['mode']})
+            for pair in group['paired']:
+                for name, value in pair['metrics'].items():
+                    differences.append({'left':pair['left'], 'right':pair['right'], 'metric':population+'/'+name,
+                        'point':None if value is None else value['point'],
+                        'ci95_low':None if value is None else value['interval'][0],
+                        'ci95_high':None if value is None else value['interval'][1], 'direction':'left_minus_right'})
+        metrics = set_metrics + metrics
+        if result['sets'].get('research_protocol_approved'):
+            for row in metrics:
+                population=row['metric'].split('/',1)[0]
+                row['tier']=result['sets']['populations'][population]['reporting_tier'] if '/' in row['metric'] else 'supplementary_exploratory'
+            tiers={(population,pair['left'],pair['right']):pair['tier']
+                   for population,group in result['sets']['populations'].items() for pair in group['paired']}
+            for row in differences:
+                row['tier']=tiers[(row['metric'].split('/',1)[0],row['left'],row['right'])] if '/' in row['metric'] else 'supplementary_exploratory'
     for key,r in result['models'].items():
         p=r['performance'];perf.append({'model':key,**{n:p[n] for n in ('completed_requests','http_attempts','valid_prediction_rate',
             'fallback_predictions','legal_uniform_predictions','input_tokens','output_tokens','active_client_wall_seconds',
             'completed_request_loop_wall_seconds','sessions_without_end_marker','session_wall_is_total','ttft_seconds','allocator_peak_bytes','output_tokens_per_client_wall_second')},'mode':result['mode']})
     marker='FORMAL' if result['formal_result'] else 'ENGINEERING ONLY — '+result['mode'].upper()
-    lines=['# ToM Multimodel Baseline', '',marker,'',f"Run: {result['run_id']}; games: {result['game_count']}",
-        '', 'Game-macro metrics, paired game bootstrap, 95% percentile intervals. All three predeclared metrics and fallbacks are retained.',
+    metric_description = 'Game-macro metrics, paired game bootstrap, 95% percentile intervals. All three predeclared metrics and fallbacks are retained.'
+    if 'sets' in result:
+        metric_description = 'CPU/Mock candidate protocol: raw-report set metrics followed by supplementary distribution metrics; invalid outputs remain in evaluation.'
+        if result['sets'].get('research_protocol_approved'):
+            metric_description = 'Research-approved set protocol; CPU/Mock evidence does not grant physical qualification. Full Set-F1 is primary descriptive; all intervals are pointwise descriptive/exploratory.'
+    run_label=result['run_id']
+    if result.get('analysis_scope')=='three_independent_runs':
+        run_label='; '.join(key+'='+value['run_id'] for key,value in result['independent_runs'].items())
+    lines=['# ToM Multimodel Baseline', '',marker,'',f"Run: {run_label}; games: {result['game_count']}",
+        '', metric_description,
         '', '| Model | Metric | Point | 95% CI |','|---|---|---:|---|']
     for r in metrics:lines.append(f"| {r['model']} | {r['metric']} | {r['point']} | [{r['ci95_low']}, {r['ci95_high']}] |")
+    if 'sets' in result:
+        sets = result['sets']
+        lines += ['', 'Suspicion-Set V2: raw-report set metrics are primary; KL/TV/Top-1_NU are supplementary.',
+            'Both-empty set metrics equal 1; exactly-one-empty and invalid predictions score 0. Invalid sets remain null and retain their failure type.',
+            'All models use the same raw-label population including invalid predictions. Missing predictions block a complete analysis.',
+            'Probability-to-set status: '+sets['probability_to_set']['status'],
+            'Observer-ToM set comparison is restricted to Primary Comparable NU; no empty-versus-all-six reconstruction from uniform q.',
+            'Unobservable/unrecoverable Primary labels: '+str(sets['unobservable_or_unrecoverable_rows']),
+            '10,000 game-resampling replicates and 95% pointwise intervals; pairwise intervals have no simultaneous multiplicity guarantee.']
     lines+=['',f"Execution Source: {result['source']['source_revision']} / {digest(result['source'])}",
         f"Analysis Source: {result['analysis_source']['source_revision']} / {digest(result['analysis_source'])}",
         f"Selection artifact: {result['selection']['selection_artifact_manifest_digest']}",
@@ -149,7 +202,8 @@ def report_files(result):
             'metrics.svg':metric_svg,'efficiency.svg':stream.getvalue()}
 
 
-def analyze(root,destination,*,expected_run_seal=None):
+def sealed_inputs(root, expected_run_seal):
+    """共用旧封存读取链，跨 Run 不生成替代 Contract 或 Run Seal。"""
     contract,run,tasks=open_run(root,current_source=False)
     seal,final=read_record(Path(root)/'seal','mm_baseline_run_seal',expected_run_seal)
     require(final['run_digest']==contract.manifest_digest and final['mode']==run['mode'] and final['source']==run['source']
@@ -157,6 +211,11 @@ def analyze(root,destination,*,expected_run_seal=None):
     predictions={};anchors={}
     for key,wanted in final['models'].items():
         a,rows=read_predictions(root,key,expected=wanted);predictions[key]=rows;anchors[key]=a.manifest_digest
+    return contract,run,tasks,seal,predictions,anchors
+
+
+def analyze(root,destination,*,expected_run_seal=None):
+    contract,run,tasks,seal,predictions,anchors=sealed_inputs(root,expected_run_seal)
     reference=open_reference(run['publication'],run['evaluation'],expected_seal_digest=run['reference']['seal_digest'])
     result=compute(reference,run,tasks,predictions);result['prediction_seals']=anchors
     from werewolf.tom_llm.experiment import source_v3
@@ -170,8 +229,13 @@ def analyze(root,destination,*,expected_run_seal=None):
     result['execution_sessions']={key:[read_record(p,'mm_baseline_session')[1]
         for p in sorted((Path(root)/'models'/key/'sessions').iterdir()) if not p.name.endswith('-complete')] for key in run['models']}
     for key in result['models']:result['models'][key]['performance']=performance(root,key,tasks,predictions[key])
+    return publish_analysis(result,destination,{'run_seal_digest':seal.manifest_digest,'prediction_seals':anchors})
+
+
+def publish_analysis(result, destination, anchors):
+    """单 Run 与跨 Run 共用现有报告发布，不覆盖任何旧产物。"""
     dest=safe_path(destination);require(not dest.exists(),'report output exists; no overwrite')
-    if run['mode']!='fake':
+    if result['mode']!='fake':
         from werewolf.tom_llm.deployment import baseline_root
         baseline_root(dest)
     dest.parent.mkdir(parents=True,exist_ok=True)
@@ -182,5 +246,53 @@ def analyze(root,destination,*,expected_run_seal=None):
             if previous is None:os.environ.pop('MPLCONFIGDIR',None)
             else:os.environ['MPLCONFIGDIR']=previous
     return publish_artifact(dest,manifest_fields={'artifact_type':'mm_baseline_analysis','schema_version':VERSION,
-        'run_seal_digest':seal.manifest_digest,'prediction_seals':anchors,'formal_result':run['mode']=='formal',
-        'protocol_digest':digest(protocol())},files=files)
+        **anchors,'formal_result':result['formal_result'],
+        'protocol_digest':digest(result['protocol'])},files=files)
+
+
+def analyze_cross_runs(sealed_runs, destination):
+    """严格消费三个独立单模型 Run；唯一新产物是带三个父 Seal 的 Analysis。"""
+    from werewolf.tom_llm.common import require_digest
+    from werewolf.tom_llm.experiment import source_v3
+    from werewolf.tom_llm.model_spec import ModelSpec
+    keys=('qwen3','yi','mistral')
+    require(type(sealed_runs) is dict and set(sealed_runs)==set(keys), 'cross-run analysis requires exactly three model runs')
+    roots=set();run_ids=set();inputs={};predictions={};prediction_seals={};configurations={}
+    first=None;tasks=None
+    for key in keys:
+        item=sealed_runs[key]
+        require(type(item) is dict and set(item)=={'path','digest'}, 'cross-run input requires path and external Run Seal digest')
+        require_digest(item['digest'])
+        root=safe_path(item['path'])
+        require(root not in roots, 'cross-run roots must be distinct');roots.add(root)
+        contract,run,own_tasks,seal,rows,anchors=sealed_inputs(root,item['digest'])
+        require(set(run['models'])=={key} and run['model_order']==[key], 'each cross-run input must contain its exact single model')
+        require(run['run_id'] not in run_ids, 'cross-run IDs must be distinct');run_ids.add(run['run_id'])
+        require(run['protocol']['schema_version']==APPROVED_PROTOCOL_VERSION, 'cross-run consumer requires the approved set protocol')
+        if first is None:
+            first=run;tasks=own_tasks
+        else:
+            for field in ('source','mode','protocol','cohort_root','cohort_digest','selection','reference','games',
+                          'game_count','request_count','task_digests','row_identity_digest','publication','evaluation'):
+                require(run[field]==first[field], 'cross-run '+field+' mismatch')
+            require(own_tasks==tasks, 'cross-run task payload mismatch')
+        predictions[key]=rows[key];prediction_seals[key]=anchors[key];configurations[key]=run
+        inputs[key]={'path':str(root),'run_id':run['run_id'],'contract_digest':contract.manifest_digest,
+                     'run_seal_digest':seal.manifest_digest,'prediction_seal_digest':anchors[key]}
+    context={**first,'run_id':None,'models':{key:configurations[key]['models'][key] for key in keys},'model_order':list(keys)}
+    reference=open_reference(first['publication'],first['evaluation'],expected_seal_digest=first['reference']['seal_digest'])
+    result=compute(reference,context,tasks,predictions)
+    result.update(analysis_scope='three_independent_runs',independent_runs=inputs,experiment_configurations=configurations,
+                  prediction_seals=prediction_seals,analysis_source=source_v3(),
+                  model_specs={key:ModelSpec(key).record() for key in keys})
+    import importlib.metadata,sys
+    result['analysis_environment']={'python':sys.version,'packages':{name:importlib.metadata.version(name)
+        for name in ('torch','numpy','transformers','tokenizers','Jinja2','matplotlib')}}
+    result['execution_sessions']={}
+    for key in keys:
+        root=Path(inputs[key]['path'])
+        result['execution_sessions'][key]=[read_record(p,'mm_baseline_session')[1]
+            for p in sorted((root/'models'/key/'sessions').iterdir()) if not p.name.endswith('-complete')]
+        result['models'][key]['performance']=performance(root,key,tasks,predictions[key])
+    return publish_analysis(result,destination,{'run_seals':{key:inputs[key]['run_seal_digest'] for key in keys},
+                                               'prediction_seals':prediction_seals})

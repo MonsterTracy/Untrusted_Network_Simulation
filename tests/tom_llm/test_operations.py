@@ -17,8 +17,11 @@ from werewolf.tom_llm.common import digest
 from werewolf.tom_llm.model_spec import ModelSpec,ROOT
 from werewolf.tom_llm.service_manager import Service
 from tests.tom_llm import test_physical_tools as fixtures
+from tests.tom_llm.test_multimodel import cohort
+from werewolf.tom_llm.task import VERSION as TASK_VERSION,SET_VERSION,task_binding,task_version,validate_task
 
 native_suites=fixtures.native_suites
+set_suites_mock=fixtures.set_suites_mock
 short_root=fixtures.short_root
 
 
@@ -356,6 +359,23 @@ def test_source_inventory_includes_all_new_operation_code():
     assert source['qualification']=='SOFTWARE_IDENTITY_ONLY_NOT_ADMISSION'
 
 
+def test_v2_source_inventory_keeps_task_a_runtime_and_rejects_qualification_inheritance(monkeypatch):
+    from werewolf.tom_llm.experiment import source_v3
+    source=source_v3()
+    public={'werewolf/artifact_io/canonical.py','werewolf/canonical_collection/attempt_ledger.py',
+            'werewolf/canonical_collection/failure_evidence.py','werewolf/canonical_collection/pre.py',
+            'werewolf/canonical_collection/trajectory_evidence.py'}
+    assert public<=set(source['file_digests'])
+    assert 'werewolf/observer_dtrs/native_action_link.py' in source['file_digests']
+    assert source['source_inventory_clean'] is False
+    current=deepcopy(source);current['source_inventory_clean']=True
+    previous=deepcopy(current)
+    previous['file_digests']['werewolf/tom_llm/qualification_inputs.py']='a'*64
+    previous['implementation_digest']=digest(previous['file_digests'])
+    monkeypatch.setattr(dep,'source_identity',lambda:current)
+    with pytest.raises(ValueError,match='new GPU qualification'):dep.qualification_compatibility(previous)
+
+
 def test_runner_readout_changes_do_not_hide_transport_or_recovery_changes():
     raw=b'def read_predictions():\n return 1\nclass HttpTransport:\n def send(self):\n  return 2\n'
     assert dep._runner_inference_body(raw)!=dep._runner_inference_body(raw.replace(b'return 1',b'return 100'))
@@ -481,6 +501,181 @@ def test_input_anchor_and_parent_traversal_are_not_silently_accepted(tmp_path):
     with pytest.raises(ValueError,match='digest mismatch'):ops.anchor({'path':str(a.path),'digest':'0'*64})
     from werewolf.tom_llm.experiment import safe_path
     with pytest.raises(ValueError,match='parent traversal'):safe_path(tmp_path/'..'/'outside')
+
+
+@pytest.mark.parametrize('cohort,configured_version',[
+    (TASK_VERSION,TASK_VERSION),(SET_VERSION,SET_VERSION),
+    (SET_VERSION,TASK_VERSION),(TASK_VERSION,SET_VERSION),
+    (TASK_VERSION,None),(SET_VERSION,None)],indirect=['cohort'])
+def test_cohort_preparation_requires_configured_task_binding(tmp_path,cohort,configured_version,capsys):
+    artifact,_,_=cohort
+    configuration={'output_root':str(tmp_path/'outputs'),'models':{'qwen3':{}},'cohort':ops.ref(artifact)}
+    if configured_version is not None:
+        configuration['task_version']=configured_version
+    cfg=tmp_path/'ops.json';cfg.write_bytes(canonical_json_bytes(configuration))
+    original=cfg.read_bytes()
+    before={p.relative_to(artifact.path):p.read_bytes() for p in artifact.path.rglob('*') if p.is_file()}
+    command=['tom-llm','--config',str(cfg),'prepare','--stage','cohort','--mode','fake']
+    if (configured_version or TASK_VERSION)==artifact.manifest['task']['schema_version']:
+        assert main(command)==0
+        assert json.loads(capsys.readouterr().out)==ops.ref(artifact)
+    else:
+        with pytest.raises(ValueError,match='configured/cohort task protocol mismatch'):
+            main(command)
+    assert cfg.read_bytes()==original
+    assert before=={p.relative_to(artifact.path):p.read_bytes() for p in artifact.path.rglob('*') if p.is_file()}
+    assert not (tmp_path/'outputs').exists()
+
+
+@pytest.mark.parametrize('version',[TASK_VERSION,SET_VERSION])
+def test_cohort_preparation_compares_the_full_task_binding(tmp_path,monkeypatch,version):
+    from werewolf.tom_llm import multimodel
+    cfg=tmp_path/'ops.json'
+    cfg.write_bytes(canonical_json_bytes({'models':{'qwen3':{}},'task_version':version,
+        'cohort':{'path':str(tmp_path/'cohort'),'digest':'a'*64}}))
+    artifact=NS(path=tmp_path/'cohort',manifest_digest='a'*64)
+    binding=task_binding(version);binding['system_sha256']='0'*64
+    monkeypatch.setattr(ops,'anchor',lambda _:artifact)
+    monkeypatch.setattr(multimodel,'read_cohort',lambda *a,**kw:(NS(manifest={'task':binding}),[]))
+    with pytest.raises(ValueError,match='configured/cohort task protocol mismatch'):
+        main(['tom-llm','--config',str(cfg),'prepare','--stage','cohort','--mode','fake'])
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+@pytest.mark.parametrize('version',[None,TASK_VERSION,SET_VERSION])
+def test_tokenizer_preparation_uses_configured_prompt(tmp_path,monkeypatch,key,version):
+    from werewolf.tom_llm import model_spec,qualification_inputs as qi
+    from werewolf.tom_llm.prompt import set_system_text
+    assets=tmp_path/'assets';assets.mkdir()
+    c={'models':{key:{'tokenizer_assets':str(assets)}}}
+    if version is not None:
+        c['task_version']=version
+    calls=[]
+    mock_result={'status':'MOCK_ONLY','weights_verified':False,'gpu_admission':False}
+    def parity(tasks,spec,directory):
+        calls.append((tasks,spec.key,directory))
+        for task in tasks:
+            validate_task(task)
+            assert task_version(task)==(version or TASK_VERSION)
+            if version==SET_VERSION:
+                assert task['messages'][0]['content']==set_system_text()
+                assert set(task['response_schema']['properties'])=={'suspected_players'}
+                assert '六值和为一' not in task['messages'][1]['content']
+            else:
+                assert set(task['response_schema']['properties'])=={'probabilities'}
+        return deepcopy(mock_result)
+    monkeypatch.setattr(model_spec,'check_cpu_parity',parity)
+    result=ops.prepare_inputs(c,key,'tokenizer')['tokenizer']
+    assert len(calls)==1 and calls[0][1:]==(key,str(assets))
+    tasks=calls[0][0]
+    assert len(tasks)==len(qi.legacy_suite()['cases'])==12
+    if version==SET_VERSION:
+        assert result=={**mock_result,'task':task_binding(SET_VERSION),'task_sequence_digest':digest(tasks)}
+    else:
+        assert tasks==qi.synthetic_tasks()
+        assert result==mock_result
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+@pytest.mark.parametrize('reuse',[False,True])
+def test_set_suite_preparation_is_blocked_before_legacy_reuse(tmp_path,monkeypatch,key,reuse):
+    from werewolf.tom_llm import qualification_inputs as qi
+    def forbidden(*a,**kw):
+        pytest.fail('V2 suite must stop before reading or publishing a legacy suite')
+    monkeypatch.setattr(ops,'anchor',forbidden)
+    monkeypatch.setattr(qi,'publish_suite',forbidden)
+    monkeypatch.setattr(qi,'open_suite',forbidden)
+    item={}
+    if reuse:
+        item['suite']={'path':str(tmp_path/'legacy-suite'),'digest':'a'*64}
+    c={'task_version':SET_VERSION,'models':{key:item},'output_root':str(tmp_path/'outputs')}
+    with pytest.raises(ValueError,match='V2 suite BLOCKED'):
+        ops.prepare_inputs(c,key,'suite')
+    assert not (tmp_path/'outputs').exists()
+
+
+@pytest.mark.parametrize('reuse',[False,True])
+def test_legacy_suite_preparation_keeps_existing_behavior(tmp_path,monkeypatch,reuse):
+    from werewolf.tom_llm import qualification_inputs as qi
+    artifact=NS(path=tmp_path/'suite',manifest_digest='a'*64);calls=[]
+    def publish(path,spec,assets):
+        calls.append(('publish',path,spec.key,assets))
+        return artifact
+    monkeypatch.setattr(qi,'publish_suite',publish)
+    monkeypatch.setattr(qi,'open_suite',lambda path,spec,anchor:calls.append(('open',path,spec.key,anchor)))
+    monkeypatch.setattr(ops,'anchor',lambda value:artifact)
+    item={'tokenizer_assets':str(tmp_path/'assets')}
+    if reuse:
+        item['suite']=ops.ref(artifact)
+    c={'models':{'qwen3':item},'output_root':str(tmp_path/'outputs')}
+    assert ops.prepare_inputs(c,'qwen3','suite')=={'suite':ops.ref(artifact)}
+    assert [call[0] for call in calls]==(['open'] if reuse else ['publish','open'])
+    assert calls[-1]==('open',artifact.path,'qwen3',artifact.manifest_digest)
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_approved_set_suite_preparation_binds_schema_without_deployment(tmp_path,monkeypatch,set_suites_mock,key):
+    from werewolf.tom_llm import qualification_inputs as qi
+    from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+    assets=tmp_path/'UNIT_MOCK_ASSETS';assets.mkdir()
+    c={'task_version':SET_VERSION,'protocol_version':APPROVED_PROTOCOL_VERSION,
+       'output_root':str(tmp_path/'outputs'),'models':{key:{'tokenizer_assets':str(assets)}}}
+    monkeypatch.setattr(dep,'prepare_deployment',lambda *a,**kw:pytest.fail('suite cannot prepare physical deployment'))
+    result=ops.prepare_inputs(c,key,'suite')
+    suite=qi.open_suite(result['suite']['path'],ModelSpec(key),result['suite']['digest'],task_schema_version=SET_VERSION)
+    assert suite==set_suites_mock[key] and suite['task']==task_binding(SET_VERSION)
+    c['models'][key].update(result)
+    assert ops.prepare_inputs(c,key,'suite')==result
+    with pytest.raises(ValueError,match='task protocol mismatch'):
+        qi.open_suite(result['suite']['path'],ModelSpec(key),result['suite']['digest'],task_schema_version=TASK_VERSION)
+    with pytest.raises(ValueError,match='V2 physical deployment BLOCKED'):ops.prepare_model(c,key)
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+def test_approved_set_suite_without_assets_stays_blocked(tmp_path,monkeypatch,key):
+    from werewolf.tom_llm import qualification_inputs as qi
+    from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+    monkeypatch.setattr(qi,'publish_suite',lambda *a,**kw:pytest.fail('missing tokenizer must not publish PASS'))
+    c={'task_version':SET_VERSION,'protocol_version':APPROVED_PROTOCOL_VERSION,'models':{key:{}},
+       'output_root':str(tmp_path/'outputs')}
+    with pytest.raises(ValueError,match='official local tokenizer assets required'):ops.prepare_inputs(c,key,'suite')
+    assert not (tmp_path/'outputs').exists()
+
+
+def test_approved_set_config_cannot_reuse_legacy_probability_suite(tmp_path,monkeypatch,set_suites_mock):
+    from werewolf.tom_llm import qualification_inputs as qi
+    from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+    # Mock Tokenizer 也构建原概率任务；仅使用 Yi，避免伪造冻结的 Qwen token IDs。
+    class Tokenizer:
+        def __len__(self):return 1000
+        def encode(self,text,**kw):return [int(digest(text)[i:i+2],16) for i in range(0,32,2)]
+        def apply_chat_template(self,messages,**kw):
+            task=next(t for t in qi.synthetic_tasks() if t['messages']==messages)
+            return self.encode(qi.render(task,ModelSpec('yi'))['text'])
+    monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda *a:Tokenizer())
+    artifact=qi.publish_suite(tmp_path/'v1-suite',ModelSpec('yi'),'UNIT_MOCK')
+    c={'task_version':SET_VERSION,'protocol_version':APPROVED_PROTOCOL_VERSION,
+       'models':{'yi':{'suite':ops.ref(artifact)}}}
+    with pytest.raises(ValueError,match='task protocol mismatch'):ops.prepare_inputs(c,'yi','suite')
+
+
+@pytest.mark.parametrize('version',[TASK_VERSION,SET_VERSION])
+@pytest.mark.parametrize('supplied',[False,True])
+def test_tokenizer_preparation_without_assets_cannot_report_pass(tmp_path,monkeypatch,version,supplied):
+    from werewolf.tom_llm import model_spec
+    def forbidden(*a,**kw):
+        pytest.fail('missing official tokenizer assets cannot reach parity or report PASS')
+    monkeypatch.setattr(model_spec,'check_cpu_parity',forbidden)
+    item={'tokenizer_assets':str(tmp_path/'missing')} if supplied else {}
+    with pytest.raises(ValueError,match='Tokenizer parity BLOCKED'):
+        ops.prepare_inputs({'task_version':version,'models':{'qwen3':item}},'qwen3','tokenizer')
+
+
+def test_synthetic_tasks_default_preserves_frozen_probability_cases():
+    from werewolf.tom_llm import qualification_inputs as qi
+    from werewolf.tom_llm.task import from_legacy
+    expected=[from_legacy(case['request']) for case in qi.legacy_suite()['cases']]
+    assert qi.synthetic_tasks()==qi.synthetic_tasks(version=TASK_VERSION)==expected
 
 
 @pytest.mark.parametrize('key,variable',[('yi','UNS_LLM_YI_ASSETS'),('mistral','UNS_LLM_MISTRAL_ASSETS')])

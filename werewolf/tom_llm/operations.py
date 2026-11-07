@@ -7,7 +7,7 @@ import sys
 from types import SimpleNamespace
 
 from werewolf.artifact_io import verify_artifact
-from werewolf.tom_llm.common import require,strict_json
+from werewolf.tom_llm.common import digest,require,strict_json
 from werewolf.tom_llm.experiment import safe_path,VERSION as EXPERIMENT_VERSION
 from werewolf.tom_llm.qualification_evidence import VERSION as QUALIFICATION_VERSION
 from werewolf.tom_llm.model_spec import ModelSpec
@@ -26,6 +26,10 @@ def load_config(path, *, raw=None):
                 return super().construct_mapping(node,deep=deep)
         result=yaml.load(raw,Loader=Loader)
     require(type(result) is dict and type(result.get('models')) is dict and result['models'],'models mapping required')
+    if result.get('protocol_version') is not None:
+        from werewolf.tom_llm.experiment import protocol
+        from werewolf.tom_llm.task import VERSION as TASK_VERSION
+        protocol(result.get('task_version',TASK_VERSION),protocol_version=result['protocol_version'])
     for key,item in result['models'].items():
         ModelSpec(key).record()
         require(type(item) is dict,'model operations must be a mapping')
@@ -88,12 +92,21 @@ def _save_refs(args,original,c,*,models=None,cohort=None):
 
 
 def prepare_inputs(c,key,stage):
-    """Official small assets and full-cohort CPU inputs; no weights/prefix/GPU."""
+    """按配置协议检查官方小资产及完整 Cohort，不授予物理资格。"""
     from werewolf.tom_llm.model_spec import check_cpu_parity
     from werewolf.tom_llm.qualification_inputs import synthetic_tasks,publish_suite,open_suite,publish_budget,open_budget
+    from werewolf.tom_llm.task import VERSION as TASK_VERSION,SET_VERSION,task_binding
     item=c['models'][key];spec=ModelSpec(key)
+    version=c.get('task_version',TASK_VERSION)
+    binding=task_binding(version)
     if stage=='tokenizer':
-        return {'tokenizer':check_cpu_parity(synthetic_tasks(),spec,item['tokenizer_assets'])}
+        assets=item.get('tokenizer_assets')
+        require(assets and Path(assets).is_dir(), 'Tokenizer parity BLOCKED: official local tokenizer assets required')
+        tasks=synthetic_tasks(version=version)
+        result=check_cpu_parity(tasks,spec,assets)
+        if version==SET_VERSION:
+            result.update(task=binding,task_sequence_digest=digest(tasks))
+        return {'tokenizer':result}
     def destination():
         root=safe_path(item['cpu_root']) if item.get('cpu_root') else safe_path(c['output_root'])/'cpu'/key
         if sys.platform=='linux':
@@ -107,8 +120,16 @@ def prepare_inputs(c,key,stage):
                     'CPU inputs must not write inside an existing candidate')
         return root/stage
     if stage=='suite':
-        a=anchor(item['suite']) if item.get('suite') else publish_suite(destination(),spec,item['tokenizer_assets'])
-        open_suite(a.path,spec,a.manifest_digest)
+        if version==SET_VERSION:
+            from werewolf.tom_llm.experiment import APPROVED_PROTOCOL_VERSION
+            require(c.get('protocol_version')==APPROVED_PROTOCOL_VERSION, 'V2 suite BLOCKED: select the approved research protocol')
+            assets=item.get('tokenizer_assets')
+            require(item.get('suite') or (assets and Path(assets).is_dir()), 'V2 suite BLOCKED: official local tokenizer assets required')
+            a=anchor(item['suite']) if item.get('suite') else publish_suite(destination(),spec,assets,task_schema_version=version)
+            open_suite(a.path,spec,a.manifest_digest,task_schema_version=version)
+        else:
+            a=anchor(item['suite']) if item.get('suite') else publish_suite(destination(),spec,item['tokenizer_assets'])
+            open_suite(a.path,spec,a.manifest_digest)
         return {'suite':ref(a)}
     require(stage=='budget','unknown CPU preparation stage')
     cohort=anchor(c['cohort'])
@@ -161,11 +182,13 @@ def service(args,c,key):
 
 
 def prepare_model(c,key):
-    """CPU-only preparation; no installs/downloads, Selection publishing, or GPU."""
+    """仅准备 CPU 证据，不授予新协议的物理部署资格。"""
     from werewolf.tom_llm.physical import verify_model,publish_receipt,read_receipt
     from werewolf.tom_llm.live_admission import capture_bound_environment
     from werewolf.tom_llm.qualification_inputs import publish_suite,publish_budget,open_suite,open_budget
     from werewolf.tom_llm.deployment import prepare_deployment,profile
+    from werewolf.tom_llm.task import SET_VERSION
+    require(c.get('task_version')!=SET_VERSION, 'V2 physical deployment BLOCKED: CPU suite preparation does not authorize qualification')
     item=c['models'][key];spec=ModelSpec(key);root=safe_path(item['candidate_root'])
     require(not (root/'deployment').exists(),'deployment exists; select a NEW candidate_root, never overwrite')
     profile(spec,gpu_uuid=item.get('gpu_uuid',c.get('gpu_uuid')),candidate_root=root,
@@ -196,8 +219,26 @@ def dispatch(args):
     keys=getattr(args,'models',None) or list(c['models'])
     require(len(set(keys))==len(keys) and set(keys)<=set(c['models']),'duplicate/unconfigured models')
     op=args.operation
+    if op=='report' and (getattr(args,'sealed_run',None) or getattr(args,'sealed_run_digest',None)):
+        from werewolf.tom_llm.baseline_cli import keyed
+        from werewolf.tom_llm.baseline_analysis import analyze_cross_runs
+        require(args.output and not args.run_id and not args.expected_run_seal,
+                'cross-run report needs explicit --output and no aggregate run-id')
+        paths=keyed(args.sealed_run);digests=keyed(args.sealed_run_digest)
+        require(set(paths)==set(digests), 'cross-run paths and Seal anchors differ')
+        return analyze_cross_runs({key:{'path':path,'digest':digests[key]} for key,path in paths.items()},args.output)
     if hasattr(args,'model'):require(args.model in c['models'],'model is not configured')
-    if sys.platform=='linux' and op in ('prepare','admit','run','report') and not (op=='prepare' and args.stage=='tokenizer'):
+    from werewolf.tom_llm.task import SET_VERSION,VERSION as TASK_VERSION,task_binding
+    fake_operation = op == 'prepare' and getattr(args,'mode',None) == 'fake' and args.stage in ('cohort','run')
+    if c.get('task_version') == SET_VERSION and op in ('run','report'):
+        from werewolf.tom_llm.experiment import open_run, protocol, APPROVED_PROTOCOL_VERSION
+        _, bound_run, _ = open_run(run_root(args,c),current_source=False)
+        version = c.get('protocol_version')
+        if version is None and bound_run['protocol']['schema_version']==APPROVED_PROTOCOL_VERSION:
+            version=APPROVED_PROTOCOL_VERSION
+        require(bound_run['protocol'] == protocol(SET_VERSION,protocol_version=version), 'configured/run task protocol mismatch')
+        fake_operation = bound_run['mode'] == 'fake'
+    if sys.platform=='linux' and op in ('prepare','admit','run','report') and not fake_operation and not (op=='prepare' and args.stage=='tokenizer'):
         from werewolf.tom_llm.deployment import baseline_root
         baseline_root(safe_path(c['output_root']))
         for key in keys:
@@ -241,12 +282,17 @@ def dispatch(args):
         if args.stage=='cohort':
             if c.get('cohort'):
                 from werewolf.tom_llm.multimodel import read_cohort
-                a=anchor(c['cohort']);read_cohort(a.path,a.manifest_digest,current_source=False);return ref(a)
+                a=anchor(c['cohort'])
+                cohort,_=read_cohort(a.path,a.manifest_digest,current_source=False)
+                require(cohort.manifest['task']==task_binding(c.get('task_version',TASK_VERSION)),
+                        'configured/cohort task protocol mismatch')
+                return ref(a)
             from werewolf.tom_llm.qualification_inputs import export_cpu_cohort
             a=export_cpu_cohort(safe_path(c['output_root'])/'cohort',publication_root=c['publication'],evaluation_root=c['evaluation'],
                 expected_reference=c['expected_reference'],selection_root=c['selection'],
                 expected_selection=strict_json(safe_path(c['expected_selection_json']).read_bytes()),
-                selection_provenance=strict_json(safe_path(c['selection_provenance_json']).read_bytes()),prepared_root=c['prepared'])
+                selection_provenance=strict_json(safe_path(c['selection_provenance_json']).read_bytes()),prepared_root=c['prepared'],
+                task_schema_version=c.get('task_version','classic7_llm_shared_public_task_v1'))
             _save_refs(args,original,c,cohort=ref(a))
             return ref(a)
         root=run_root(args,c)
@@ -330,7 +376,8 @@ def dispatch(args):
             if not args.manage_services:
                 manager=service(SimpleNamespace(purpose='run',run_id=args.run_id),c,key)
                 pids.append(key+'='+str(manager.capture()['pid']))
-    return execute(SimpleNamespace(models=keys,games=None,mode=None,permit=permits,fake_endpoint=[],service_pid=pids,
+    return execute(SimpleNamespace(models=keys,games=None,mode=None,permit=permits,
+        fake_endpoint=getattr(args,'fake_endpoint',None) or [],service_pid=pids,
         execute_live=args.execute_live,manage_services=args.manage_services,resume=args.resume),root)
 
 

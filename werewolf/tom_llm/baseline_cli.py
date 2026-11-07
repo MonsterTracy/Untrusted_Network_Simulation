@@ -30,6 +30,9 @@ def prepare(args,root):
     raw=safe_path(args.config).read_bytes()
     from werewolf.tom_llm.operations import load_config
     c=load_config(args.config,raw=raw)
+    from werewolf.tom_llm.task import VERSION as TASK_VERSION, task_binding
+    task_schema_version = c.get('task_version', TASK_VERSION)
+    task_binding(task_schema_version)
     models=args.models or list(c['models']);games=args.games if args.games is not None else 150
     mode=args.mode or 'technical'
     expected=strict_json(safe_path(c['expected_selection_json']).read_bytes())
@@ -51,10 +54,11 @@ def prepare(args,root):
     else:
         cohort=export_cpu_cohort(root/'cohort',publication_root=c['publication'],evaluation_root=c['evaluation'],
             expected_reference=c['expected_reference'],selection_root=c['selection'],expected_selection=expected,
-            selection_provenance=provenance,prepared_root=c['prepared'])
+            selection_provenance=provenance,prepared_root=c['prepared'],task_schema_version=task_schema_version)
         cohort,tasks=read_cohort(cohort.path,cohort.manifest_digest,current_source=False)
     selected=strict_json((selection_artifact.path/'selection.json').read_bytes())
     require(cohort.manifest['selection']=={**binding,'game_ids':selected['game_ids']},'configured Selection/Prepared/provenance differs from cohort')
+    require(cohort.manifest['task'] == task_binding(task_schema_version), 'configured/cohort task protocol mismatch')
     ref=open_reference(c['publication'],c['evaluation'],expected_seal_digest=c['expected_reference'])
     require(cohort.manifest['reference']==reference_binding(ref),'configured reference differs from cohort')
     validate_public_coverage(tasks,ref,cohort.manifest['selection']['game_ids'])
@@ -112,7 +116,7 @@ def execute(args,root):
 def main(argv=None, *, analysis=False):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--action',choices=['prepare','permit','run','status','analyze'],default='analyze' if analysis else 'run')
-    parser.add_argument('--run-id',required=True)
+    parser.add_argument('--run-id')
     from werewolf.tom_llm.deployment import EXPERIMENT_BASE
     parser.add_argument('--output-root',default=str(EXPERIMENT_BASE/'experiments'))
     parser.add_argument('--models',nargs='+',choices=['qwen3','yi','mistral'])
@@ -124,7 +128,19 @@ def main(argv=None, *, analysis=False):
     parser.add_argument('--qualification');parser.add_argument('--expected-qualification')
     parser.add_argument('--budget')
     parser.add_argument('--tokenizer-assets');parser.add_argument('--expected-run-seal');parser.add_argument('--report-output')
+    parser.add_argument('--sealed-run',action='append',help='model=path for three independent approved runs')
+    parser.add_argument('--sealed-run-digest',action='append',help='model=external Run Seal digest')
     a=parser.parse_args(argv)
+    if a.sealed_run or a.sealed_run_digest:
+        from werewolf.tom_llm.baseline_analysis import analyze_cross_runs
+        require(a.action=='analyze' and a.report_output and not a.run_id and not a.expected_run_seal,
+                'cross-run report needs --report-output and no aggregate run-id')
+        paths=keyed(a.sealed_run);digests=keyed(a.sealed_run_digest)
+        require(set(paths)==set(digests), 'cross-run paths and Seal anchors differ')
+        artifact=analyze_cross_runs({key:{'path':path,'digest':digests[key]} for key,path in paths.items()},a.report_output)
+        result={'path':str(artifact.path),'manifest_digest':artifact.manifest_digest}
+        print(json.dumps(result,ensure_ascii=False,sort_keys=True));return result
+    if not a.run_id:parser.error('--run-id is required for a single-run operation')
     require(__import__('re').fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,79}',a.run_id) is not None,'invalid run-id')
     root=safe_path(a.output_root)/a.run_id
     if a.action=='prepare':result=prepare(a,root)

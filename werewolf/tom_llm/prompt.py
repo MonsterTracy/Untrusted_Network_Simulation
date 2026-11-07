@@ -13,6 +13,7 @@ from werewolf.tom_llm.common import digest, require, require_digest, observer_se
 
 ASSETS = Path(__file__).with_name("assets")
 PROMPT_VERSION = "classic7_llm_public_plan_prompt_v1"
+SET_PROMPT_VERSION = "classic7_llm_suspicion_set_prompt_v2"
 TEMPLATE_VERSION = "qwen3_single_turn_nonthinking_v1"
 COLUMNS = ("token_type", "source", "action", "target", "day", "phase")
 
@@ -96,6 +97,42 @@ def render_prompt(plan, observer):
             + canonical_json_bytes(output_schema).decode("utf-8"))
     messages = ({"role": "system", "content": asset_bytes("system.txt").decode("utf-8")},
                 {"role": "user", "content": user})
+    template = Environment(undefined=StrictUndefined, autoescape=False).from_string(
+        asset_bytes("chat_template.jinja").decode("utf-8"))
+    rendered = template.render(messages=messages)
+    return Prompt(observer, messages, rendered, table, output_schema,
+                  sha256_bytes(rendered.encode("utf-8")))
+
+
+def set_schema(observer):
+    """集合的结构约束；重复、身份等错误仍由应用层分别登记。"""
+    observer_seat(observer)
+    seats = [p for j, p in enumerate(PLAYER_IDS) if j != observer]
+    return {"type": "object", "additionalProperties": False, "required": ["suspected_players"],
+            "properties": {"suspected_players": {"type": "array", "minItems": 0, "maxItems": 6,
+                "uniqueItems": True, "items": {"type": "string", "enum": seats}}}}
+
+
+def set_system_text():
+    """保留原规则和事件词典，只替换预测目标及输出要求。"""
+    _, marker, rules = asset_bytes("system.txt").decode("utf-8").partition("规则背景：")
+    require(marker, "frozen rules section missing")
+    return ("你负责根据截至当前 PRE 的公开信息，预测指定观察者此时会报告怀疑哪些其他玩家。\n"
+            "预测观察者的报告集合；不要输出你自己怀疑谁、真实狼人身份、投票或发言策略。\n"
+            "观察者可能拥有你看不到的私人认知；不要编造私人信息。\n"
+            "候选为观察者之外的六席，死亡目标仍可入选。允许空集合，不要求固定大小或两名狼人。\n"
+            "只返回含 suspected_players 数组的严格 JSON，不返回解释、概率或额外字段。\n"
+            + marker + rules)
+
+
+def render_set_prompt(plan, observer):
+    """集合协议继续使用同一公开 PRE 表和模型原生消息角色。"""
+    table = public_table(plan)
+    output_schema = set_schema(observer)
+    user = (table + "\n\n观察者：" + PLAYER_IDS[observer]
+            + "\n预测该观察者当前会报告的怀疑对象集合。只输出以下 schema 对应的 JSON：\n"
+            + canonical_json_bytes(output_schema).decode("utf-8"))
+    messages = ({"role": "system", "content": set_system_text()}, {"role": "user", "content": user})
     template = Environment(undefined=StrictUndefined, autoescape=False).from_string(
         asset_bytes("chat_template.jinja").decode("utf-8"))
     rendered = template.render(messages=messages)

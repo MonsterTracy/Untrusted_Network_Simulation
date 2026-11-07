@@ -18,6 +18,8 @@ import pytest
 
 from tests.tom_llm.test_multimodel import cohort
 from tests.tom_llm.test_physical_tools import native_suites
+from tests.tom_llm.conftest import empty_and_full_reports
+from werewolf.tom_llm.task import SET_VERSION
 from werewolf.artifact_io import verify_artifact,canonical_json_bytes
 from werewolf.tom_llm import experiment as ex
 from werewolf.tom_llm import live_runner as runner
@@ -27,7 +29,97 @@ from werewolf.tom_llm.evaluation import compare
 from werewolf.tom_llm.model_spec import ModelSpec,wire,load_cpu_tokenizer,render
 from werewolf.tom_llm.multimodel_evaluation import paired_extras
 from werewolf.tom_llm.inference import InfrastructureFailure
+from werewolf.tom_llm.output import parse_output
 from werewolf.tom_llm.provider_semantics import NotExecuted
+
+
+@pytest.mark.parametrize('cohort',[SET_VERSION],indirect=True)
+@pytest.mark.parametrize('sealed_reference',[empty_and_full_reports],indirect=True)
+def test_approved_three_independent_runs_use_existing_seals_and_uns_report(cohort,sealed_reference,fake_http,tmp_path):
+    from werewolf.cli import main as uns_main
+    ref,pub,evaluation,_=sealed_reference
+    endpoint,state=fake_http
+    inputs={};configurations={};before={}
+    for key,style in [('qwen3','empty'),('yi','duplicate'),('mistral','all_six')]:
+        state['style']=style
+        root=tmp_path/'runs'/key
+        cfg={'task_version':SET_VERSION,'protocol_version':ex.APPROVED_PROTOCOL_VERSION}
+        ex.prepare_run(root,run_id=key,models=[key],games=5,mode='fake',
+            cohort_root=cohort[0].path,expected_cohort=cohort[0].manifest_digest,
+            publication=pub.path,evaluation=evaluation,expected_reference=ref.seal_digest,
+            configuration={'input_config':cfg})
+        seal=main(['--run-id',key,'--output-root',str(root.parent),'--fake-endpoint',key+'='+endpoint])
+        inputs[key]={'path':str(root),'digest':seal['manifest_digest']}
+        configurations[key]=ex.open_run(root,current_source=False)[1]
+        before.update({p:p.read_bytes() for p in root.rglob('*') if p.is_file()})
+    config=tmp_path/'ops.json'
+    config.write_bytes(canonical_json_bytes({'models':{k:{} for k in inputs},'task_version':SET_VERSION,
+                                            'protocol_version':ex.APPROVED_PROTOCOL_VERSION}))
+    dest=tmp_path/'analysis'
+    args=['tom-llm','--config',str(config),'report','--output',str(dest)]
+    for key,item in inputs.items():
+        args+=['--sealed-run',key+'='+item['path'],'--sealed-run-digest',key+'='+item['digest']]
+    assert uns_main(args)==0
+    a=verify_artifact(dest,expected_artifact_type='mm_baseline_analysis',expected_schema_version=ex.VERSION)
+    data=strict_json((dest/'analysis.json').read_bytes())
+    assert a.manifest['run_seals']=={k:v['digest'] for k,v in inputs.items()}
+    assert 'run_seal_digest' not in a.manifest and data['run_id'] is None
+    assert data['analysis_scope']=='three_independent_runs' and data['formal_result'] is False
+    assert data['experiment_configurations']==configurations
+    groups=data['sets']['populations']
+    assert len(groups['full_primary_raw']['paired'])==10 and len(groups['primary_comparable_nu']['paired'])==15
+    assert groups['full_primary_raw']['cells']['yi']['metrics']['valid_output_rate']['point']==0
+    assert data['sets']['probability_to_set']['status']=='ENGINEERING_ONLY_NOT_FORMAL_OOF'
+    assert set(data['prediction_seals'])=={'qwen3','yi','mistral'}
+    assert set(data['sets']['derived_methods'])=={'Observer-ToM','Always Empty','Always All-Six'}
+    assert all(v['model_run_seal'] is None for v in data['sets']['derived_methods'].values())
+    assert before=={p:p.read_bytes() for root in inputs.values() for p in Path(root['path']).rglob('*') if p.is_file()}
+    assert b'primary_descriptive' in (dest/'metrics.csv').read_bytes()
+    assert b'key_method' in (dest/'paired.csv').read_bytes()
+    from werewolf.tom_llm.baseline_analysis import analyze_cross_runs
+    with pytest.raises(ValueError,match='anchor'):
+        analyze_cross_runs({**inputs,'yi':{**inputs['yi'],'digest':'0'*64}},tmp_path/'wrong-seal')
+    target=Path(inputs['yi']['path'])/'seal'/'record.json'
+    target.write_bytes(target.read_bytes()+b'\n')
+    with pytest.raises(ValueError):analyze_cross_runs(inputs,tmp_path/'corrupt-seal')
+    assert not (tmp_path/'corrupt-seal').exists()
+
+
+@pytest.mark.parametrize('cohort',[SET_VERSION],indirect=True)
+@pytest.mark.parametrize('field',['source','cohort_digest','protocol','reference','games','task_digests','row_identity_digest','mode','model','duplicate_root'])
+def test_cross_run_consumer_rejects_mixed_contracts_before_publication(cohort,sealed_reference,tmp_path,monkeypatch,field):
+    from werewolf.tom_llm import baseline_analysis as analysis
+    from werewolf.tom_llm.multimodel_evaluation import reference_binding
+    from werewolf.tom_llm.common import identity
+    from tests.tom_llm.test_reference_evaluation import _set_rows
+    ref,pub,evaluation,_=sealed_reference
+    tasks=cohort[1];source=ex.source_v3();inputs={};memory={}
+    indexed={identity(r):r for r in _set_rows(ref)}
+    rows=[{**indexed[identity(t)],'task_digest':digest(t)} for t in tasks]
+    for key in ('qwen3','yi','mistral'):
+        root=tmp_path/key
+        run={'run_id':key,'models':{key:ModelSpec(key).digest},'model_order':[key],
+             'mode':'fake','source':deepcopy(source),'protocol':ex.protocol(SET_VERSION,protocol_version=ex.APPROVED_PROTOCOL_VERSION),
+             'cohort_root':str(cohort[0].path),'cohort_digest':cohort[0].manifest_digest,
+             'selection':cohort[0].manifest['selection'],'reference':reference_binding(ref),'games':list(ref.game_ids),
+             'game_count':len(ref.game_ids),'request_count':len(tasks),'task_digests':[digest(t) for t in tasks],
+             'row_identity_digest':digest([identity(t) for t in tasks]),'publication':str(pub.path),'evaluation':str(evaluation)}
+        seal=digest(['seal',key]);inputs[key]={'path':str(root),'digest':seal}
+        memory[root]=(NS(manifest_digest=digest(['contract',key])),run,tasks,NS(manifest_digest=seal),{key:rows},{key:digest(['predictions',key])})
+    changed=memory[tmp_path/'yi'][1]
+    if field=='duplicate_root':inputs['yi']['path']=inputs['qwen3']['path']
+    elif field=='model':changed['model_order']=['mistral']
+    elif field=='protocol':changed['protocol']=ex.protocol(SET_VERSION)
+    elif field=='source':changed['source']={**source,'source_revision':'a'*40}
+    elif field in ('games','task_digests'):changed[field]=changed[field][:-1]
+    elif field=='reference':changed[field]={**changed[field],'seal_digest':'a'*64}
+    else:changed[field]='changed'
+    monkeypatch.setattr(analysis,'sealed_inputs',lambda path,expected:memory[Path(path)])
+    monkeypatch.setattr(analysis,'open_reference',lambda *a,**kw:pytest.fail('mismatched runs reached Reference'))
+    monkeypatch.setattr(analysis,'publish_analysis',lambda *a:pytest.fail('mismatched runs were published'))
+    with pytest.raises(ValueError,match='cross-run|single model|approved set'):
+        analysis.analyze_cross_runs(inputs,tmp_path/'analysis')
+    assert not (tmp_path/'analysis').exists()
 
 
 @pytest.fixture
@@ -51,8 +143,15 @@ def fake_http():
             if state['reject_first'] and len(state['requests'])==1:
                 self.send_response(429);self.end_headers();return
             if state['delay']:time.sleep(state['delay'])
-            seats=data['response_format']['json_schema']['schema']['properties']['probabilities']['required']
-            content=json.dumps({'probabilities':{s:(.2 if state['style']=='invalid_sum' else 1/6) for s in seats}})
+            properties=data['response_format']['json_schema']['schema']['properties']
+            if 'suspected_players' in properties:
+                seats=properties['suspected_players']['items']['enum']
+                players=seats if state['style']=='all_six' else []
+                if state['style']=='duplicate':players=[seats[0],seats[0]]
+                content=json.dumps({'suspected_players':players})
+            else:
+                seats=properties['probabilities']['required']
+                content=json.dumps({'probabilities':{s:(.2 if state['style']=='invalid_sum' else 1/6) for s in seats}})
             body={'id':'fake-'+str(len(state['requests'])),'model':data['model'],
                 'choices':[{'message':{'role':'assistant','content':content,'refusal':None},'finish_reason':'stop'}],
                 'usage':{'prompt_tokens':100,'completion_tokens':10,'total_tokens':110}}
@@ -73,6 +172,89 @@ def test_source_v3_covers_both_clis_and_frozen_policy():
     assert {'scripts/run_tom_multimodel_baseline.py','scripts/analyze_tom_multimodel_baseline.py',
             'configs/paper/tom-llm-experiment-v1.json'}<=set(s['file_digests'])
     assert s['qualification']=='SOFTWARE_IDENTITY_ONLY_NOT_ADMISSION'
+
+
+@pytest.mark.parametrize('cohort', [SET_VERSION], indirect=True)
+@pytest.mark.parametrize('sealed_reference', [empty_and_full_reports], indirect=True)
+@pytest.mark.parametrize('style', ['empty','all_six','duplicate'])
+def test_set_baseline_uses_existing_runner_seals_and_analysis(cohort,sealed_reference,fake_http,tmp_path,style,monkeypatch):
+    ref,publication,evaluation,_ = sealed_reference
+    endpoint,state = fake_http
+    state['style'] = style
+    root = tmp_path/'output/test-run'
+    rule = {'schema_version':'classic7_probability_to_set_development_v2', 'scope':'ENGINEERING_ONLY',
+            'threshold':.2, 'comparison':'>=', 'development_game_ids':['synthetic-independent-development'],
+            'development_source_digest':'d'*64}
+    ex.prepare_run(root,run_id='test-run',models=['qwen3','yi','mistral'],games=5,mode='fake',
+        cohort_root=cohort[0].path,expected_cohort=cohort[0].manifest_digest,publication=publication.path,
+        evaluation=evaluation,expected_reference=ref.seal_digest,
+        configuration={'input_config':{'probability_to_set':rule}})
+    args = ['--run-id','test-run','--output-root',str(root.parent)]
+    for key in ('qwen3','yi','mistral'):
+        args += ['--fake-endpoint',key+'='+endpoint]
+    if style == 'empty':
+        from werewolf.cli import main as uns_main
+        from werewolf.tom_llm import operations
+        configuration = tmp_path/'config.json'
+        configuration.write_bytes(canonical_json_bytes({'output_root':str(root.parent),
+            'task_version':SET_VERSION, 'models':{k:{} for k in ('qwen3','yi','mistral')}}))
+        monkeypatch.setattr(operations,'sys',NS(platform='linux'))
+        assert uns_main(['tom-llm','--config',str(configuration),'run','--run-id','test-run',
+            '--fake-endpoint','qwen3='+endpoint,'--fake-endpoint','yi='+endpoint,
+            '--fake-endpoint','mistral='+endpoint]) == 0
+        artifact,_ = ex.read_record(root/'seal','mm_baseline_run_seal')
+        seal = {'manifest_digest':artifact.manifest_digest}
+    else:
+        seal = main(args)
+    assert len(state['requests']) == 3 * len(cohort[1])
+    assert all(model['sealed'] for model in runner.status(root)['models'].values())
+    before = {str(p):p.read_bytes() for p in (root/'models').rglob('*') if p.is_file()}
+    report = main(['--run-id','test-run','--output-root',str(root.parent),
+                   '--expected-run-seal',seal['manifest_digest']],analysis=True)
+    data = strict_json((Path(report['path'])/'analysis.json').read_bytes())
+    assert data['protocol']['schema_version'] == 'classic7_multimodel_suspicion_set_experiment_v2'
+    assert data['formal_result'] is False and data['sets']['formal_result'] is False
+    groups = data['sets']['populations']
+    assert groups['empty']['row_count'] == groups['all_six']['row_count'] == 5
+    assert groups['full_primary_raw']['row_count'] == len(ref.primary_rows)
+    assert len(groups['primary_comparable_nu']['paired']) == 6
+    assert groups['primary_comparable_nu']['bootstrap_replicates'] == 10000
+    assert data['sets']['probability_to_set']['status'] == 'ENGINEERING_ONLY_NOT_CALIBRATED'
+    for key in ('qwen3','yi','mistral'):
+        _,rows = runner.read_predictions(root,key)
+        assert len(rows) == len(cohort[1])
+        assert all((r['prediction']['suspected_players'] is None) == (style == 'duplicate') for r in rows)
+        assert groups['full_primary_raw']['cells'][key]['metrics']['valid_output_rate']['point'] == (style != 'duplicate')
+        assert data['models'][key]['performance']['http_attempts'] == len(cohort[1])
+    expected_empty = float(style == 'empty')
+    assert groups['empty']['cells']['qwen3']['metrics']['exact_set_match']['point'] == expected_empty
+    assert before == {str(p):p.read_bytes() for p in (root/'models').rglob('*') if p.is_file()}
+    for filename in ('metrics.csv','paired.csv','report.md'):
+        assert b'set_f1' in (Path(report['path'])/filename).read_bytes()
+    assert data['sets']['public_output_coverage']['qwen3']['valid_empty_predictions'] == (len(cohort[1]) if style == 'empty' else 0)
+    # 已封存的新集合结果同样受原 Artifact 字节检查保护。
+    target = next((root/'models/qwen3/requests').glob('*/result/record.json'))
+    target.write_bytes(target.read_bytes()+b'\n')
+    with pytest.raises(ValueError):
+        runner.read_predictions(root,'qwen3')
+    with pytest.raises(ValueError,match='independent development'):
+        ex.prepare_run(tmp_path/'not-admitted',run_id='test-run',models=['qwen3'],games=5,mode='formal',
+            cohort_root=cohort[0].path,expected_cohort=cohort[0].manifest_digest,publication=publication.path,
+            evaluation=evaluation,expected_reference=ref.seal_digest)
+
+
+@pytest.mark.parametrize('key,variable', [('qwen3','UNS_LLM_TOKENIZER_ASSETS'),
+    ('yi','UNS_LLM_YI_ASSETS'),('mistral','UNS_LLM_MISTRAL_ASSETS')])
+def test_set_prompt_official_cpu_tokenizer_parity_if_assets_supplied(key,variable):
+    from werewolf.tom_llm.model_spec import check_cpu_parity
+    from werewolf.tom_llm.task import from_legacy
+    from werewolf.tom_llm.qualification_inputs import legacy_suite
+    directory = os.environ.get(variable)
+    if not directory:
+        pytest.skip('official local tokenizer assets not supplied; no download')
+    tasks = [from_legacy(c['request'],version=SET_VERSION) for c in legacy_suite()['cases']]
+    result = check_cpu_parity(tasks,ModelSpec(key),directory)
+    assert result['status'] == 'CPU_PARITY_PASS' and result['weights_verified'] is False
 
 
 @pytest.mark.parametrize('count',[1,10,149,150])
@@ -331,7 +513,7 @@ def test_analysis_pairwise_signs_are_left_minus_right(study,fake_http):
     for row in changed['yi']:
         seats=[f'player{i+1}' for i in range(7) if i!=row['observer']]
         raw={'probabilities':{s:(.75 if i==0 else .05) for i,s in enumerate(seats)}}
-        row['prediction']=runner.parse_output(json.dumps(raw),row['observer']).to_record()
+        row['prediction']=parse_output(json.dumps(raw),row['observer']).to_record()
     result=compute(ref,run,tasks,changed)
     pair=next(p for p in result['llm_pairwise'] if p['left']=='qwen3' and p['right']=='yi')
     left=result['models']['qwen3']['cells']['llm']['tv']['point'];right=result['models']['yi']['cells']['llm']['tv']['point']

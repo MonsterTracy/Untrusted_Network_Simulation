@@ -1,4 +1,7 @@
 {
+  "task_version": "classic7_llm_suspicion_set_task_v2",
+  "protocol_version": "classic7_suspicion_set_research_protocol_v2",
+  "probability_to_set": null,
   "publication": "/data/yuxiao/Untrusted_Network_Simulation/publications/paper-development-qwen35-9b-1500-v1",
   "prepared": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/paper-development-qwen35-9b-1500-v1-backbone-v1",
   "evaluation": "/data/yuxiao/Untrusted_Network_Simulation/paper-studies/evaluations/0b8c1d7220aae6fcf577038f8d930c97d6453b7f45616ed0a19c817e7a80b956",

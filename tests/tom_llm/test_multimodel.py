@@ -34,7 +34,7 @@ def task():
 
 
 @pytest.fixture
-def cohort(tmp_path,monkeypatch,sealed_reference):
+def cohort(tmp_path,monkeypatch,sealed_reference,request):
     # Like the historical 5-game Reference fixture, shrink only fixture selection counts.
     # Production select_games remains fixed at 1500 and 30 games/fold.
     from werewolf.tom_llm import selection
@@ -56,7 +56,9 @@ def cohort(tmp_path,monkeypatch,sealed_reference):
         'prepared_manifest_digest':prepared.manifest_digest,'pre_reference_selection_evidence_digest':'e'*64,
         'reconciliation_evidence_digest':'f'*64}
     membership = {g:r['fold'] for r in ref.folds for g in r['held_out_game_ids']}
-    tasks = public_tasks([p for g in publication.public_view.games for p in g.authoritative_pre_prefixes],membership)
+    from werewolf.tom_llm.task import VERSION as TASK_VERSION
+    tasks = public_tasks([p for g in publication.public_view.games for p in g.authoritative_pre_prefixes],membership,
+                         version=getattr(request,'param',TASK_VERSION))
     path = tmp_path/'cohort'
     artifact = publish_mock_cohort(path,tasks,ref,selection_root=selected.path,expected=expected,
         provenance=provenance,prepared_manifest=prepared.manifest)
@@ -69,6 +71,21 @@ def prepare(tmp_path,cohort,key='qwen3',service='synthetic:service-1'):
     mm.prepare_model_mock(root,cohort[0].path,expected_cohort_digest=cohort[0].manifest_digest,
         execution=execution,tokenizer_identity='synthetic:count-v1',count_tokens=lambda _:100)
     return root,execution
+
+
+@pytest.mark.parametrize('cohort', ['classic7_llm_suspicion_set_task_v2'], indirect=True)
+def test_set_cohort_requires_matching_execution_protocol(tmp_path,cohort):
+    from werewolf.tom_llm.task import SET_VERSION
+    wrong = mm.ModelExecution(ModelSpec('qwen3'),'synthetic:probability-v1')
+    with pytest.raises(ValueError,match='protocol mismatch'):
+        mm.prepare_model_mock(tmp_path/'wrong',cohort[0].path,expected_cohort_digest=cohort[0].manifest_digest,
+            execution=wrong,tokenizer_identity='synthetic:counter',count_tokens=lambda _:100)
+    assert not (tmp_path/'wrong').exists()
+    right = mm.ModelExecution(ModelSpec('qwen3'),'synthetic:set-v2',task_schema_version=SET_VERSION)
+    mm.prepare_model_mock(tmp_path/'right',cohort[0].path,expected_cohort_digest=cohort[0].manifest_digest,
+        execution=right,tokenizer_identity='synthetic:counter',count_tokens=lambda _:100)
+    _,bound,tasks = mm.open_model_mock(tmp_path/'right',right)
+    assert bound.manifest['task']['schema_version'] == SET_VERSION and len(tasks) == len(cohort[1])
 
 
 @pytest.mark.parametrize('key',KEYS)

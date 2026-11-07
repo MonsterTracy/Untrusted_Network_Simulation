@@ -13,7 +13,7 @@ import uuid
 from werewolf.tom_llm.common import digest, identity, require, strict_json
 from werewolf.tom_llm.experiment import open_run, publish_record, read_record, safe_path
 from werewolf.tom_llm.model_spec import ModelSpec, wire, render, load_cpu_tokenizer
-from werewolf.tom_llm.output import parse_output
+from werewolf.tom_llm.output import parse_task_output
 from werewolf.tom_llm.provider_semantics import NotExecuted, OutcomeUnknown
 from werewolf.tom_llm.inference import InfrastructureFailure
 from werewolf.tom_llm.qualification_evidence import validate_sampling
@@ -119,7 +119,7 @@ def validate_reply(raw, task, spec, proof=None, *, tokenizer=None, session=None)
                 and out['engine_wall_seconds']>=0,'engine timing missing')
         from werewolf.tom_llm.live_service import _eos
         require(out['stop_reason'] is None or out['stop_reason'] in _eos(spec),'stop token drift')
-    prediction=parse_output(content,task['observer'],finish_reason=choice['finish_reason']).to_record()
+    prediction=parse_task_output(content,task,finish_reason=choice['finish_reason']).to_record()
     return prediction,usage
 
 

@@ -12,9 +12,9 @@ from werewolf.tom_llm.common import digest, identity, require, require_digest, s
 from werewolf.tom_llm.development_source import development_source_identity
 from werewolf.tom_llm.inference import MockBackend, InfrastructureFailure
 from werewolf.tom_llm.model_spec import ModelSpec, registry, render, wire, token_preflight
-from werewolf.tom_llm.output import parse_output
+from werewolf.tom_llm.output import parse_task_output
 from werewolf.tom_llm.provider_semantics import NotExecuted, OutcomeUnknown
-from werewolf.tom_llm.task import task_binding, validate_task
+from werewolf.tom_llm.task import task_binding, validate_task, task_version, VERSION as TASK_VERSION
 
 VERSION = 'classic7_multimodel_mock_v1'
 COHORT_VERSION = 'classic7_multimodel_public_cohort_v1'
@@ -50,7 +50,8 @@ def read_cohort(root, expected_digest, *, current_source=False):
                                expected_schema_version=COHORT_VERSION)
     m = artifact.manifest
     require(artifact.manifest_digest == expected_digest and m['engineering_only'] is True
-            and (not current_source or m['source'] == source_identity()) and m['task'] == task_binding(), 'cohort identity/source drift')
+            and (not current_source or m['source'] == source_identity())
+            and m['task'] == task_binding(m['task']['schema_version']), 'cohort identity/source drift')
     from werewolf.tom_llm.deployment import validate_source_evidence
     validate_source_evidence(m['source'])
     require(set(m['file_table']) == {'requests.jsonl'}, 'cohort file inventory drift')
@@ -63,6 +64,7 @@ def read_cohort(root, expected_digest, *, current_source=False):
     tasks = [strict_json(line) for line in (artifact.path/'requests.jsonl').read_bytes().splitlines()]
     for task in tasks:
         validate_task(task)
+        require(task_version(task) == m['task']['schema_version'], 'mixed cohort task protocols')
     require(tasks and len({identity(t) for t in tasks}) == len(tasks)
             and digest(tasks) == m['requests_digest']
             and digest([identity(t) for t in tasks]) == m['row_identity_digest'], 'cohort request coverage drift')
@@ -74,6 +76,7 @@ def read_cohort(root, expected_digest, *, current_source=False):
 class ModelExecution:
     spec: ModelSpec
     service_id: str
+    task_schema_version: str = TASK_VERSION
 
     def binding(self):
         require(type(self.spec) is ModelSpec and type(self.service_id) is str
@@ -81,7 +84,7 @@ class ModelExecution:
                 'only explicit synthetic model/service execution is admitted')
         return {'schema_version': VERSION + '_execution', 'model_spec': self.spec.record(),
                 'model_spec_digest': self.spec.digest, 'service_id': self.service_id,
-                'task': task_binding(), 'source': source_identity(),
+                'task': task_binding(self.task_schema_version), 'source': source_identity(),
                 'engineering_only': True, 'physical_admission': None}
 
 
@@ -91,6 +94,7 @@ def prepare_model_mock(destination, cohort_root, *, expected_cohort_digest, exec
     require(type(tokenizer_identity) is str and tokenizer_identity.startswith('synthetic:'), 'Mock token counter required')
     cohort, tasks = read_cohort(cohort_root, expected_cohort_digest)
     bound = execution.binding()
+    require(bound['task'] == cohort.manifest['task'], 'execution/cohort task protocol mismatch')
     preflight = token_preflight(tasks, execution.spec, count_tokens=count_tokens)
     return publish_artifact(Path(destination)/'contract', manifest_fields={
         'artifact_type': 'llm_multimodel_mock_contract', 'schema_version': VERSION,
@@ -108,6 +112,7 @@ def open_model_mock(root, execution):
     require(m['engineering_only'] is True and m['execution'] == bound and m['execution_digest'] == digest(bound),
             'model/revision/service/source execution drift')
     cohort, tasks = read_cohort(m['cohort_path'], m['cohort_digest'])
+    require(bound['task'] == cohort.manifest['task'], 'execution/cohort task protocol mismatch')
     return contract, cohort, tasks
 
 
@@ -134,7 +139,7 @@ def result_row(contract, task, spec, attempts, reply):
         'cohort_digest':contract.manifest['cohort_digest'], 'task_digest':digest(task),
         'wire_digest':digest(wire(task,spec)), 'rendered_prompt_digest':render(task,spec)['text_sha256'],
         'attempt_digests':[a.manifest_digest for a in attempts], 'usage':reply['usage'],
-        'prediction':parse_output(reply['content'],task['observer'],finish_reason=reply['finish_reason']).to_record()}
+        'prediction':parse_task_output(reply['content'],task,finish_reason=reply['finish_reason']).to_record()}
 
 
 def verify_result(root, contract, task, spec):
