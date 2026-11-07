@@ -12,7 +12,7 @@ import sys
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.deployment import open_deployment, require_idle_gpu, validate_process_environment, validate_cache_paths
-from werewolf.tom_llm.model_spec import ROOT, ModelSpec
+from werewolf.tom_llm.model_spec import ROOT, ModelSpec, wire_schema
 from werewolf.tom_llm.qualification_evidence import validate_sampling, CAPTURE_SITE
 from werewolf.tom_llm.qualification_inputs import SCHEDULE, validate_suite
 
@@ -75,7 +75,7 @@ def install_probe(engine,sink,*,deployment,process_lifetime):
         ids=list(core.prompt_token_ids)
         require(ids==case['input_ids'],'final engine input_ids/synthetic schedule drift')
         sampling=snapshot_sampling(core.sampling_params)
-        validate_sampling(sampling,case['task']['response_schema'],spec)
+        validate_sampling(sampling,wire_schema(case['task']),spec)
         external=core.external_req_id
         require(type(external) is str and external and external not in inputs,'duplicate/absent request ID')
         record={**common,'kind':'input','case_index':case['case_index'],'engine_request_id':external,

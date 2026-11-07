@@ -115,6 +115,56 @@ def test_shared_public_task_schema_and_model_native_wrapping(task,key):
 
 
 @pytest.mark.parametrize('key',KEYS)
+@pytest.mark.parametrize('case_index',range(12))
+def test_set_wire_projects_only_xgrammar_unique_items_without_changing_task(key,case_index):
+    """覆盖实际 Wire；科研 Schema/消息完整保留，重复玩家仍按原规则判无效。"""
+    from werewolf.tom_llm.task import SET_VERSION,validate_task
+    from werewolf.tom_llm.output import parse_set_output
+    from werewolf.tom_llm.qualification_inputs import synthetic_tasks
+    request=synthetic_tasks(version=SET_VERSION)[case_index];observer=request['observer']
+    original=canonical_json_bytes(request);spec=ModelSpec(key);prompt=render(request,spec)
+    expected=deepcopy(request['response_schema'])
+    assert expected['properties']['suspected_players'].pop('uniqueItems') is True
+    actual=wire(request,spec)
+    assert actual['response_format']['json_schema']['schema']==expected
+    encoded=canonical_json_bytes(actual['response_format']['json_schema']['schema'])
+    for keyword in ('uniqueItems','contains','minContains','maxContains','multipleOf','patternProperties','propertyNames'):
+        assert ('"'+keyword+'":').encode() not in encoded
+    assert actual['messages']==request['messages'] and actual['response_format']['json_schema']['strict'] is True
+    assert canonical_json_bytes(request)==original and validate_task(request)==request
+    assert render(request,spec)==prompt and '"uniqueItems":true' in prompt['text']
+    players=expected['properties']['suspected_players']['items']['enum']
+    assert len(players)==6
+    for subset in ([],players[:1],players):
+        result=parse_set_output(json.dumps({'suspected_players':subset}),observer).to_record()
+        assert result['status']=='valid' and result['suspected_players']==subset
+    duplicate=parse_set_output(json.dumps({'suspected_players':[players[0],players[0]]}),observer).to_record()
+    assert duplicate['status']=='fallback_uniform' and duplicate['failure_type']=='duplicate_player'
+    assert duplicate['suspected_players'] is None
+    actual['response_format']['json_schema']['schema']['properties']['suspected_players']['items']['enum'].pop()
+    assert canonical_json_bytes(request)==original
+
+
+@pytest.mark.parametrize('key',KEYS)
+def test_set_cpu_parity_mock_records_same_wire_projection_as_suite(key,monkeypatch):
+    """只验证 Receipt 的绑定字段；此 Mock 不代表官方 Tokenizer Parity。"""
+    from werewolf.tom_llm.qualification_inputs import synthetic_tasks
+    from werewolf.tom_llm.task import SET_VERSION
+    tasks=synthetic_tasks(version=SET_VERSION);spec=ModelSpec(key)
+    texts={digest(t['messages']):render(t,spec)['text'] for t in tasks}
+    class Tokens:
+        def encode(self,text,**kw):return list(bytes.fromhex(digest(text)))
+        def apply_chat_template(self,messages,*,tokenize,**kw):
+            text=texts[digest(messages)]
+            return self.encode(text) if tokenize else text
+    monkeypatch.setattr(ms,'load_cpu_tokenizer',lambda *a:Tokens())
+    result=check_cpu_parity(tasks,spec,'UNIT_MOCK')
+    assert result['wire_schema_projection']==ms.SET_WIRE_SCHEMA_PROJECTION
+    assert result['wire_sequence_digest']==digest([wire(t,spec) for t in tasks])
+    assert result['gpu_admission'] is False and result['weights_verified'] is False
+
+
+@pytest.mark.parametrize('key',KEYS)
 def test_registry_is_pinned_and_cannot_authorize_arbitrary_models(key,monkeypatch,tmp_path):
     row = ModelSpec(key).record()
     assert len(row['revision']) == 40 and row['revision'] != 'main'

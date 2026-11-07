@@ -1,6 +1,7 @@
 """Closed, versioned CPU/Mock model registry. No model or service admission."""
 
 from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
@@ -14,6 +15,12 @@ from werewolf.tom_llm.server_fixed import wire_request_v2
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / 'configs/paper/tom-llm-models-v1.json'
 REGISTRY_SHA256 = 'c50b75a8d9580434e9fc327dca0a866c09fa3503f61707b4ffe5ab3db73c97cf'
+SET_WIRE_SCHEMA_PROJECTION = {
+    'schema_version':'classic7_suspicion_set_xgrammar_wire_projection_v1',
+    'backend':'xgrammar','vllm_version':'0.27.0',
+    'removed_keywords':['/properties/suspected_players/uniqueItems'],
+    'duplicate_policy':'application_reject_duplicate_player_without_repair',
+}
 
 
 def registry():
@@ -67,8 +74,18 @@ def render(request, spec):
             'text': text, 'text_sha256': sha256_bytes(text.encode())}
 
 
-def wire(request, spec):
+def wire_schema(request):
+    """仅投影后端不支持的唯一性约束，原任务、Prompt 和应用层校验不变。"""
     validate_task(request)
+    if task_version(request)!=SET_VERSION:
+        return request['response_schema']
+    schema=deepcopy(request['response_schema'])
+    del schema['properties']['suspected_players']['uniqueItems']
+    return schema
+
+
+def wire(request, spec):
+    schema=wire_schema(request)
     row = spec.record()
     if spec.key == 'qwen3' and task_version(request) != SET_VERSION:
         return wire_request_v2(to_legacy(request))  # Exact original Wire v2 bytes, no extra fields.
@@ -80,7 +97,7 @@ def wire(request, spec):
             'top_p': d['top_p'], 'n': d['n'], 'max_tokens': d['max_tokens'], 'seed': d['seed'],
             'response_format': {'type': 'json_schema', 'json_schema': {
                 'name': 'non_self_suspicion_set' if task_version(request) == SET_VERSION else 'non_self_suspicion',
-                'strict': True, 'schema': request['response_schema']}},
+                'strict': True, 'schema': schema}},
             'extra_body': extra}
 
 
@@ -139,7 +156,12 @@ def check_cpu_parity(requests, spec, directory):
             require(ours == to_legacy(request)['rendered_prompt'] and actual[-7:] == [151644,77091,198,151667,271,151668,271],
                     'frozen Qwen text/token compatibility failure')
     counts = token_preflight(requests, spec, count_tokens=lambda t: len(tokenizer.encode(t, add_special_tokens=False)))
-    return {'status': 'CPU_PARITY_PASS', 'model_spec_digest': spec.digest, 'weights_verified': False,
+    result = {'status': 'CPU_PARITY_PASS', 'model_spec_digest': spec.digest, 'weights_verified': False,
             'gpu_admission': False, 'model': spec_row['model'], 'revision': spec_row['revision'],
             'text_sequence_digest': digest(texts), 'input_ids_sequence_digest': digest(token_ids),
             'legacy_qwen_compatibility': spec.key == 'qwen3' and all(task_version(r) != SET_VERSION for r in requests), **counts}
+    if any(task_version(r)==SET_VERSION for r in requests):
+        require(all(task_version(r)==SET_VERSION for r in requests),'mixed CPU parity task protocols')
+        result.update(wire_schema_projection=deepcopy(SET_WIRE_SCHEMA_PROJECTION),
+                      wire_sequence_digest=digest([wire(r,spec) for r in requests]))
+    return result

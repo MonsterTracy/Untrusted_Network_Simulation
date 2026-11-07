@@ -14,7 +14,7 @@ import pytest
 from werewolf.artifact_io import publish_artifact,verify_artifact,canonical_json_bytes
 from werewolf.tom_llm.common import digest
 from werewolf.tom_llm import multimodel as mm, physical, deployment as dep, qualification_inputs as qi
-from werewolf.tom_llm.model_spec import ModelSpec
+from werewolf.tom_llm.model_spec import ModelSpec, wire_schema, SET_WIRE_SCHEMA_PROJECTION
 from werewolf.tom_llm.qualification_evidence import NUMERIC,MEMORY,validate_sampling,validate_qualification
 from werewolf.tom_llm.gpu_probe import install_probe,snapshot_sampling,validate_launch_args,JsonlSink
 from werewolf.tom_llm.candidate_client import SyntheticCandidateClient,collect_round
@@ -336,7 +336,8 @@ def test_set_inputs_reject_version_source_and_capacity_mismatch(bound_set_inputs
             qi.open_budget(a.path,spec,a.manifest_digest,task_schema_version=SET_VERSION,expected_source=p.source)
 
 
-def test_old_cpu_set_suite_remains_readable_but_cannot_qualify(set_suites_mock):
+def test_same_wire_suite_without_source_is_offline_only(set_suites_mock):
+    """同一 Wire 可缺 Source 离线核读；投影前输入另有专门拒绝用例。"""
     suite=deepcopy(set_suites_mock['qwen3']);source=suite.pop('source')
     assert qi.validate_suite(suite,ModelSpec('qwen3'))==suite
     with pytest.raises(ValueError,match='Source binding'):
@@ -387,11 +388,12 @@ def test_set_schema_suite_and_mock_two_round_evidence(set_suites_mock,tmp_path,k
     from werewolf.tom_llm.task import SET_VERSION
     suite=set_suites_mock[key];spec=ModelSpec(key)
     assert suite['schema_version']==qi.SET_SUITE_VERSION and suite['task']['schema_version']==SET_VERSION
+    assert suite['wire_schema_projection']==SET_WIRE_SCHEMA_PROJECTION
     assert len(suite['cases'])==12 and suite['schedule']==qi.SCHEDULE
     for case in suite['cases']:
         schema=case['task']['response_schema']['properties']['suspected_players']
         assert schema['minItems']==0 and schema['maxItems']==6 and schema['uniqueItems'] is True
-        validate_sampling(sampling(spec,case['task']['response_schema']),case['task']['response_schema'],spec)
+        validate_sampling(sampling(spec,wire_schema(case['task'])),wire_schema(case['task']),spec)
     record=model_record(key,set_suites_mock);rounds=[]
     for run in range(2):
         path=tmp_path/str(run);path.mkdir()
@@ -404,7 +406,8 @@ def test_set_schema_suite_and_mock_two_round_evidence(set_suites_mock,tmp_path,k
     assert report['formal_execution_authorized'] is False and report['dispatches']==76
     assert report['conversion_status_counts']=={'valid':76}
     invalid=deepcopy(rounds)
-    invalid[0]['events'][2]['content']=invalid[0]['calls'][0]['content']='{"suspected_players":["player1","player1"]}'
+    player=suite['cases'][0]['task']['response_schema']['properties']['suspected_players']['items']['enum'][0]
+    invalid[0]['events'][2]['content']=invalid[0]['calls'][0]['content']=json.dumps({'suspected_players':[player,player]})
     with pytest.raises(ValueError,match='set schema'):validate_qualification(record,invalid)
 
 
@@ -412,6 +415,30 @@ def test_set_suite_rejects_task_drift(set_suites_mock):
     suite=deepcopy(set_suites_mock['yi'])
     suite['task']['system_sha256']='0'*64
     with pytest.raises(ValueError,match='binding drift'):qi.validate_suite(suite,ModelSpec('yi'))
+
+
+@pytest.mark.parametrize('change',['projection','old_wire_digest','missing_projection'])
+def test_set_suite_rejects_unprojected_or_changed_wire_contract(set_suites_mock,change):
+    from werewolf.tom_llm.model_spec import wire
+    suite=deepcopy(set_suites_mock['yi']);spec=ModelSpec('yi')
+    if change=='projection':suite['wire_schema_projection']['removed_keywords']=[]
+    elif change=='missing_projection':suite.pop('wire_schema_projection')
+    else:
+        case=suite['cases'][0];old=wire(case['task'],spec)
+        old['response_format']['json_schema']['schema']=case['task']['response_schema']
+        case['wire_digest']=digest(old)
+    with pytest.raises(ValueError):qi.validate_suite(suite,spec)
+
+
+@pytest.mark.parametrize('key',KEYS)
+@pytest.mark.parametrize('keyword',['uniqueItems','contains','minContains','maxContains'])
+def test_actual_sampling_rejects_unapproved_wire_schema_features(set_suites_mock,key,keyword):
+    task=set_suites_mock[key]['cases'][0]['task'];spec=ModelSpec(key);expected=wire_schema(task)
+    params=sampling(spec,expected)
+    validate_sampling(params,expected,spec)
+    params=deepcopy(params)
+    params['json_schema']['properties']['suspected_players'][keyword]=True
+    with pytest.raises(ValueError,match='JSON Schema drift'):validate_sampling(params,expected,spec)
 
 
 def model_record(key,suites):
@@ -439,7 +466,7 @@ def sampling(spec,schema):
 
 
 def params_object(record,case):
-    p=sampling(ModelSpec(record['key']),case['task']['response_schema']);kwargs={k:p[k] for k in NUMERIC}
+    p=sampling(ModelSpec(record['key']),wire_schema(case['task']));kwargs={k:p[k] for k in NUMERIC}
     kwargs.update({k:p[k] for k in ('stop','stop_token_ids','ignore_eos','bad_words')})
     return NS(**kwargs,_all_stop_token_ids=set(p['eos_token_ids']),_eos_token_id=p['primary_eos_token_id'],
         structured_outputs=NS(json=p['json_schema']))

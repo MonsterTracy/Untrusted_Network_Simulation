@@ -4,7 +4,7 @@ from collections import Counter
 import math
 
 from werewolf.tom_llm.common import digest, require, strict_json
-from werewolf.tom_llm.model_spec import ModelSpec
+from werewolf.tom_llm.model_spec import ModelSpec, wire_schema
 from werewolf.tom_llm.output import parse_task_output
 from werewolf.tom_llm.task import task_version, SET_VERSION
 from werewolf.tom_llm.qualification_inputs import validate_suite, SCHEDULE
@@ -63,7 +63,7 @@ def validate_round(deployment,suite,instance,events,calls,run):
         require(type(key) is str and key and key not in seen and out['engine_request_id']==key, 'duplicate/missing engine request ID')
         seen.add(key)
         require(inp['capture_site']==CAPTURE_SITE and inp['input_ids']==expected['input_ids'], 'final engine input_ids drift')
-        validate_sampling(inp['sampling'],expected['task']['response_schema'],spec)
+        validate_sampling(inp['sampling'],wire_schema(expected['task']),spec)
         require(call['run']==run and (call['phase'],call['case_index'],call['repeat'])==(phase,case,repeat)
             and call['engine_request_id']==key and call['wire_digest']==expected['wire_digest']
             and call['instance_digest']==instance['instance_digest'] and call['content']==out['content']

@@ -12,7 +12,7 @@ import uuid
 
 from werewolf.tom_llm.common import digest, identity, require, strict_json
 from werewolf.tom_llm.experiment import open_run, publish_record, read_record, safe_path
-from werewolf.tom_llm.model_spec import ModelSpec, wire, render, load_cpu_tokenizer
+from werewolf.tom_llm.model_spec import ModelSpec, wire, render, load_cpu_tokenizer, wire_schema
 from werewolf.tom_llm.output import parse_task_output
 from werewolf.tom_llm.provider_semantics import NotExecuted, OutcomeUnknown
 from werewolf.tom_llm.inference import InfrastructureFailure
@@ -110,7 +110,7 @@ def validate_reply(raw, task, spec, proof=None, *, tokenizer=None, session=None)
         text=render(task,spec)['text'];ids=tokenizer.encode(text,add_special_tokens=False)
         require(ids==inp['input_ids']==tokenizer.apply_chat_template(task['messages'],tokenize=True,return_dict=False,
                 add_generation_prompt=True,**spec.record()['chat_template']['kwargs']) and 0<len(ids)<=7680,'native engine input_ids/context drift')
-        validate_sampling(inp['sampling'],task['response_schema'],spec)
+        validate_sampling(inp['sampling'],wire_schema(task),spec)
         require(out['content']==message.get('content') and out['finish_reason']==choice['finish_reason']
                 and usage['input_tokens']==len(ids) and usage['output_tokens']==len(out['output_token_ids']), 'engine/response/usage drift')
         require(all(type(n) is int and 0<=n<len(tokenizer) for n in out['output_token_ids']) and len(out['output_token_ids'])<=512,'output IDs invalid')

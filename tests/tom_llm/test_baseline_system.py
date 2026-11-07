@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from tests.tom_llm.test_multimodel import cohort
-from tests.tom_llm.test_physical_tools import native_suites
+from tests.tom_llm.test_physical_tools import native_suites,set_suites_mock
 from tests.tom_llm.conftest import empty_and_full_reports
 from werewolf.tom_llm.task import SET_VERSION
 from werewolf.artifact_io import verify_artifact,canonical_json_bytes
@@ -553,6 +553,54 @@ def test_cli_help_is_cpu_only(script):
     from werewolf.tom_llm.model_spec import ROOT
     result=subprocess.run([os.sys.executable,'-B',str(ROOT/'scripts'/script),'--help'],capture_output=True,text=True)
     assert result.returncode==0 and '--run-id' in result.stdout
+
+
+@pytest.mark.parametrize('key',['qwen3','yi','mistral'])
+@pytest.mark.parametrize('duplicate',[False,True])
+def test_set_projected_schema_matches_live_probe_and_durable_reply(set_suites_mock,key,duplicate):
+    """合成引擎验证正式读取链；重复玩家保持非法输出，不修补为集合。"""
+    from tests.tom_llm.test_physical_tools import model_record,params_object
+    from werewolf.tom_llm.live_service import install_live_probe
+    from werewolf.tom_llm.model_spec import wire_schema
+    suite=set_suites_mock[key];case=suite['cases'][0];task=case['task'];spec=ModelSpec(key)
+    class Tokenizer:
+        def __len__(self):return suite['vocabulary_size']
+        def encode(self,*a,**kw):return case['input_ids']
+        def apply_chat_template(self,*a,**kw):return case['input_ids']
+    tokenizer=Tokenizer();events=[];called=[]
+    class Engine:
+        async def _add_request(self,core):called.append(core)
+        async def generate(self,output):yield output
+    engine=Engine();permit='a'*64;life={'pid':123,'boot_id':'UNIT_ONLY','start_ticks':'1'}
+    install_live_probe(engine,events.append,tasks=[task],spec=spec,tokenizer=tokenizer,
+                       permit_digest=permit,process_lifetime=life)
+    core=NS(prompt_embeds=None,mm_features=[],pooling_params=None,lora_request=None,cache_salt=None,
+        reasoning_ended=None,reasoning_parser_kwargs=None,resumable=False,priority=0,
+        prompt_token_ids=case['input_ids'],sampling_params=params_object(model_record(key,set_suites_mock),case),
+        external_req_id='UNIT-request')
+    player=task['response_schema']['properties']['suspected_players']['items']['enum'][0]
+    content=json.dumps({'suspected_players':[player,player] if duplicate else [player]})
+    output=NS(finished=True,request_id=core.external_req_id,
+              outputs=[NS(token_ids=[10,11],text=content,finish_reason='stop',stop_reason=None)])
+    async def execute():
+        await engine._add_request(core)
+        async for _ in engine.generate(output):pass
+    asyncio.run(execute())
+    assert len(called)==1 and events[1]['sampling']['json_schema']==wire_schema(task)
+    proof={'input':events[1],'output':events[2]};n=len(case['input_ids'])
+    raw={'status':200,'headers':[],'body':json.dumps({'id':core.external_req_id,'model':spec.record()['model'],
+        'choices':[{'message':{'content':content,'refusal':None},'finish_reason':'stop'}],
+        'usage':{'prompt_tokens':n,'completion_tokens':2,'total_tokens':n+2}})}
+    session={'identity':{'permit_digest':permit,'instance':life,'engine_startup':events[0]},
+             'remaining_task_digests':[digest(task)]}
+    prediction,_=runner.validate_reply(raw,task,spec,proof,tokenizer=tokenizer,session=session)
+    if duplicate:
+        assert prediction['status']=='fallback_uniform' and prediction['failure_type']=='duplicate_player'
+        assert prediction['suspected_players'] is None
+    else:assert prediction['status']=='valid' and prediction['suspected_players']==[player]
+    wrong=deepcopy(proof);wrong['input']['sampling']['json_schema']=task['response_schema']
+    with pytest.raises(ValueError,match='JSON Schema drift'):
+        runner.validate_reply(raw,task,spec,wrong,tokenizer=tokenizer,session=session)
 
 
 @pytest.mark.parametrize('key',['qwen3','yi','mistral'])

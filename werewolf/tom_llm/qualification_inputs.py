@@ -1,11 +1,12 @@
 """Frozen synthetic public PREs, native expected token IDs, and full-cohort CPU budgets."""
 
 from pathlib import Path
+from copy import deepcopy
 import numpy as np
 
 from werewolf.artifact_io import publish_artifact, verify_artifact, canonical_json_bytes, sha256_bytes
 from werewolf.tom_llm.common import digest, identity, require, require_digest, strict_json
-from werewolf.tom_llm.model_spec import ModelSpec, load_cpu_tokenizer, render, wire
+from werewolf.tom_llm.model_spec import ModelSpec, load_cpu_tokenizer, render, wire, SET_WIRE_SCHEMA_PROJECTION
 from werewolf.tom_llm.task import from_legacy, validate_task, task_binding, SET_VERSION, VERSION as TASK_VERSION
 
 VERSION = 'classic7_multimodel_qualification_inputs_v1'
@@ -47,7 +48,8 @@ def build_suite(spec, tokenizer_assets, *, task_schema_version=TASK_VERSION):
              'vocabulary_size':len(tokenizer),'cpu_native_tokenizer_verified':True}
     if task_schema_version==SET_VERSION:
         require(source_identity()==source,'Source changed during V2 Suite preparation')
-        suite.update(schema_version=SET_SUITE_VERSION,task=task_binding(SET_VERSION),source=source)
+        suite.update(schema_version=SET_SUITE_VERSION,task=task_binding(SET_VERSION),source=source,
+                     wire_schema_projection=deepcopy(SET_WIRE_SCHEMA_PROJECTION))
     validate_suite(suite,spec)
     return suite
 
@@ -57,7 +59,7 @@ def validate_suite(suite,spec, *, expected_source=None):
     version = SET_VERSION if is_set else TASK_VERSION
     fields = {'schema_version','purpose','model_spec_digest','key','legacy_public_suite_sha256',
               'cases','schedule','vocabulary_size','cpu_native_tokenizer_verified'}
-    if is_set: fields.add('task')
+    if is_set: fields.update(('task','wire_schema_projection'))
     if is_set and 'source' in suite: fields.add('source')
     require(set(suite)==fields and
             suite['schema_version'] in (VERSION,SET_SUITE_VERSION) and suite['purpose']=='synthetic_gpu_qualification_only'
@@ -66,6 +68,8 @@ def validate_suite(suite,spec, *, expected_source=None):
             and suite['cpu_native_tokenizer_verified'] is True and type(suite['vocabulary_size']) is int
             and suite['vocabulary_size']>0 and len(suite['cases'])==12, 'model native suite identity drift')
     if is_set: require(suite['task']==task_binding(SET_VERSION), 'set suite task binding drift')
+    if is_set:
+        require(suite['wire_schema_projection']==SET_WIRE_SCHEMA_PROJECTION, 'set Wire Schema projection drift')
     if 'source' in suite:
         from werewolf.tom_llm.deployment import validate_source_evidence
         validate_source_evidence(suite['source'])

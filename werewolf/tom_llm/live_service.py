@@ -9,7 +9,7 @@ import time
 
 from werewolf.tom_llm.common import digest, require
 from werewolf.tom_llm.experiment import open_run
-from werewolf.tom_llm.model_spec import ModelSpec, load_cpu_tokenizer, render
+from werewolf.tom_llm.model_spec import ModelSpec, load_cpu_tokenizer, render, wire_schema
 from werewolf.tom_llm.live_admission import open_permit
 from werewolf.tom_llm.deployment import require_idle_gpu, validate_cache_paths, validate_process_environment, driver_version
 from werewolf.tom_llm.gpu_probe import JsonlSink, lifetime, snapshot_sampling, validate_launch_args
@@ -31,7 +31,7 @@ def install_live_probe(engine, sink, *, tasks, spec, tokenizer, permit_digest, p
         require(core.prompt_embeds is None and not core.mm_features and core.pooling_params is None and core.lora_request is None
             and core.cache_salt is None and core.reasoning_ended is None and core.reasoning_parser_kwargs is None
             and not core.resumable and core.priority==0,'undeclared engine modifiers')
-        sampling=snapshot_sampling(core.sampling_params);validate_sampling(sampling,task['response_schema'],spec)
+        sampling=snapshot_sampling(core.sampling_params);validate_sampling(sampling,wire_schema(task),spec)
         key=core.external_req_id;require(type(key) is str and key and key not in state['finished'],'engine request ID reuse')
         sink({**common,'kind':'input','ordinal':i,'task_digest':digest(task),
               'engine_request_id':key,'input_ids':ids,'sampling':sampling})

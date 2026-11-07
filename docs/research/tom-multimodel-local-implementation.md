@@ -1,5 +1,66 @@
 # 多模型 ToM Baseline：实现与研究协议
 
+## V2 xgrammar Wire Schema 兼容修复与失败证据保护
+
+本节对应 Mac 起点 `twd/mainline@f6a546309fdc9284ef24653a363d6dae61f359df` 后的局部修复。用户报告 Ubuntu Qwen3 V2 Qualification Round 0 首次请求 HTTP 500、`EngineGenerateError`、没有正常 input/output 事件，并已形成 `outcome_unknown`。这些是用户提供的现场事实，本轮未 SSH 复核，也不重新分类、重试、补写或覆盖原 Round。下文旧操作手册的 Source 起点和验收数字是历史快照，不能替代本轮及服务器的实际状态。
+
+### 根因证据与边界
+
+原任务 `prompt.set_schema()` 在 `properties.suspected_players` 声明 `uniqueItems:true`；`render_set_prompt()` 又把完整科研 Schema 写入 user 消息。`task.validate_task()` 验证该 Schema 和消息仍与冻结 renderer 精确一致。修复前，`model_spec.wire()` 把同一 Schema 原样放入 OpenAI `response_format.json_schema.schema`；`candidate_client.collect_round()`、`SyntheticCandidateClient.dispatch()` 和 `live_runner.run_model()` 均消费该 Wire，并绑定其 Digest。
+
+官方 vLLM 0.27.0 的对应路径为：
+
+1. [OpenAI Schema 转换，engine/protocol.py:179–209](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/entrypoints/openai/engine/protocol.py#L179-L209)：将 `response_format.json_schema` 放入 `StructuredOutputsParams.json`。
+2. [ChatCompletionRequest:639–726](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/entrypoints/openai/chat_completion/protocol.py#L639-L726)：提取结构化约束并传入 SamplingParams。
+3. [InputProcessor:91–109](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/v1/engine/input_processor.py#L91-L109) 调用 `params.verify()`；[SamplingParams:923–1014](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/sampling_params.py#L923-L1014) 在固定 xgrammar 后端下调用其校验，不使用 auto 后端兜底。
+4. [backend_xgrammar.py:225–269、272–324](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/v1/structured_output/backend_xgrammar.py#L225-L324)：数组中出现 `uniqueItems` 即被判不支持，连 `uniqueItems:false` 也不能保留；校验在 grammar 构造前抛出 ValueError。
+5. [AsyncLLM:354–402](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/v1/engine/async_llm.py#L354-L402) 在调用本项目所审计的 `_add_request` 之前处理输入；[同文件:652](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/v1/engine/async_llm.py#L652) 存在 `EngineGenerateError` 包装路径。因此，缺少探针 input/output 与前置验证失败相容，不能据此将旧未知结果改成“确认未执行”。现场 500 是否还包含其他内层异常，仍须原始异常链或新 Candidate 的实际资格验证判定。
+
+Mac CPU 复现从官方固定 tag 读取源码到内存，只执行无模型依赖的 `has_xgrammar_unsupported_json_features()`；没有导入 vLLM 引擎。该文件实际 SHA256 为 `231f6b9d7dab5e8d68aba486fa5912db99f8bdd3f9d8842ee3e0bb12bdb7cb67`。修复前三模型 Wire 均被该函数拒绝；修复后三模型各 12 条、共 36 条 Wire 全部通过该特征检查，原科研 Schema 仍被原函数判不支持。此结果不是实际 xgrammar grammar 编译或 GPU Qualification PASS。
+
+### 唯一修复规则与科研语义
+
+现有 `model_spec.wire_schema()` 先验证原 Task，再仅对 SET_VERSION 的 Schema 深复制并删除 `/properties/suspected_players/uniqueItems`。原 Task、Prompt 中完整 Schema、原生模板、玩家枚举、自身排除、数组长度、`additionalProperties:false`、Wire 的 `strict:true` 以及应用层解析全部保留。不做递归删关键字、宽泛降级、换后端、去重修复或请求重试。
+
+软件规则身份为 `classic7_suspicion_set_xgrammar_wire_projection_v1`，规则摘要为 `04273ad1a40df4199428baf51dab87a8f1fcee2b5dddd1648436e01caf2d2ea6`。它是现有 V2 的后端 Wire 投影身份，不是新 Task、V3 方法或新的 Admission 类型。
+
+- CPU Parity 结果增加相同 `wire_schema_projection` 和实际 `wire_sequence_digest`；文本/Token IDs 仍针对完整原任务消息核验。
+- SET Suite 记录相同投影身份，每个 `case.wire_digest` 绑定投影后的完整 OpenAI 请求；Source 仍要求精确匹配。旧投影前 Suite 不自动升级或兼容放行。
+- `gpu_probe`、`qualification_evidence.validate_round()`、`live_service`、`live_runner.validate_reply()` 全部以同一个 `wire_schema(task)` 比较捕获的实际 SamplingParams Schema。比较仍是精确相等，不接受“原 Schema 或投影后 Schema 任意一种”。
+- `output.parse_set_output()` 保持不变：合法空集、全六席和真子集语义不变；重复玩家仍是 `duplicate_player`，集合为 `None`，正式评价保留原非法分母；不会去重后改判有效。Qualification 中完整 stop 响应仍须通过原应用层集合校验。
+
+科研协议 `classic7_suspicion_set_research_protocol_v2` 及其摘要 `e135168b1927c1542d7e0c991aaeb5fe9dc8814317b9316071dd1ffc655b71dc` 保持不变。原概率投影规则、Gold、Full/NU、Set-F1、Bootstrap、历史 Direct-Probability 均不改变。必须同时披露：后端生成空间现在允许产生重复成员，唯一性最终由应用层拒绝；有效输出定义相同不意味着模型生成分布、有效率或指标必然相同。不能把本次修复描述为 Wire 字节不变或保证分数提高。
+
+### Chat Template warmup 单独结论
+
+[官方 BaseRenderer.warmup:237–259](https://github.com/vllm-project/vllm/blob/v0.27.0/vllm/renderers/base.py#L237-L259) 使用单条 user `warmup` 消息，异常仅记为 warning。冻结 Qwen 模板第二行直接访问 `messages[1]`；Mac 使用同一模板对该单消息输入复现 `list object has no element 1`。真实任务包含 system＋user，三模型各 12 条真实任务形状的消息均可渲染。本轮不修改模板、模板 SHA 或 Prompt，也不把该非任务预热警告与实际 500 合并为一个根因。
+
+### 必须重新生成与可以复用的证据
+
+|对象|处理与需冻结的字段|
+|---|---|
+|科研协议、原 Task/Prompt/Gold、Selection/Reference/OOF、模型与环境|继续复用原身份；历史权重、Tokenizer 和 Conda 文件不修改；物理字节检查仍执行|
+|Source v2/v3|新 Git Revision、Tree、Implementation Digest、各文件 SHA；当前 Mac dirty Source 不具备正式执行资格|
+|真实 CPU Parity|重新运行，保留 Task/Prompt/System、原生 Token IDs 与新 Wire 投影/序列摘要；旧 CPU PASS 不代表新 Wire 已验收|
+|V2 Cohort|在新 Source 下重新发布；请求 Task/科学行身份应不变，Manifest Source/Artifact Digest 改变，禁止改写旧 Manifest|
+|三模型 SET Suite|重新发布投影身份、12 个 Wire Digest、Suite Digest、Source；Prompt/输入 IDs 应相同但须真实核验|
+|完整 Token Budget|按新 Source 和新 Cohort 重测 10,714 条；不复制旧预算换签，不截断/筛行，不推定长度统计必然相同|
+|Deployment、两轮 Qualification、Admission|新 Candidate、新 Deployment Digest、两次独立进程生命身份和新 Round Seal；旧失败 Round 0 永久保留，不在原路径重试|
+|Run Contract、Permit、Prediction/Run Seal 与 Analysis|新 Run ID、新 Source/Task/Cohort/Budget/Admission 绑定；如已有旧对象则保留，不重签、不覆盖|
+
+V1 Wire 字节与原 76-call 协议保持不变；旧 V1 读取及数值语义按回归验证。投影前的 V2 Suite/Deployment 在当前严格读取链中可能被拒绝，这是 Wire 变化后的预期门禁；旧证据以其原 Source 和通用 Artifact 校验核读，不能给旧内容补新投影字段或重算 Digest 来“修复”。`CONTROL_FILES`、Source 兼容算法、两轮资格、Admission、Permit、显式执行和未知结果停止均未放宽。
+
+### 用户手动部署的安全顺序
+
+1. 在更新服务器 Source 前，用旧 Source/旧配置核对旧 Candidate 的自有服务；如仍运行，由用户按原 Manager 的所有权检查安全停止。保留旧 Candidate 全目录、日志、dispatch/failure 和 `outcome_unknown`。不能用新读取器失败为理由删除旧证据。
+2. 用户审阅本次 Mac Diff 后自行 Commit/Push；然后自行核验服务器实际 HEAD、干净 detached 状态、origin 和祖先关系，再更新至准确新 Commit。旧手册 A 中 `094d0033…` 是历史起点，本轮必须使用用户核验的实际旧 Source；Codex 不执行更新。
+3. 由用户确定新的 CPU 根、新配置、新 Candidate 名和三个新 Run ID。仅沿用历史科学输入和通过核验的 assets/environment Receipt；不沿用旧 V2 Cohort/Suite/Budget/Deployment/Admission/Permit 指针。
+4. 在固定干净新 Source 下，沿用现有 `uns tom-llm prepare --stage tokenizer/cohort/suite/budget/model` 顺序及保存机制。先验三模型真实 Tokenizer Parity 和相同 Wire 投影，再验完整 150 局/10,714 请求及 7,680＋512/8,192 预算。阶段失败即停止。
+5. 经用户独立 GPU 授权，在每个新 Candidate 中完成两次不同实例的 Round 0/1，再生成新 Admission。旧 Round 0 不重试；任何未知结果仍停止，不以本次 CPU 诊断作“确认未执行”的豁免。
+6. 用户准备三个独立正式 Run Contract/Permit，再明确授权并手动正式推理；冻结各自预测和 Run Seal 后才执行跨 Run 分析。仍复用既有 CLI、Runner、发布与门禁，不新建平行实验框架。
+
+本轮 Mac 验收：新增 60 项参数化用例，涵盖三模型全部 12 个实际 synthetic Wire、不可变 Task/Prompt、合法集合/重复玩家、CPU Parity Wire 身份、Suite Digest/规则篡改拒绝、实际 Sampling Schema 漂移和正式探针/响应读取链。先观察最小缺陷回归失败，再修复；定向 63 passed，完整 `tests/tom_llm` 加 canonical Artifact 回归为 **847 passed、54 skipped、0 failed**。54 项中 48 项缺显式提供的官方 Tokenizer 小资产，6 项缺官方 vLLM argparse 源文件；没有把 Mock 当真实 Parity。官方纯验证函数另行复现原 Schema 的确切 ValueError，未导入真实 grammar 编译器或 GPU。`git diff --check` 通过。本轮未 SSH、Commit 或 Push，未修改服务器、模型、环境及旧 Artifact。
+
 ## V2 正式执行最小适配与用户服务器操作手册
 
 本节对应 `094d0033d8839da6d3e9610381acd16652139f73` 之后的 Mac 本地开发。Codex 仅修改本地代码、运行 CPU/Mock；没有执行下列服务器命令。新 Commit 尚须用户审阅、授权提交和推送。以下命令仅供用户在 Ubuntu 的 Bash 中逐阶段执行；每阶段成功后再进入下一阶段。命令不是新的服务器或 GPU 授权。
