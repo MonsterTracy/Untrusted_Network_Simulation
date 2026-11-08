@@ -183,28 +183,6 @@ def parse_task_output(content, task, *, finish_reason="stop"):
     return parser(content, task["observer"], finish_reason=finish_reason)
 
 
-def probability_to_set(probability, observer, rule, *, formal_game_ids):
-    """仅消费预测概率；开发来源未核准前，本接口只接受显式 Mock 规则。"""
-    observer_seat(observer)
-    fields = {"schema_version", "scope", "threshold", "comparison", "development_game_ids", "development_source_digest"}
-    require(type(rule) is dict and set(rule) == fields
-            and rule["schema_version"] == "classic7_probability_to_set_development_v2"
-            and rule["scope"] == "ENGINEERING_ONLY" and rule["comparison"] == ">=",
-            "probability-to-set rule requires an explicit versioned engineering/development identity")
-    threshold = rule["threshold"]
-    require(type(threshold) in (int, float) and math.isfinite(threshold) and 0 <= threshold <= 1,
-            "invalid probability-to-set threshold")
-    development = rule["development_game_ids"]
-    require(type(development) is list and development and all(type(g) is str and g for g in development)
-            and len(set(development)) == len(development) and formal_game_ids
-            and not set(development) & set(formal_game_ids),
-            "development games must be disjoint from the complete formal Selection")
-    require_digest(rule["development_source_digest"])
-    require(type(probability) is list and len(probability) == 7
-            and all(type(p) in (int, float) and math.isfinite(p) and 0 <= p <= 1 for p in probability)
-            and probability[observer] == 0 and math.isclose(math.fsum(probability), 1, abs_tol=1e-6),
-            "probability-to-set requires a non-self probability prediction")
-    return [player for j, player in enumerate(PLAYER_IDS) if j != observer and probability[j] >= threshold]
 
 
 def fixed_projection_rule():

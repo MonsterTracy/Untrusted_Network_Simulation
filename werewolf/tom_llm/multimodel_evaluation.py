@@ -1,20 +1,11 @@
-"""Shared Selection/OOF cohort binding and sealed model comparisons. Mock only."""
-
-from pathlib import Path
-
-from werewolf.artifact_io import (publish_artifact, verify_artifact, canonical_json_bytes,
-                                  canonical_jsonl_bytes, sha256_bytes)
+"""共享输入核对和补充概率统计；不包含独立的 Mock 执行链。"""
+from werewolf.artifact_io import sha256_bytes
 from werewolf.tom.evaluation import score_prediction_rows
 from werewolf.tom.protocol import bootstrap_indices
 from werewolf.tom.scoring import paired_summary
-from werewolf.tom_llm.common import digest, identity, require, strict_json
-from werewolf.tom_llm.evaluation import compare
-from werewolf.tom_llm.model_spec import registry
-from werewolf.tom_llm.multimodel import (COHORT_VERSION, VERSION, source_identity, read_cohort,
-                                        open_model_predictions, open_model_mock)
+from werewolf.tom_llm.common import digest, identity, require
+from werewolf.tom_llm.task import validate_task
 from werewolf.tom_llm.policy import POLICY
-from werewolf.tom_llm.selection_binding import open_selection_binding
-from werewolf.tom_llm.task import task_binding, validate_task, task_version
 
 
 def reference_binding(reference):
@@ -34,26 +25,6 @@ def validate_public_coverage(tasks, reference, games):
     for task in tasks:
         ref = expected[identity(task)]
         require(task['plan_digest'] == ref['plan_digest'] and task['fold'] == ref['fold'], 'cohort PRE/fold mismatch')
-
-
-def publish_mock_cohort(destination, tasks, reference, *, selection_root, expected, provenance, prepared_manifest):
-    """Tasks were independently constructed from public PREs; labels never enter this artifact."""
-    selection = open_selection_binding(selection_root,reference.folds,expected=expected,
-        provenance=provenance,prepared_manifest=prepared_manifest)
-    require(selection['publication_digest'] == reference.publication_digest
-            and selection['fold_manifest_digest'] == reference.fold_manifest_digest,
-            'Selection/Reference publication mismatch')
-    raw_selection = strict_json((Path(selection_root)/'selection.json').read_bytes())
-    games = raw_selection['game_ids']
-    validate_public_coverage(tasks,reference,games)
-    version = task_version(tasks[0])
-    require(all(task_version(t) == version for t in tasks), 'mixed cohort task protocols')
-    return publish_artifact(destination,manifest_fields={
-        'artifact_type':'llm_multimodel_public_cohort','schema_version':COHORT_VERSION,'engineering_only':True,
-        'task':task_binding(version),'source':source_identity(), 'reference':reference_binding(reference),
-        'selection':{**selection,'game_ids':games},'selection_root':str(Path(selection_root).absolute()),
-        'requests_digest':digest(tasks),'row_identity_digest':digest([identity(t) for t in tasks])},
-        files={'requests.jsonl':canonical_jsonl_bytes(tasks)})
 
 
 def nonuniform_prediction_rows(reference, predictions, games):
@@ -81,34 +52,3 @@ def paired_extras(reference, predictions, games, result):
     nu = paired_summary([left[g]['argmax_in_target_support'] for g in nu_games],
                         [right[g]['argmax_in_target_support'] for g in nu_games],nu_indices,.95)
     return {'Delta_TV':tv,'Delta_Top1_NU':nu}
-
-
-def compare_models(reference, cohort_root, *, expected_cohort_digest, runs, expected_seal_digests):
-    """Open each complete model seal; never accept anonymous, mixed or partial rows."""
-    cohort,tasks = read_cohort(cohort_root,expected_cohort_digest)
-    require(cohort.manifest['reference'] == reference_binding(reference), 'shared OOF Reference drift')
-    require(set(runs) == set(expected_seal_digests) == set(registry()), 'exact three-model comparison required')
-    games = tuple(cohort.manifest['selection']['game_ids'])
-    validate_public_coverage(tasks,reference,games)
-    results, anchors = {}, {}
-    for key,(root,execution) in runs.items():
-        require(execution.spec.key == key, 'model result label/spec mismatch')
-        contract,_,_ = open_model_mock(root,execution)
-        seal,rows = open_model_predictions(root,execution)
-        require(seal.manifest_digest == expected_seal_digests[key]
-                and seal.manifest['cohort_digest'] == cohort.manifest_digest, 'model seal/cohort anchor mismatch')
-        require([r['task_digest'] for r in rows] == [digest(t) for t in tasks], 'model task sequence mismatch')
-        result = compare(reference,rows,games)
-        result.update(paired_extras(reference,rows,games,result))
-        result['limitations'] = [x for x in POLICY['limitations']
-                                if key == 'qwen3' or x != 'qwen_family_related_to_generator']
-        result['paired_difference_direction'] = 'LLM_minus_Qwen3_block_Observer_ToM'
-        results[key] = result
-        anchors[key] = {'seal_digest':seal.manifest_digest,'model_spec_digest':execution.spec.digest,
-                        'execution_digest':contract.manifest['execution_digest']}
-    require(len({r['bootstrap_indices_digest'] for r in results.values()}) == 1
-            and len({r['nu_bootstrap_indices_digest'] for r in results.values()}) == 1,
-            'cross-model bootstrap identities differ')
-    return {'schema_version':VERSION+'_comparison','engineering_only':True,'formal_result':False,
-            'cohort_digest':cohort.manifest_digest,'selection':cohort.manifest['selection'],
-            'reference':reference_binding(reference),'models':anchors,'comparisons':results}

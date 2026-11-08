@@ -15,7 +15,7 @@ from werewolf.tom.dataset import tensorize_public_pre, ExperimentCapacity, belie
 from werewolf.tom_llm.prompt import render_prompt, public_table, schema
 from werewolf.tom_llm.output import parse_output, validate_prediction, EPSILON
 from werewolf.tom_llm.policy import load_policy, validate_policy, ASSET_DIGESTS
-from werewolf.tom_llm.study import make_request, wire_request, public_requests, validate_request
+from werewolf.tom_llm.study import make_request, public_requests, validate_request
 
 
 def test_fixed_projection_recovers_all_proper_targets_and_excludes_self():
@@ -98,7 +98,9 @@ def test_no_supervision_role_or_future_inputs_to_public_request(monkeypatch, tmp
     monkeypatch.setattr(pub, "open_role_sidecar", lambda *_a: pytest.fail("private role access"))
     request = make_request(prefix, 0, fold=0)
     assert not {"q", "label_observed", "primary_eligible", "role", "raw_text"} & set(request)
-    wire = wire_request(request)
+    from werewolf.tom_llm.model_spec import wire as build_wire,ModelSpec
+    from werewolf.tom_llm.task import from_legacy,SET_VERSION
+    wire = build_wire(from_legacy(request,version=SET_VERSION),ModelSpec('qwen3'))
     assert "fold" not in wire and "prefix_digest" not in wire and "public_plan" not in wire
     assert wire["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
     assert wire["temperature"] == 0 and wire["n"] == 1 and wire["max_tokens"] == 512
@@ -364,13 +366,3 @@ def test_reviewed_protocol_controls_cannot_drift(section,key,value):
     changed=load_policy(); changed[section][key]=value
     with pytest.raises(ValueError,match="frozen"):
         validate_policy(changed)
-
-
-def test_config_command_never_constructs_a_client(monkeypatch,capsys):
-    from werewolf.cli import main
-    from werewolf.tom_llm.policy import CONFIG_PATH
-    import socket
-    monkeypatch.setattr(socket,"create_connection",lambda *_a,**_k:pytest.fail("network forbidden"))
-    assert main(["check-llm-reasoner-config","--config",str(CONFIG_PATH)]) == 0
-    result=json.loads(capsys.readouterr().out)
-    assert result["status"]=="valid" and result["formal_readiness"] is False

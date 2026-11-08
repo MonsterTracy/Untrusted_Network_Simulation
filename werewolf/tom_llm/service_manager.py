@@ -1,13 +1,8 @@
-"""Persistent ownership for the existing qualification and live vLLM entry points.
-
-Only launch state is mutable; Deployment, Permit and engine evidence are untouched.
-No model requests, reconnect, force kill, tmux or third-party process adoption.
-"""
+"""单一 vLLM 服务的持久所有权；状态和停止不读取模型、Cohort 或 Source 库存。"""
 
 from contextlib import contextmanager
 import ctypes
 import fcntl
-import datetime
 import os
 from pathlib import Path
 import signal
@@ -19,10 +14,12 @@ import uuid
 
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.artifact_io.canonical import _fsync_directory,ensure_durable_directory
-from werewolf.tom_llm.common import digest, require, strict_json
+from werewolf.tom_llm.common import digest,require,strict_json
 from werewolf.tom_llm.experiment import safe_path
-from werewolf.tom_llm.model_spec import ROOT
+from werewolf.tom_llm.model_spec import ROOT,template_bytes
+from werewolf.tom_llm.deployment import GPU_LOCK,require_idle_gpu,vllm_config_bytes
 
+_PROC = Path('/proc')
 
 @contextmanager
 def _pidfd(pid):
@@ -51,188 +48,232 @@ def _pidfd(pid):
 
 
 class Service:
-    def __init__(self, root, key, expected, *, qualification=False):
-        self.root=safe_path(root);self.key=key;self.expected=expected
-        self.qualification=qualification;self.child=None
+    def __init__(self, run):
+        require(run.record['mode']=='formal' and run.record['runtime'],'real Run runtime required')
+        self.run = run
+        self.runtime = run.record['runtime']
+        self.directory = safe_path(run.root/'runtime/service-control')
+        self.pending_launch = self.directory/'launch.pending.json'
+        self.child = None
 
-    def binding(self, *, physical=False):
-        if self.qualification:
-            from werewolf.tom_llm.deployment import open_deployment
-            a,r=open_deployment(self.root,self.expected,physical_recheck=physical,current_source=physical)
-            require(r['key']==self.key,'service model mismatch')
-            cmd=[r['profile']['environment_prefix']+'/bin/python','-m','werewolf.tom_llm.gpu_probe',
-                '--deployment',str(a.path),'--expected-deployment',a.manifest_digest,'--execute-synthetic-gpu-qualification']
-        else:
-            from werewolf.tom_llm.live_admission import open_permit
-            a,r=open_permit(self.root,self.key,self.expected,physical=physical)
-            cmd=[r['profile']['environment_prefix']+'/bin/python','-m','werewolf.tom_llm.live_service',
-                '--run',str(self.root),'--model',self.key,'--expected-permit',a.manifest_digest,'--execute-live']
-        return a,r,cmd
-
-    @property
-    def directory(self):
-        return safe_path(self.binding()[1]['profile']['root'])/'service-control'
-
-    @property
-    def pending_launch(self):
-        return safe_path(self.directory/'launch.pending.jsonl')
+    def command(self):
+        return [self.runtime['environment_prefix']+'/bin/python','-m','vllm.entrypoints.openai.api_server',
+                '--config',str(self.run.root/'runtime/vllm.yaml')]
 
     def identity(self, pid):
-        """PID reuse is distinguished from ownership; no signals here."""
-        proc=Path('/proc')/str(pid)
+        proc = Path('/proc')/str(pid)
         try:
-            stat=(proc/'stat').read_text().rsplit(')',1)[1].split()
-            if stat[0]=='Z':return None
+            stat = (proc/'stat').read_text().rsplit(')',1)[1].split()
+            if stat[0]=='Z':
+                return None
             return {'pid':pid,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
-                'start_ticks':stat[19],'uid':proc.stat().st_uid,'cwd':str((proc/'cwd').resolve()),
-                'executable':str((proc/'exe').resolve()),'pgid':os.getpgid(pid),
-                'argv':[v.decode() for v in (proc/'cmdline').read_bytes().split(b'\0') if v]}
-        except FileNotFoundError:return None
+                    'start_ticks':stat[19],'uid':proc.stat().st_uid,'cwd':str((proc/'cwd').resolve()),
+                    'executable':str((proc/'exe').resolve()),'pgid':os.getpgid(pid),
+                    'argv':[v.decode() for v in (proc/'cmdline').read_bytes().split(b'\0') if v]}
+        except FileNotFoundError:
+            return None
 
     def _state(self):
-        require(not self.pending_launch.exists(),
-                'incomplete launch ownership; no automatic restart or stop; inspect '+str(self.pending_launch))
-        path=safe_path(self.directory/'current.json')
-        if not path.exists():return None
-        r=strict_json(path.read_bytes())
-        require(r.pop('state_digest')==digest(r),'service state digest drift')
-        _,_,cmd=self.binding()
-        require(r['anchor']==self.expected and r['model']==self.key and r['argv']==cmd
-            and r['qualification']==self.qualification,'service state ownership drift')
-        identity=r['identity']
-        require(identity['argv']==cmd and identity['uid']==os.getuid() and identity['cwd']==str(ROOT)
-            and identity['executable']==str(Path(cmd[0]).resolve()) and identity['pgid']==identity['pid'],
-            'stored service process identity drift')
-        require(not self.pending_launch.exists(),'incomplete launch ownership; no automatic restart or stop; inspect '+str(self.pending_launch))
-        return r
+        require(not self.pending_launch.exists(),'incomplete launch ownership; no automatic adoption/stop')
+        path = safe_path(self.directory/'current.json')
+        if not path.exists():
+            return None
+        state = strict_json(path.read_bytes())
+        wanted = state.pop('state_digest')
+        require(digest(state)==wanted and state['run_digest']==self.run.artifact.manifest_digest
+                and state['argv']==self.command(),'service ownership record drift')
+        ident = state['identity']
+        require(ident['argv']==self.command() and ident['uid']==os.getuid()
+                and ident['cwd']==str(ROOT) and ident['pgid']==ident['pid']
+                and ident['executable']==str(Path(self.command()[0]).resolve()),'stored process ownership drift')
+        return state
 
     def status(self):
-        _,record,_=self.binding()
-        result={'model':self.key,'purpose':'qualification' if self.qualification else 'run',
-            'anchor':self.expected,'port':record['profile']['argv_options']['port'],'gpu':record['profile']['gpu']}
         if self.pending_launch.exists():
-            return {**result,'state':'launch_incomplete','ready':False,'pending_launch':str(self.pending_launch)}
-        r=self._state()
-        if r is None:return {**result,'state':'not_started','ready':False}
-        identity=self.identity(r['identity']['pid'])
-        return {**result,'state':'exited' if identity is None else 'running' if identity==r['identity'] else 'pid_reused',
-            'pid':r['identity']['pid'],'log':r['log'],'ready':False}
+            return {'state':'launch_incomplete','ready':False}
+        state = self._state()
+        if state is None:
+            return {'state':'not_started','ready':False}
+        current = self.identity(state['identity']['pid'])
+        return {'state':'exited' if current is None else 'running' if current==state['identity'] else 'pid_reused',
+                'pid':state['identity']['pid'],'log':state['log'],'ready':False}
 
-    def capture(self):
-        r=self._state();require(r is not None,'tool has not started this service')
-        require(self.identity(r['identity']['pid'])==r['identity'],'owned service exited or PID identity changed')
-        a,record,_=self.binding()
-        if self.qualification:
-            from werewolf.tom_llm.deployment import capture_instance
-            instance=capture_instance(a,record,r['identity']['pid'])
-            life={k:instance[k] for k in ('pid','boot_id','start_ticks')}
-            log=Path(record['profile']['engine_log_root'])/digest(life)/'engine-events.jsonl'
-        else:
-            from werewolf.tom_llm.live_admission import capture_live_instance
-            instance=capture_live_instance(a,record,r['identity']['pid']);log=Path(instance['engine_log'])
-        with log.open('rb') as stream:startup=strict_json(stream.readline())
-        require(startup['kind']=='startup','engine startup evidence missing')
-        require(startup.get('deployment_digest' if self.qualification else 'permit_digest')==
-            (digest(record) if self.qualification else a.manifest_digest),'engine startup anchor drift')
-        return instance
+    def _socket_view(self, pid):
+        """只读取 owned PID 的 FD 和所在网络命名空间的目标端口。"""
+        process = _PROC/str(pid)
+        inodes = set()
+        rows = []
+        try:
+            for fd in (process/'fd').iterdir():
+                try:
+                    target = os.readlink(fd)
+                except FileNotFoundError:
+                    continue  # FD 在遍历期间正常关闭；随后仍须取得完整归属证明。
+                if target.startswith('socket:[') and target.endswith(']'):
+                    inodes.add(target[8:-1])
+            for table in ('tcp','tcp6'):
+                try:
+                    text = (process/'net'/table).read_text()
+                except FileNotFoundError:
+                    if table=='tcp6':
+                        continue  # 内核可能禁用 IPv6。
+                    raise
+                for line in text.splitlines()[1:]:
+                    v = line.split()
+                    if v and int(v[1].split(':')[1],16)==self.runtime['argv_options']['port']:
+                        rows.append((table,v[1],v[2],v[3],int(v[7]),v[9]))
+        except (OSError,ValueError,IndexError) as error:
+            raise RuntimeError('cannot prove owned listener from /proc') from error
+        return inodes,rows
 
-    def start(self, *, execute=False, timeout=900):
-        require(execute and sys.platform=='linux','explicit --execute-live on Ubuntu required')
-        # Probe both kernel operations before any launch state or GPU checks.
-        with _pidfd(os.getpid()) as send:send(0)
-        from werewolf.tom_llm.deployment import BASE,baseline_root,CACHE_VARIABLES,require_idle_gpu,validate_cache_paths
-        require(not self.pending_launch.exists(), 'incomplete launch ownership; no restart; inspect '+str(self.pending_launch))
-        a,record,cmd=self.binding(physical=True);p=record['profile']
-        baseline_root(safe_path(p['root']))
-        require(self.status()['state']!='running','owned service already running')
-        ensure_durable_directory(self.directory)
-        with safe_path(BASE/'baseline-gpu.lock').open('a+b') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            require_idle_gpu(p)
-            with socket.socket() as sock:sock.bind(('127.0.0.1',p['argv_options']['port']))
-            for var in CACHE_VARIABLES:safe_path(p['environment_requirements'][var]).mkdir(parents=True,exist_ok=True)
-            validate_cache_paths(p,require_existing=True)
-            env={k:os.environ[k] for k in ('HOME','USER','LANG','LC_ALL') if k in os.environ}
-            env.update(p['environment_requirements'])
-            token=uuid.uuid4().hex
-            log=self.directory/('stdout-'+token+'.log')
-            intent={'kind':'launch_intent','launch_token':token,'model':self.key,'qualification':self.qualification,
-                'anchor':a.manifest_digest,'argv':cmd,'log':str(log),
-                'launched_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
-            with log.open('xb') as output:
-                # Durable intent precedes Popen. An interruption at ANY later
-                # point leaves a blocker, even if no PID could be recorded.
-                fd=os.open(self.pending_launch,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
-                with os.fdopen(fd,'wb') as journal:
-                    def append(event):
-                        journal.write(canonical_json_bytes(event)+b'\n');journal.flush();os.fsync(journal.fileno())
-                    append(intent);_fsync_directory(self.directory)
-                    try:
-                        # Only the GPU lock is inherited, not the intent FD.
-                        self.child=subprocess.Popen(cmd,cwd=ROOT,env=env,stdout=output,stderr=subprocess.STDOUT,
-                            start_new_session=True,pass_fds=(lock.fileno(),))
-                        append({'kind':'popen_returned','pid_hint':self.child.pid})  # Diagnostic only; NOT ownership.
-                        require(self.child.poll() is None,'owned service exited')
-                        identity=self.identity(self.child.pid)
-                        require(identity and identity['argv']==cmd and identity['pgid']==self.child.pid
-                            and identity['uid']==os.getuid() and identity['cwd']==str(ROOT)
-                            and identity['executable']==str(Path(cmd[0]).resolve()),'new owned process identity unavailable')
-                        state={**{k:intent[k] for k in ('launch_token','model','qualification','anchor','argv','log','launched_utc')},
-                            'identity':identity}
-                        state['state_digest']=digest(state)
-                        temp=self.directory/('state-'+token+'.tmp')
-                        fd=os.open(temp,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
-                        with os.fdopen(fd,'wb') as stream:
-                            stream.write(canonical_json_bytes(state));stream.flush();os.fsync(stream.fileno())
-                        os.replace(temp,self.directory/'current.json');_fsync_directory(self.directory)
-                        append({'kind':'ownership_committed','state_digest':state['state_digest']})
-                    except Exception as error:
-                        raise ValueError('launch incomplete; no retry or automatic signal; inspect '+str(self.pending_launch)
-                            +' and '+str(log)+'; '+type(error).__name__+': '+str(error)) from error
-                # Archive only AFTER the complete identity is durably committed.
-                os.rename(self.pending_launch,self.directory/('launch-'+token+'.jsonl'))
-                _fsync_directory(self.directory)
-        deadline=time.monotonic()+timeout
+    def guard(self, connection=None, expected=None):
+        """绑定生命周期、唯一监听 inode，并在发送前证明已连接 socket 归属。"""
+        require(sys.platform=='linux','listener ownership requires Linux /proc')
+        port = self.runtime['argv_options']['port']
+        local = f'0100007F:{port:04X}'
+        deadline = time.monotonic()+1
         while True:
-            require(self.child.poll() is None,'owned service exited; inspect '+str(log))
+            state = self._state()
+            if not state or self.identity(state['identity']['pid'])!=state['identity']:
+                raise RuntimeError('owned listener process exited/changed')
+            ident = state['identity']
+            inodes,rows = self._socket_view(ident['pid'])
+            addresses = {'0100007F','00000000','00000000000000000000000000000000',
+                         '0000000000000000FFFF00000100007F'}
+            listeners = [r for r in rows if r[3]=='0A' and r[1].split(':')[0] in addresses]
+            if not listeners and expected is None:
+                raise ValueError('owned listener not ready')
+            if (len(listeners)!=1 or listeners[0][:2]!=('tcp',local)
+                    or listeners[0][4]!=ident['uid'] or listeners[0][5] not in inodes):
+                raise RuntimeError('listener is missing, ambiguous or not owned by recorded PID')
+            binding = {'identity':ident,'listener_inode':listeners[0][5]}
+            if expected is not None and binding!=expected:
+                raise RuntimeError('owned listener binding changed')
+            if connection is None:
+                break
+            source = connection.getsockname()
+            if connection.getpeername()!=('127.0.0.1',port) or source[0]!='127.0.0.1':
+                raise RuntimeError('connection endpoint differs from owned listener')
+            remote = f'0100007F:{source[1]:04X}'
+            peers = [r for r in rows if r[:4]==('tcp',local,remote,'01')]
+            if len(peers)==1 and peers[0][4]==ident['uid'] and peers[0][5] in inodes:
+                break
+            if time.monotonic()>=deadline:
+                raise RuntimeError('connected socket not owned by recorded PID')
+            # connect 可以先于服务 accept；仅短暂等待内核证据，不发送或重试 HTTP。
+            time.sleep(.005)
+        if self.identity(ident['pid'])!=ident:
+            raise RuntimeError('owned listener lifecycle changed during check')
+        return binding
+
+    def ready(self):
+        from http.client import HTTPConnection
+        binding = self.guard()
+        connection = HTTPConnection('127.0.0.1',self.runtime['argv_options']['port'],timeout=2)
+        pinned = None
+        try:
+            connection.connect()
+            connection.auto_open = 0
+            pinned = connection.sock.dup()
+            endpoints = (pinned.getsockname(),pinned.getpeername())
+            self.guard(pinned,binding)
+            connection.request('GET','/v1/models')
+            reply = connection.getresponse()
+            require(reply.status==200,'service not ready')
+            data = strict_json(reply.read())
+            self.guard(expected=binding)
+            require((pinned.getsockname(),pinned.getpeername())==endpoints,'ready connection changed')
+            require(self.run.spec.record()['model'] in [r['id'] for r in data['data']],'served model mismatch')
+        finally:
+            connection.close()
+            if pinned is not None:
+                pinned.close()
+        return {**self.status(),'ready':True}
+
+    def start(self, *, execute=False, timeout=1800):
+        require(execute and sys.platform=='linux','explicit --execute-live on Ubuntu required')
+        from werewolf.tom_llm.physical import verify_model
+        require(verify_model(self.run.spec,self.runtime['argv_options']['model'])==self.run.record['model_evidence'],
+                'model revision/stat changed since preparation')
+        with _pidfd(os.getpid()) as send:
+            send(0)
+        state = self.status()['state']
+        if state=='running':
+            return self.ready()
+        require(state in ('not_started','exited'),'unresolved launch/PID ownership; no adoption or signal')
+        ensure_durable_directory(self.directory)
+        runtime = self.run.root/'runtime'
+        for name,raw in [('chat_template.jinja',template_bytes(self.run.spec)),
+                         ('vllm.yaml',vllm_config_bytes(self.runtime['argv_options']))]:
+            path = safe_path(runtime/name)
+            if path.exists():
+                require(path.read_bytes()==raw,'runtime config drift')
+            else:
+                with path.open('xb') as stream:
+                    stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        for path in [self.runtime['cache_root'],self.runtime['ipc_root'],self.runtime['environment']['TMPDIR'],
+                     *[v for k,v in self.runtime['environment'].items() if k.endswith(('_HOME','_DIR','_ROOT','_PATH')) and k not in ('PYTHONPATH','PATH','CUDA_HOME')]]:
+            target = safe_path(path)
+            require(not any((p/'manifest.json').exists() for p in (target,*target.parents)),'cache inside sealed evidence')
+            target.mkdir(parents=True,exist_ok=True)
+        prefix = self.runtime['environment_prefix']
+        version = subprocess.check_output([prefix+'/bin/python','-I','-B','-c',
+            "import importlib.metadata as m;print(m.version('vllm'))"],
+            env={'PATH':prefix+'/bin:/usr/bin:/bin','CUDA_VISIBLE_DEVICES':'','PYTHONDONTWRITEBYTECODE':'1'},
+            text=True,timeout=30).strip()
+        require(version=='0.27.0','registered vLLM version required')
+        with safe_path(GPU_LOCK).open('a+b') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            require_idle_gpu(self.runtime)
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1',self.runtime['argv_options']['port']))
+            token = uuid.uuid4().hex
+            log = self.directory/('stdout-'+token+'.log')
+            env = {k:os.environ[k] for k in ('HOME','USER','LANG','LC_ALL') if k in os.environ}
+            env.update(self.runtime['environment'])
+            intent = {'run_digest':self.run.artifact.manifest_digest,'argv':self.command(),'log':str(log)}
+            with self.pending_launch.open('xb') as stream:
+                stream.write(canonical_json_bytes(intent));stream.flush();os.fsync(stream.fileno())
+            _fsync_directory(self.directory)
+            with log.open('xb') as output:
+                self.child = subprocess.Popen(self.command(),cwd=ROOT,env=env,stdout=output,
+                    stderr=subprocess.STDOUT,start_new_session=True,pass_fds=(lock.fileno(),))
+            ident = self.identity(self.child.pid)
+            require(ident and ident['argv']==self.command() and ident['pgid']==ident['pid']
+                    and ident['cwd']==str(ROOT) and ident['uid']==os.getuid()
+                    and ident['executable']==str(Path(self.command()[0]).resolve()),'launch ownership unknown; retain pending evidence')
+            state = {**intent,'identity':ident}
+            state['state_digest'] = digest(state)
+            temp = self.directory/('state-'+token+'.tmp')
+            with temp.open('xb') as stream:
+                stream.write(canonical_json_bytes(state));stream.flush();os.fsync(stream.fileno())
+            os.replace(temp,self.directory/'current.json')
+            os.rename(self.pending_launch,self.directory/('launch-'+token+'.json'))
+            _fsync_directory(self.directory)
+        deadline = time.monotonic()+timeout
+        while True:
+            require(self.identity(ident['pid'])==ident,'owned service exited before ready; inspect '+str(log))
             try:
-                instance=self.capture()
-                return {**self.status(),'ready':True,'instance':instance}
+                return self.ready()
             except (OSError,ValueError,KeyError):
-                require(time.monotonic()<deadline,'startup timeout; retain service and log for explicit stop: '+str(log))
-                time.sleep(.25)
+                require(time.monotonic()<deadline,'startup timeout; service retained for explicit owned stop')
+                time.sleep(.5)
 
     def stop(self, *, execute=False, timeout=60):
         require(execute and sys.platform=='linux','explicit --execute-live on Ubuntu required')
-        r=self._state();require(r is not None,'no owned launch state; refusing process adoption')
-        pid=r['identity']['pid'];current=self.identity(pid)
-        if current is None:return self.status()
-        require(current==r['identity'] and current['pgid']==pid,'PID/group identity changed; no signal sent')
-        # pidfd prevents signalling an unrelated process that reused this PID.
-        with _pidfd(pid) as send:
-            require(self.identity(pid)==r['identity'],'PID identity changed; no signal sent')
+        state = self._state()
+        require(state is not None,'no owned service; no signal sent')
+        ident = state['identity'];current = self.identity(ident['pid'])
+        if current is None:
+            return self.status()
+        require(current==ident,'PID identity changed; no signal sent')
+        with _pidfd(ident['pid']) as send:
+            require(self.identity(ident['pid'])==ident,'PID identity changed; no signal sent')
             send(signal.SIGTERM)
-        deadline=time.monotonic()+timeout
-        while self.identity(pid)==r['identity']:
-            require(time.monotonic()<deadline,'owned service did not exit; no force kill; inspect '+r['log'])
+        deadline = time.monotonic()+timeout
+        while self.identity(ident['pid'])==ident:
+            require(time.monotonic()<deadline,'owned service still exiting; no force kill')
             time.sleep(.25)
-        if self.child is not None:self.child.wait(timeout=1)
+        if self.child is not None:
+            self.child.wait(timeout=1)
         return self.status()
-
-    def logs(self, lines=30):
-        require(type(lines) is int and 0<lines<=1000,'log tail must be 1..1000 lines')
-        from collections import deque
-        if self.pending_launch.exists():
-            with self.pending_launch.open('rb') as stream:r=strict_json(stream.readline())
-        else:r=self._state()
-        require(r is not None,'no owned service log')
-        path=safe_path(r['log']);require(path.parent==self.directory and path.name.startswith('stdout-'),'log escaped service directory')
-        with path.open(errors='replace') as stream:return ''.join(deque(stream,maxlen=lines))
-
-
-@contextmanager
-def owned_service(root,key,expected):
-    service=Service(root,key,expected)
-    state=service.start(execute=True)
-    try:yield state['pid']
-    finally:service.stop(execute=True)

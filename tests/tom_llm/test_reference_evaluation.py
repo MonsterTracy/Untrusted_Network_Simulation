@@ -26,10 +26,9 @@ def test_approved_sets_include_derived_baselines_tiers_and_common_denominators(s
         projection_source(ref,engineering_only=False)
     labels=raw_set_labels(ref,pub.path,ref.game_ids)
     predictions={'qwen3':_set_rows(ref),'yi':_set_rows(ref,invalid=True),'mistral':_set_rows(ref)}
-    result=compare_sets(ref,predictions,ref.game_ids,labels,formal_game_ids=ref.game_ids,
-                        approved=True,engineering_only=True)
+    result=compare_sets(ref,predictions,ref.game_ids,labels,engineering_only=True)
     full=result['populations']['full_primary_raw'];nu=result['populations']['primary_comparable_nu']
-    assert result['comparison_complete'] is True and result['physical_qualification'] is False
+    assert result['comparison_complete'] is True
     assert len(full['paired'])==10 and len(nu['paired'])==15
     assert Counter(p['tier'] for p in full['paired'])=={'simple_baseline':6,'exploratory':4}
     assert Counter(p['tier'] for p in nu['paired'])=={'key_method':3,'simple_baseline':8,'exploratory':4}
@@ -53,9 +52,8 @@ def test_approved_sets_include_derived_baselines_tiers_and_common_denominators(s
     for group in result['populations'].values():
         expected=bootstrap_indices(group['game_ids'],10000,POLICY['bootstrap']['seed'])
         assert group['bootstrap_indices_digest']==sha256_bytes(expected.tobytes())
-    with pytest.raises(ValueError,match='legacy threshold'):
-        compare_sets(ref,predictions,ref.game_ids,labels,formal_game_ids=ref.game_ids,approved=True,
-                     engineering_only=True,probability_to_set_rule=_mock_set_rule(['dev']))
+    with pytest.raises(TypeError):
+        compare_sets(ref,predictions,ref.game_ids,labels,engineering_only=True,probability_to_set_rule={})
 
 
 @pytest.mark.parametrize('change',['canonical','architecture','checkpoint','prediction'])
@@ -144,12 +142,6 @@ def _set_rows(reference, *, invalid=False):
     return rows
 
 
-def _mock_set_rule(development_games):
-    return {'schema_version':'classic7_probability_to_set_development_v2', 'scope':'ENGINEERING_ONLY',
-            'threshold':.2, 'comparison':'>=', 'development_game_ids':development_games,
-            'development_source_digest':'d'*64}
-
-
 def test_set_comparison_common_rows_failure_denominators_and_game_bootstrap(sealed_reference):
     from werewolf.tom_llm.reference import raw_set_labels
     from werewolf.tom_llm.evaluation import compare_sets
@@ -160,10 +152,9 @@ def test_set_comparison_common_rows_failure_denominators_and_game_bootstrap(seal
     ref,publication,*_ = sealed_reference
     labels = raw_set_labels(ref,publication.path,ref.game_ids)
     predictions = {'qwen3':_set_rows(ref), 'yi':_set_rows(ref,invalid=True), 'mistral':_set_rows(ref)}
-    result = compare_sets(ref,predictions,ref.game_ids,labels,
-        probability_to_set_rule=_mock_set_rule(['synthetic-independent-development']),formal_game_ids=ref.game_ids)
+    result = compare_sets(ref,predictions,ref.game_ids,labels,engineering_only=True)
     nu = result['populations']['primary_comparable_nu']
-    assert len(nu['paired']) == 6 and set(nu['cells']) == {'qwen3','yi','mistral','Observer-ToM'}
+    assert len(nu['paired']) == 15 and set(nu['cells']) == {'qwen3','yi','mistral','Observer-ToM','Always Empty','Always All-Six'}
     assert {c['row_count'] for c in nu['cells'].values()} == {nu['row_count']}
     assert nu['cells']['yi']['metrics']['valid_output_rate']['point'] == 0
     assert nu['cells']['qwen3']['metrics']['valid_output_rate']['point'] == 1
@@ -171,29 +162,16 @@ def test_set_comparison_common_rows_failure_denominators_and_game_bootstrap(seal
     assert nu['bootstrap_indices_digest'] == sha256_bytes(indices.tobytes())
     for cell in nu['cells'].values():
         assert cell['metrics']['set_f1']['point'] == pytest.approx(np.mean([v['set_f1'] for v in cell['game_scores'].values()]))
-    blocked = compare_sets(ref,predictions,ref.game_ids,labels,formal_game_ids=ref.game_ids)
-    assert blocked['probability_to_set']['status'].startswith('BLOCKED')
-    assert 'Observer-ToM' not in blocked['populations']['primary_comparable_nu']['cells']
     # 仅验证不可恢复原集合的接口统计；不把改造的人工资料当作真实来源证据。
     missing = deepcopy(labels)
     missing['labels'][0].update(status='not_recoverable',suspected_players=None)
     missing['labels_digest'] = digest(missing['labels'])
-    partial = compare_sets(ref,predictions,ref.game_ids,missing,formal_game_ids=ref.game_ids)
+    partial = compare_sets(ref,predictions,ref.game_ids,missing,engineering_only=True)
     assert partial['unobservable_or_unrecoverable_rows'] == 1
     assert partial['populations']['full_primary_raw']['row_count'] == len(ref.primary_rows)-1
     predictions['yi'].pop()
     with pytest.raises(ValueError,match='missing'):
-        compare_sets(ref,predictions,ref.game_ids,labels,formal_game_ids=ref.game_ids)
-
-
-def test_probability_to_set_has_no_gold_input_and_excludes_complete_formal_pool():
-    import inspect
-    from werewolf.tom_llm.output import probability_to_set
-    assert set(inspect.signature(probability_to_set).parameters) == {'probability','observer','rule','formal_game_ids'}
-    assert probability_to_set([0,.2,.3,.1,.1,.1,.2],0,_mock_set_rule(['dev']),formal_game_ids=['test']) == ['player2','player3','player7']
-    with pytest.raises(ValueError,match='disjoint'):
-        probability_to_set([0,.2,.3,.1,.1,.1,.2],0,_mock_set_rule(['formal-outside-technical-subset']),
-                           formal_game_ids=['test','formal-outside-technical-subset'])
+        compare_sets(ref,predictions,ref.game_ids,labels,engineering_only=True)
 
 
 def test_reference_reads_full_semantics_without_model_inference(sealed_reference, monkeypatch):
@@ -361,29 +339,6 @@ def test_game_macro_is_not_observer_row_weighted(sealed_reference):
     assert macro!=pytest.approx(weighted)
 
 
-def test_sealed_mock_to_reference_analysis_end_to_end(sealed_reference,tmp_path):
-    ref,publication,*_=sealed_reference
-    from werewolf.tom_llm.study import public_requests,prepare_mock_study
-    from werewolf.tom_llm.inference import MockBackend,run_mock_study,seal_mock_study
-    from werewolf.tom_llm.evaluation import analyze_mock
-    from tests.tom_llm.test_selection_inference import uniform
-    import json
-    prefixes=[p for g in publication.public_view.games for p in g.authoritative_pre_prefixes]
-    membership={g:f["fold"] for f in ref.folds for g in f["held_out_game_ids"]}
-    requests=public_requests(prefixes,membership)
-    root=tmp_path/"llm-mock"
-    prepare_mock_study(root,requests,tokenizer_identity="synthetic:counter-v1",count_tokens=lambda _:100)
-    backend=MockBackend(uniform)
-    run_mock_study(root,backend); seal=seal_mock_study(root)
-    result=analyze_mock(ref,root,ref.game_ids,tmp_path/"analysis")
-    data=json.loads((result.path/"comparison.json").read_bytes())
-    assert result.manifest["engineering_only"] is True
-    assert result.manifest["llm_prediction_seal_digest"]==seal.manifest_digest
-    assert data["Delta_KL"]["point"]==pytest.approx(0,abs=1e-12)
-    assert data["failures"]["scheduled_public_alive_rows"]==len(backend.calls)
-    assert data["failures"]["primary_rows"]==len(ref.primary_rows)
-    with pytest.raises(ValueError,match="outside"):
-        analyze_mock(ref,root,ref.game_ids,root/"bad-analysis")
 
 
 def test_injected_supervision_cannot_override_reference(sealed_reference):

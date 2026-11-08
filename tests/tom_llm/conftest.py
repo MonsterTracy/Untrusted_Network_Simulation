@@ -14,6 +14,8 @@ from werewolf.tom.protocol import bootstrap_indices, BOOTSTRAP_VERSION
 from werewolf.tom_llm.common import digest
 from werewolf.tom_llm import reference as adapter
 from werewolf.tom_llm.reference import open_reference
+from werewolf.artifact_io import verify_artifact,sha256_bytes
+from werewolf.tom_llm.multimodel import publish_cohort
 
 
 @pytest.fixture(autouse=True)
@@ -147,3 +149,63 @@ def predictions_for(reference, *, failure=False):
         rows.append({key: row[key] for key in ("game_id", "boundary_id", "prefix_digest", "plan_digest",
             "observer", "fold", "canonical_shift", "temporal_condition")} | {"prediction": prediction})
     return rows
+
+@pytest.fixture
+def cohort(tmp_path,monkeypatch,sealed_reference,request):
+    # Like the historical 5-game Reference fixture, shrink only fixture selection counts.
+    # Production select_games remains fixed at 1500 and 30 games/fold.
+    from werewolf.tom_llm import selection
+    ref,publication,evaluation,report = sealed_reference
+    def tiny(folds,*,scope):
+        games = selection.validate_folds(folds)
+        result = {'scope':scope,'rule':dict(selection.POLICY['subset']),
+            'folds':[{'fold':r['fold'],'game_ids':sorted(r['held_out_game_ids'])} for r in folds],
+            'game_ids':games,'parent_folds_digest':digest(folds)}
+        return {**result,'selection_digest':digest(result)}
+    monkeypatch.setattr(selection,'select_games',tiny)
+    selected = selection.publish_selection(tmp_path/'selection',ref.folds,scope='full1500')
+    payload = json.loads((selected.path/'selection.json').read_bytes())
+    expected = {'parent_folds_digest':payload['parent_folds_digest'],'selection_digest':payload['selection_digest'],
+        'game_ids_digest':digest(payload['game_ids']),'selection_payload_sha256':sha256_bytes(canonical_json_bytes(payload))}
+    prepared = verify_artifact(evaluation.parent.parent/'prepared',expected_artifact_type='backbone_tom_study',
+        expected_schema_version='classic7_backbone_study_v1')
+    provenance = {'publication_digest':ref.publication_digest,'fold_manifest_digest':ref.fold_manifest_digest,
+        'prepared_manifest_digest':prepared.manifest_digest,'pre_reference_selection_evidence_digest':'e'*64,
+        'reconciliation_evidence_digest':'f'*64}
+    membership = {g:r['fold'] for r in ref.folds for g in r['held_out_game_ids']}
+    from werewolf.tom_llm.task import SET_VERSION,public_tasks
+    tasks = public_tasks([p for g in publication.public_view.games for p in g.authoritative_pre_prefixes],membership,
+                         version=SET_VERSION)
+    path = tmp_path/'cohort'
+    artifact = publish_cohort(path,tasks,ref,selection_root=selected.path,expected=expected,
+        provenance=provenance,prepared_manifest=prepared.manifest)
+    return artifact,tasks,ref
+
+
+@pytest.fixture
+def make_run(tmp_path,cohort,sealed_reference):
+    from werewolf.tom_llm.experiment import prepare_run
+    def create(key='qwen3', *, name=None, count=100):
+        ref,publication,evaluation,report = sealed_reference
+        return prepare_run(tmp_path/(name or key),run_id=name or key,model=key,
+            cohort_root=cohort[0].path,expected_cohort=cohort[0].manifest_digest,
+            publication=publication.path,evaluation=evaluation,expected_reference=report.manifest_digest,
+            mode='mock',count_tokens=lambda _:count)
+    return create
+
+
+class Replies:
+    """Mock 仅替换传输；执行、持久化和计分使用正式实现。"""
+    def __init__(self, content=None, failure=None):
+        self.calls = []
+        self.content = content
+        self.failure = failure
+
+    def send(self, request, task_id):
+        self.calls.append((request,task_id))
+        if self.failure:
+            raise self.failure
+        return json.dumps({'model':request['model'],'id':task_id,
+            'choices':[{'message':{'content':self.content if self.content is not None else '{"suspected_players":[]}'},
+                        'finish_reason':'stop'}],
+            'usage':{'prompt_tokens':100,'completion_tokens':10,'total_tokens':110}})

@@ -1,1092 +1,317 @@
-"""CPU/native-tokenizer and injected-engine tests; never a physical GPU qualification."""
+"""CPU/Mock 验证轻量资产和 owned-process 边界；不启动 vLLM 或真实 GPU。"""
 
-import asyncio
+from contextlib import contextmanager
 from copy import deepcopy
-import hashlib
-import json
 import os
 from pathlib import Path
-from types import SimpleNamespace as NS
-
-import openai
+import signal
+from types import SimpleNamespace
 import pytest
 
-from werewolf.artifact_io import publish_artifact,verify_artifact,canonical_json_bytes
+from werewolf.artifact_io import canonical_json_bytes
 from werewolf.tom_llm.common import digest
-from werewolf.tom_llm import multimodel as mm, physical, deployment as dep, qualification_inputs as qi
-from werewolf.tom_llm.model_spec import ModelSpec, wire_schema, SET_WIRE_SCHEMA_PROJECTION
-from werewolf.tom_llm.qualification_evidence import NUMERIC,MEMORY,validate_sampling,validate_qualification
-from werewolf.tom_llm.gpu_probe import install_probe,snapshot_sampling,validate_launch_args,JsonlSink
-from werewolf.tom_llm.candidate_client import SyntheticCandidateClient,collect_round
-from werewolf.tom_llm.physical_admission import open_round,publish_admission,open_admission
-from werewolf.tom_llm.provider_semantics import NotExecuted,OutcomeUnknown
+from werewolf.tom_llm import physical,service_manager as sm,deployment as dep
+from werewolf.tom_llm.model_spec import ModelSpec
 
-KEYS=['qwen3','yi','mistral']
+
+def test_weight_verification_reads_only_small_index_revision_and_stats(tmp_path,monkeypatch):
+    root = tmp_path/'model'
+    root.mkdir()
+    spec = ModelSpec('qwen3')
+    revision = spec.record()['revision']
+    (root/'HF_REVISION').write_text(revision+'\n')
+    (root/'model.safetensors.index.json').write_text('{"weight_map":{"one":"one.safetensors"}}')
+    with (root/'one.safetensors').open('wb') as stream:
+        stream.truncate(1024**3)
+    manifest = tmp_path/'assets.json'
+    manifest.write_bytes(canonical_json_bytes({'qwen3':{'revision':revision,'files':{
+        'one.safetensors':{'bytes':1024**3,'sha256':'a'*64}}}}))
+    monkeypatch.setattr(physical,'ASSET_PATH',manifest)
+    original = Path.read_bytes
+    def no_weight_bytes(path):
+        assert path.suffix!='.safetensors'
+        return original(path)
+    monkeypatch.setattr(Path,'read_bytes',no_weight_bytes)
+    first = physical.verify_model(spec,root)
+    assert first['full_weight_sha_verified'] is first['weights_loaded'] is False
+    assert first==physical.verify_model(spec,root)
+    os.utime(root/'one.safetensors',ns=(1,1))
+    assert physical.verify_model(spec,root)!=first
+
+
+@pytest.mark.parametrize('processes,free,util',[('42',24000,0),('',100,0),('',24000,10)])
+def test_busy_selected_gpu_never_signals(processes,free,util,monkeypatch):
+    calls = []
+    def command(args,**kw):
+        calls.append(args)
+        assert '--id=GPU-selected' in args
+        if '--query-compute-apps=pid' in args:
+            return processes
+        return f'GPU-selected, NVIDIA GeForce RTX 3090, 24576, {free}, {util}'
+    monkeypatch.setattr(dep.subprocess,'check_output',command)
+    with pytest.raises(ValueError,match='busy'):
+        dep.require_idle_gpu({'gpu_uuid':'GPU-selected'})
+    assert len(calls)==2
+
+
+def manager_for(run,tmp_path):
+    prefix = tmp_path/'env'
+    (prefix/'bin').mkdir(parents=True)
+    (prefix/'bin/python').touch()
+    run.record['mode'] = 'formal'
+    run.record['runtime'] = {'environment_prefix':str(prefix),'argv_options':{'port':18581}}
+    manager = sm.Service(run)
+    manager.directory.mkdir(parents=True)
+    ident = {'pid':12345,'boot_id':'boot','start_ticks':'7','uid':os.getuid(),'cwd':str(sm.ROOT),
+             'executable':str(prefix/'bin/python'),'pgid':12345,'argv':manager.command()}
+    state = {'run_digest':run.artifact.manifest_digest,'argv':manager.command(),'log':'owned.log','identity':ident}
+    state['state_digest'] = digest(state)
+    (manager.directory/'current.json').write_bytes(canonical_json_bytes(state))
+    return manager,ident
+
+
+def test_status_and_stop_have_no_heavy_validation_and_signal_only_owned_pid(make_run,tmp_path,monkeypatch):
+    manager,ident = manager_for(make_run(),tmp_path)
+    current = [ident]
+    monkeypatch.setattr(physical,'verify_model',lambda *a:pytest.fail('weight scan'))
+    monkeypatch.setattr(manager,'identity',lambda pid:current[0])
+    assert manager.status()['state']=='running'
+    signals = []
+    @contextmanager
+    def fd(pid):
+        assert pid==ident['pid']
+        def send(sig):
+            signals.append(sig)
+            current[0] = None
+        yield send
+    monkeypatch.setattr(sm,'_pidfd',fd)
+    monkeypatch.setattr(sm.sys,'platform','linux')
+    assert manager.stop(execute=True)['state']=='exited'
+    assert signals==[signal.SIGTERM]
+
+
+@pytest.mark.parametrize('change',('pid_reused','pending','state_tampered'))
+def test_nonowned_or_unknown_launch_never_signals(make_run,tmp_path,monkeypatch,change):
+    manager,ident = manager_for(make_run(),tmp_path)
+    monkeypatch.setattr(sm.sys,'platform','linux')
+    monkeypatch.setattr(sm,'_pidfd',lambda *a:pytest.fail('unsafe signal'))
+    if change=='pending':
+        manager.pending_launch.write_text('{}')
+        assert manager.status()['state']=='launch_incomplete'
+    elif change=='state_tampered':
+        path = manager.directory/'current.json'
+        path.write_text(path.read_text().replace('owned.log','other.log'))
+    else:
+        monkeypatch.setattr(manager,'identity',lambda _:dict(ident,start_ticks='99'))
+        assert manager.status()['state']=='pid_reused'
+    with pytest.raises(ValueError):
+        manager.stop(execute=True)
+
+
+def test_direct_service_command_has_one_entrypoint_and_no_qualification(make_run,tmp_path):
+    manager,_ = manager_for(make_run(),tmp_path)
+    command = manager.command()
+    assert command[1:3]==['-m','vllm.entrypoints.openai.api_server']
+    assert not any('qualification' in part or 'gpu_probe' in part or 'live_service' in part for part in command)
+
+
+def test_mock_service_launch_reuses_instance_and_holds_shared_gpu_lock(make_run,tmp_path,monkeypatch):
+    import fcntl
+    manager,ident = manager_for(make_run(),tmp_path)
+    (manager.directory/'current.json').unlink()
+    runtime = manager.runtime
+    runtime.update(cache_root=str(tmp_path/'cache'),ipc_root=str(tmp_path/'ipc'),
+                   environment={'TMPDIR':str(tmp_path/'temp')})
+    runtime['argv_options']['model'] = 'not-loaded'
+    runtime['argv_options']['port'] = 0
+    manager.run.record['model_evidence'] = {'mock':'stat'}
+    monkeypatch.setattr(physical,'verify_model',lambda *a:{'mock':'stat'})
+    monkeypatch.setattr(sm.sys,'platform','linux')
+    monkeypatch.setattr(sm,'GPU_LOCK',tmp_path/'gpu.lock')
+    monkeypatch.setattr(sm,'require_idle_gpu',lambda *a:None)
+    monkeypatch.setattr(sm.subprocess,'check_output',lambda *a,**kw:'0.27.0\n')
+    current = [ident]
+    monkeypatch.setattr(manager,'identity',lambda _:current[0])
+    monkeypatch.setattr(manager,'ready',lambda:{'ready':True})
+    signals = []
+    @contextmanager
+    def fd(pid):
+        def send(sig):
+            if sig:
+                assert pid==ident['pid']
+                signals.append(sig)
+                current[0] = None
+        yield send
+    monkeypatch.setattr(sm,'_pidfd',fd)
+    launched = []
+    def spawn(command,**kw):
+        launched.append(command)
+        assert command==manager.command() and kw['start_new_session']
+        assert len(kw['pass_fds'])==1
+        with (tmp_path/'gpu.lock').open('a+b') as other:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        assert manager.pending_launch.exists()
+        return SimpleNamespace(pid=ident['pid'],wait=lambda **kw:0)
+    monkeypatch.setattr(sm.subprocess,'Popen',spawn)
+    assert manager.start(execute=True)=={'ready':True}
+    assert not manager.pending_launch.exists()
+    assert manager.start(execute=True)=={'ready':True}
+    assert len(launched)==1
+    assert manager.stop(execute=True)['state']=='exited' and signals==[signal.SIGTERM]
+
+
+def test_native_runtime_same_decoding_template_and_cache_boundaries(monkeypatch):
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory(dir='/private/tmp',prefix='tb-') as temporary:
+        _runtime_paths(Path(temporary),monkeypatch)
+
+
+def _runtime_paths(tmp_path,monkeypatch):
+    root = tmp_path/'outputs'/'one'
+    model = tmp_path/'models'/'model'
+    prefix = tmp_path/'envs'/'conda'
+    model.mkdir(parents=True)
+    (prefix/'bin').mkdir(parents=True)
+    (prefix/'bin/python').touch()
+    monkeypatch.setattr(dep,'EXPERIMENT_BASE',tmp_path/'outputs')
+    monkeypatch.setattr(dep,'MODEL_BASE',model.parent)
+    monkeypatch.setattr(dep,'ENV_BASE',prefix.parent)
+    for key in ('qwen3','yi','mistral'):
+        profile = dep.profile(ModelSpec(key),root=root,model_directory=model,environment_prefix=prefix,gpu_uuid='GPU-example')
+        options = profile['argv_options']
+        assert options['max-model-len']==8192 and options['max-num-seqs']==1 and options['seed']==20261014
+        assert options['structured-outputs-config']=={'backend':'xgrammar'}
+        assert options['chat-template']==str(root/'runtime/chat_template.jinja')
+        assert profile['environment']['CUDA_VISIBLE_DEVICES']=='GPU-example'
+        assert profile['environment']['HF_HUB_OFFLINE']=='1'
+        encoded = dep.vllm_config_bytes(options)
+        assert b'"no-enable-prefix-caching":true' in encoded
+    assert not root.exists()
 
 
 @pytest.fixture
-def short_root():
-    # Socket path limits apply to the resolved OS path, including pytest's prefix.
-    import tempfile
-    with tempfile.TemporaryDirectory(dir=Path('/tmp').resolve()) as name:
-        yield Path(name)
+def listener_fixture(tmp_path,monkeypatch):
+    """只模拟当前 owned PID 的 /proc，不模拟整个 Linux/GPU 环境。"""
+    import json
+    root = tmp_path/'proc'
+    process = root/'12345'
+    (process/'fd').mkdir(parents=True)
+    (process/'net').mkdir()
+    ident = {'pid':12345,'boot_id':'boot','start_ticks':'7','uid':os.getuid()}
+    spec = ModelSpec('qwen3')
+    run = SimpleNamespace(root=tmp_path,spec=spec,
+        record={'mode':'formal','runtime':{'argv_options':{'port':18581}}})
+    manager = sm.Service(run)
+    monkeypatch.setattr(sm,'_PROC',root,raising=False)
+    monkeypatch.setattr(sm.sys,'platform','linux')
+    monkeypatch.setattr(manager,'_state',lambda:{'identity':ident,'log':'not-opened.log'})
+    monkeypatch.setattr(manager,'identity',lambda pid:dict(ident))
+    monkeypatch.setattr(physical,'verify_model',lambda *a:pytest.fail('weights in ownership check'))
+    def install(*,owned=('41','42'),listener='41',extra=(),peer='42'):
+        for path in (process/'fd').iterdir():
+            path.unlink()
+        for i,inode in enumerate(owned):
+            (process/'fd'/str(i)).symlink_to('socket:['+inode+']')
+        def row(local,remote,state,inode):
+            return f'0: {local} {remote} {state} 0:0 0:0 0 {os.getuid()} 0 {inode}\n'
+        lines = [row('0100007F:4895','00000000:0000','0A',listener)]
+        lines += [row('0100007F:4895','00000000:0000','0A',inode) for inode in extra]
+        if peer is not None:
+            lines += [row('0100007F:4895','0100007F:9C40','01',peer)]
+        (process/'net/tcp').write_text('header\n'+''.join(lines))
+        (process/'net/tcp6').write_text('header\n')
+    install()
+    calls = []
+    class Socket:
+        def getsockname(self):return ('127.0.0.1',40000)
+        def getpeername(self):return ('127.0.0.1',18581)
+        def dup(self):return self
+        def close(self):pass
+    class Connection:
+        def __init__(self,*args,**kw):self.sock=Socket()
+        def connect(self):pass
+        def request(self,*args,**kw):calls.append(args)
+        def getresponse(self):
+            return SimpleNamespace(status=200,read=lambda:json.dumps({'data':[{'id':spec.record()['model']}]}).encode())
+        def close(self):pass
+    monkeypatch.setattr('http.client.HTTPConnection',Connection)
+    return manager,ident,install,calls
 
 
-@pytest.mark.parametrize('key,name',[
-    ('qwen3','Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218'),
-    ('yi','Yi-1.5-9B-Chat-16K'),
-    ('mistral','Mistral-7B-Instruct-v0.3'),
-])
-def test_shared_model_root_changes_only_weight_and_tokenizer_paths(key,name):
-    from werewolf.tom_llm.live_admission import service_profile
-    spec=ModelSpec(key);root=dep.EXPERIMENT_BASE/'multimodel'/key/'UNIT'
-    args={'gpu_uuid':'GPU-unit-only','candidate_root':root,
-        'environment_prefix':dep.ENV_BASE/'untrusted-network-simulation-tom-baseline'}
-    old=dep.profile(spec,model_directory=dep.BASE/'models'/name,**args)
-    model=Path('/data/yuxiao/models')/name
-    new=dep.profile(spec,model_directory=model,**args)
-    expected=deepcopy(old);expected['argv_options'].update(model=str(model),tokenizer=str(model))
-    assert new==expected
-    assert new['argv_options']['revision']==spec.record()['revision']
-    assert new['argv_options']['tokenizer-revision']==spec.record()['tokenizer_revision']
-    assert Path(new['environment_requirements']['VLLM_RPC_BASE_PATH'])==root.parent
-    live=service_profile(dep.EXPERIMENT_BASE/'experiments/UNIT',spec,{'profile':new})
-    assert live['argv_options']['model']==live['argv_options']['tokenizer']==str(model)
-    assert live['environment_requirements']['VLLM_RPC_BASE_PATH']==new['environment_requirements']['VLLM_RPC_BASE_PATH']
-    dep.validate_cache_paths(live)
-    with pytest.raises(ValueError,match='outside independent baseline roots'):
-        dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=model,model_directory=model)
+def test_wrong_listener_with_correct_model_name_is_rejected(listener_fixture):
+    manager,ident,install,calls = listener_fixture
+    install(listener='99')
+    with pytest.raises(RuntimeError,match='listener'):
+        manager.ready()
+    assert calls==[]
 
 
-@pytest.mark.parametrize('model',[
-    '/data/yuxiao/models',
-    '/data/yuxiao/models/group/Qwen3-8B',
-    '/data/yuxiao/models/../models/Qwen3-8B',
-    '/data/yuxiao/models-extra/Qwen3-8B',
-    '/data/yuxiao/TomBaseline-data/models/Qwen3-8B',
-    '/data/yuxiao/envs/Qwen3-8B',
-    '/data/yuxiao/tom-llm-reasoner-b2',
-    '/data/yuxiao/tom-llm-reasoner-b2/models/../../outside',
-    '/tmp/Qwen3-8B',
-    'models/Qwen3-8B',
-])
-def test_model_roots_reject_bare_roots_nested_shared_paths_and_escapes(model):
-    with pytest.raises(ValueError,match='physical model path'):
-        dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',
-            candidate_root=dep.EXPERIMENT_BASE/'multimodel/qwen3/UNIT',model_directory=model)
+def test_owned_listener_and_connected_socket_allow_ready(listener_fixture):
+    manager,ident,install,calls = listener_fixture
+    binding = manager.guard()
+    assert binding=={'identity':ident,'listener_inode':'41'}
+    assert manager.ready()['ready'] is True
+    assert calls==[('GET','/v1/models')]
 
 
-@pytest.mark.parametrize('location',['model','root','ancestor','historical'])
-def test_model_roots_reject_symlinks_even_to_allowed_storage(tmp_path,monkeypatch,location):
-    models=tmp_path/'storage/models';models.mkdir(parents=True)
-    target=models/'real';target.mkdir()
-    monkeypatch.setattr(dep,'MODEL_BASE',models)
-    old=tmp_path/'historical';old.mkdir();monkeypatch.setattr(dep,'BASE',old)
-    if location in ('model','historical'):
-        model=(models if location=='model' else old)/'alias';model.symlink_to(target,target_is_directory=True)
-    elif location=='root':
-        alias=tmp_path/'alias';alias.symlink_to(models,target_is_directory=True)
-        monkeypatch.setattr(dep,'MODEL_BASE',alias);model=alias/'real'
+@pytest.mark.parametrize('change',('multiple','replaced','lifecycle','missing'))
+def test_listener_binding_and_lifecycle_cannot_change(listener_fixture,monkeypatch,change):
+    manager,ident,install,calls = listener_fixture
+    binding = manager.guard()
+    if change=='multiple':
+        install(extra=('99',))
+    elif change=='replaced':
+        install(owned=('43','42'),listener='43')
+    elif change=='missing':
+        install(listener='99',owned=())
     else:
-        alias=tmp_path/'alias';alias.symlink_to(models.parent,target_is_directory=True)
-        monkeypatch.setattr(dep,'MODEL_BASE',alias/'models');model=alias/'models/real'
-    with pytest.raises(ValueError,match='physical model path'):
-        dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',
-            candidate_root=dep.EXPERIMENT_BASE/'multimodel/qwen3/UNIT',model_directory=model)
+        monkeypatch.setattr(manager,'identity',lambda _:dict(ident,start_ticks='8'))
+    with pytest.raises(RuntimeError,match='listener'):
+        manager.guard(expected=binding)
 
 
-@pytest.mark.parametrize('key',KEYS)
-def test_rpc_base_uses_existing_model_parent_without_changing_tmp_or_caches(key):
-    from uuid import UUID
-    spec=ModelSpec(key)
-    root=dep.EXPERIMENT_BASE/'multimodel'/key/('TomBaseline-Qwen3-8B' if key=='qwen3' else 'UNIT_MODEL_CANDIDATE')
-    p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=root,
-        model_directory=dep.BASE/'models'/key,environment_prefix=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline')
-    env=p['environment_requirements'];rpc=Path(env['VLLM_RPC_BASE_PATH'])
-    assert rpc==dep.EXPERIMENT_BASE/'multimodel'/key
-    assert len(os.fsencode(rpc/str(UUID(int=0))))<=107
-    assert env['TMPDIR']==str(root/'tmp')
-    assert 'VLLM_RPC_BASE_PATH' not in dep.CACHE_VARIABLES
-    for name in dep.CACHE_VARIABLES:assert Path(env[name]).is_relative_to(root)
-    dep.validate_process_environment(p,dict(env))
-    for value in (None,str(dep.EXPERIMENT_BASE/'multimodel'/('yi' if key!='yi' else 'qwen3'))):
-        changed=dict(env)
-        if value is None:changed.pop('VLLM_RPC_BASE_PATH')
-        else:changed['VLLM_RPC_BASE_PATH']=value
-        with pytest.raises(ValueError):dep.validate_process_environment(p,changed)
+def test_connected_peer_must_be_held_by_owned_pid(listener_fixture,monkeypatch):
+    manager,ident,install,calls = listener_fixture
+    install(peer='99')  # 监听属于 owned PID，实际连接却由其他进程持有。
+    ticks = iter(range(10))
+    monkeypatch.setattr(sm.time,'monotonic',lambda:next(ticks))
+    monkeypatch.setattr(sm.time,'sleep',lambda _:None)
+    with pytest.raises(RuntimeError,match='connected socket'):
+        manager.ready()
+    assert calls==[]
 
 
-@pytest.mark.parametrize('key',KEYS)
-def test_rpc_parent_stays_short_for_long_candidates_and_formal_run_paths(key):
-    from werewolf.tom_llm.live_admission import service_profile
-    spec=ModelSpec(key);parent=dep.EXPERIMENT_BASE/'multimodel'/key
-    profiles=[dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=parent/name,
-        model_directory=dep.BASE/'models'/key,environment_prefix=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline')
-        for name in ('UNIT_CANDIDATE','UNIT_'+'long_'*35)]
-    assert {p['environment_requirements']['VLLM_RPC_BASE_PATH'] for p in profiles}=={str(parent)}
-    live=service_profile(dep.EXPERIMENT_BASE/'experiments'/('UNIT_'+'long_'*35),spec,{'profile':profiles[0]})
-    assert live['environment_requirements']['VLLM_RPC_BASE_PATH']==str(parent)
-    dep.validate_cache_paths(live)
-    for p in [*profiles,live]:
-        assert len(os.fsencode(Path(p['environment_requirements']['VLLM_RPC_BASE_PATH'])/('0'*36)))<=107
-        for name in dep.CACHE_VARIABLES:assert Path(p['environment_requirements'][name]).is_relative_to(p['root'])
+def test_accept_queue_waits_for_owned_fd_without_http_retry(listener_fixture,monkeypatch):
+    manager,ident,install,calls = listener_fixture
+    install(peer=None)
+    waits = []
+    def accept(_):
+        waits.append('accept')
+        install()
+    monkeypatch.setattr(sm.time,'sleep',accept)
+    assert manager.ready()['ready'] is True
+    assert waits==['accept'] and calls==[('GET','/v1/models')]
 
 
-def test_rpc_path_limit_counts_filesystem_bytes_and_rejects_overflow(short_root,monkeypatch):
-    def make(base):
-        monkeypatch.setattr(dep,'EXPERIMENT_BASE',base)
-        return dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel/qwen3/UNIT',
-            model_directory=dep.BASE/'models/qwen3',environment_prefix=dep.ENV_BASE/'untrusted-network-simulation-tom-baseline')
-    n=107-len(os.fsencode(short_root/'multimodel/qwen3'))-1-1-36
-    assert n>0
-    p=make(short_root/('x'*n))
-    assert len(os.fsencode(p['environment_requirements']['VLLM_RPC_BASE_PATH']))+1+36==107
-    for suffix in ('x'*(n+1),'界'*n):
-        with pytest.raises(ValueError,match='107-byte'):make(short_root/suffix)
+def test_ipv6_wildcard_cannot_hide_an_unowned_listener(listener_fixture):
+    manager,ident,install,calls = listener_fixture
+    process = sm._PROC/str(ident['pid'])
+    (process/'net/tcp6').write_text('header\n0: '+'0'*32+':4895 '+'0'*32+
+                                   f':0000 0A 0:0 0:0 0 {os.getuid()} 0 99\n')
+    with pytest.raises(RuntimeError,match='listener'):
+        manager.ready()
+    assert calls==[]
 
 
-@pytest.mark.parametrize('key',KEYS)
-def test_rpc_parent_safety_and_writability_keep_cache_isolation(short_root,monkeypatch,key):
-    from werewolf.tom_llm.live_admission import service_profile
-    base=short_root/'base';monkeypatch.setattr(dep,'BASE',base)
-    spec=ModelSpec(key);p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
-    live=service_profile(base/'experiments/UNIT',spec,{'profile':p})
-    for var in dep.CACHE_VARIABLES:Path(live['environment_requirements'][var]).mkdir(parents=True,exist_ok=True)
-    rpc=Path(live['environment_requirements']['VLLM_RPC_BASE_PATH'])
-    assert not rpc.exists()
-    with pytest.raises(ValueError,match='existing writable RPC'):dep.validate_cache_paths(live,require_existing=True)
-    rpc.mkdir(parents=True)
-    dep.validate_cache_paths(live,require_existing=True)
-    for invalid in (base/'multimodel'/('yi' if key!='yi' else 'qwen3'),rpc/'nested',rpc/'..',short_root/'outside'):
-        changed=deepcopy(live);changed['environment_requirements']['VLLM_RPC_BASE_PATH']=str(invalid)
-        with pytest.raises(ValueError):dep.validate_cache_paths(changed)
-    changed=deepcopy(live);changed['environment_requirements']['TMPDIR']=str(rpc)
-    with pytest.raises(ValueError,match='cache path escaped'):dep.validate_cache_paths(changed)
-    access=dep.os.access
-    monkeypatch.setattr(dep.os,'access',lambda path,mode:False if Path(path)==rpc else access(path,mode))
-    with pytest.raises(ValueError,match='existing writable RPC'):dep.validate_cache_paths(live,require_existing=True)
-    monkeypatch.setattr(dep.os,'access',access)
-    marker=rpc/'manifest.json';marker.write_bytes(b'UNIT_SEALED')
-    with pytest.raises(ValueError,match='sealed Artifact'):dep.validate_cache_paths(live)
-    marker.unlink()
-    rpc.rmdir();rpc.symlink_to(base/'experiments',target_is_directory=True)
-    with pytest.raises(ValueError,match='symlink'):dep.validate_cache_paths(live)
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_rpc_model_parent_accepts_native_unix_socket_bind(short_root,monkeypatch,key):
-    """Real Mac/host AF_UNIX only, not a Linux/vLLM qualification."""
-    import socket
-    from uuid import uuid4
-    base=short_root/'base';monkeypatch.setattr(dep,'BASE',base)
-    p=dep.profile(ModelSpec(key),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
-    rpc=Path(p['environment_requirements']['VLLM_RPC_BASE_PATH']);rpc.mkdir(parents=True)
-    address=str(rpc/str(uuid4()))
-    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as listener:
-        listener.settimeout(2);listener.bind(address);listener.listen(1)
-        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-            client.settimeout(2);client.connect(address)
-            connection,_=listener.accept()
-            with connection:
-                connection.settimeout(2);client.sendall(b'UNIT');assert connection.recv(4)==b'UNIT'
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_pre_rpc_deployment_remains_offline_only_and_unchanged(short_root,monkeypatch,key):
-    base=short_root/'base';monkeypatch.setattr(dep,'BASE',base)
-    spec=ModelSpec(key);p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel'/key/'UNIT')
-    p['environment_requirements'].pop('VLLM_RPC_BASE_PATH')
-    record={'schema_version':dep.VERSION,'key':key,'model_spec':spec.record(),'source':dep.source_identity(),
-        'profile':p,'model':{'UNIT_ONLY':True},'environment':{'UNIT_ONLY':True},
-        'suite':{'UNIT_ONLY':True,'cases':[{'task':qi.synthetic_tasks()[0]}]},
-        'budget':{},'upstream_receipts':{},'purpose':'synthetic_gpu_qualification_only','physical_gpu_admission':False}
-    a=candidate_artifact(short_root,record)
-    before={f:f.read_bytes() for f in a.path.iterdir()}
-    monkeypatch.setattr(qi,'validate_suite',lambda suite,spec:suite)
-    monkeypatch.setattr(dep,'verify_cpu_binding',lambda *a:pytest.fail('offline read touched physical assets'))
-    assert dep.open_deployment(a.path,a.manifest_digest,current_source=False)[1]==record
-    with pytest.raises(ValueError,match='deployment template/config drift'):dep.open_deployment(a.path,a.manifest_digest)
-    with pytest.raises(ValueError,match='deployment template/config drift'):
-        dep.open_deployment(a.path,a.manifest_digest,current_source=False,physical_recheck=True)
-    assert all(f.read_bytes()==raw for f,raw in before.items())
-
-
-@pytest.fixture(scope='module')
-def native_suites():
-    variables={'qwen3':'UNS_LLM_TOKENIZER_ASSETS','yi':'UNS_LLM_YI_ASSETS','mistral':'UNS_LLM_MISTRAL_ASSETS'}
-    result={}
-    for key,name in variables.items():
-        assets=os.environ.get(name)
-        if not assets:pytest.skip('NOT_RUN: supplied official tokenizer assets required: '+name)
-        result[key]=qi.build_suite(ModelSpec(key),assets)
-    return result
-
-
-@pytest.fixture
-def set_suites_mock(monkeypatch):
-    """只验证新 Suite 与证据接口；不替代官方 Tokenizer 或 GPU 资格。"""
-    from werewolf.tom_llm.task import SET_VERSION
-    from werewolf.tom_llm.model_spec import render
-    class Tokenizer:
-        def __init__(self,texts):self.texts=texts
-        def __len__(self):return 1000
-        def encode(self,text,**kwargs):return [1,*hashlib.sha256(text.encode()).digest()[:16]]
-        def apply_chat_template(self,messages,*,tokenize,**kwargs):
-            text=self.texts[digest(messages)]
-            return self.encode(text) if tokenize else text
-    tokenizers={key:Tokenizer({digest(t['messages']):render(t,ModelSpec(key))['text']
-                              for t in qi.synthetic_tasks(version=SET_VERSION)}) for key in KEYS}
-    monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda spec,path:tokenizers[spec.key])
-    return {key:qi.build_suite(ModelSpec(key),'UNIT_MOCK',task_schema_version=SET_VERSION) for key in KEYS}
-
-
-@pytest.fixture
-def bound_set_inputs(tmp_path,short_root,monkeypatch,set_suites_mock):
-    """真实封存接口＋合成人口；Tokenizer、Source 和物理资源均为 Mock。"""
-    from werewolf.tom_llm import experiment as ex
-    from werewolf.tom_llm.task import SET_VERSION,task_binding
-    from werewolf.tom_llm.common import identity
-    source={**mm.source_identity(),'source_inventory_clean':True,'source_status_digest':digest('')}
-    monkeypatch.setattr(mm,'source_identity',lambda:source)
-    monkeypatch.setattr(dep,'source_identity',lambda:source)
-    monkeypatch.setattr(dep,'BASE',short_root/'base')
-    games=[f'UNIT-{i:03}' for i in range(150)]
-    tasks=[{'game_id':games[i%150],'boundary_id':f'UNIT-{i}','observer':i%7,
-            'fold':(i%150)//30,'prefix_digest':digest(['p',i]),'plan_digest':digest(['s',i])}
-           for i in range(10714)]
-    rows=digest([identity(t) for t in tasks]);monkeypatch.setattr(ex,'FORMAL_PUBLIC_ROWS_DIGEST',rows)
-    manifest={'task':task_binding(SET_VERSION),'source':source,'row_identity_digest':rows,
-              'selection':{'game_ids':games},'reference':{'seal_digest':'b'*64}}
-    cohort=NS(path=tmp_path/'cohort',manifest_digest='c'*64,manifest=manifest)
-    monkeypatch.setattr(mm,'read_cohort',lambda *a,**kw:(cohort,tasks))
-    suites={};budgets={}
-    for key in KEYS:
-        spec=ModelSpec(key);suite=deepcopy(set_suites_mock[key]);suite['source']=source
-        suites[key]=publish_artifact(tmp_path/key/'suite',manifest_fields={
-            'artifact_type':'mm_native_suite','schema_version':qi.SET_SUITE_VERSION,
-            'model_spec_digest':spec.digest,'suite_digest':digest(suite),'qualification':'INPUTS_ONLY_NOT_GPU_ADMISSION'},
-            files={'suite.json':canonical_json_bytes(suite)})
-        report={'schema_version':qi.VERSION+'_budget','model_spec_digest':spec.digest,
-                'cohort_digest':cohort.manifest_digest,'cohort_root':str(cohort.path),
-                'selection':manifest['selection'],'reference':manifest['reference'],
-                'task':manifest['task'],'source':source,'request_count':len(tasks),
-                'row_identity_digest':rows,'input_token_counts':[100]*len(tasks),
-                'input_tokens_total':100*len(tasks),'maximum_input_tokens':100,
-                'p50':100.,'p95':100.,'p99':100.,'context_length':8192,'output_cap':512}
-        budgets[key]=publish_budget_record(tmp_path/key/'budget',report)
-    return NS(source=source,cohort=cohort,tasks=tasks,suites=suites,budgets=budgets)
-
-
-def publish_budget_record(path,report):
-    return publish_artifact(path,manifest_fields={'artifact_type':'mm_cpu_budget','schema_version':qi.VERSION,
-        'model_spec_digest':report['model_spec_digest'],'record_digest':digest(report),'qualification':'CPU_BUDGET_ONLY'},
-        files={'budget.json':canonical_json_bytes(report)})
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_set_deployment_reuses_assets_but_binds_new_suite_budget_source(bound_set_inputs,tmp_path,monkeypatch,key):
-    from werewolf.tom_llm.task import SET_VERSION,task_binding
-    p=bound_set_inputs;spec=ModelSpec(key)
-    root=dep.BASE/'multimodel'/key/'UNIT-V2';model=dep.BASE/'models'/key;environment=dep.BASE/'env'
-    monkeypatch.setattr(dep,'read_receipt',lambda path,kind,expected:
-                        {'directory':str(model)} if kind=='model' else {'prefix':str(environment)})
-    verified=[];monkeypatch.setattr(dep,'verify_cpu_binding',lambda r,s:verified.append(r))
-    a=dep.prepare_deployment(root/'deployment',spec,gpu_uuid='GPU-unit-only',
-        model_root=model,model_receipt=tmp_path,expected_model='a'*64,
-        environment_root=environment,environment_receipt=tmp_path,expected_environment='b'*64,
-        suite_root=p.suites[key].path,expected_suite=p.suites[key].manifest_digest,
-        budget_root=p.budgets[key].path,expected_budget=p.budgets[key].manifest_digest)
-    _,record=dep.open_deployment(a.path,a.manifest_digest)
-    assert record['task']==task_binding(SET_VERSION)
-    assert record['source']==record['suite']['source']==record['budget']['source']==p.source
-    assert record['budget']['request_count']==10714 and len(record['budget']['selection']['game_ids'])==150
-    assert len(verified)==1 and record['physical_gpu_admission'] is False
-    assert record['upstream_receipts']['budget']==p.budgets[key].manifest_digest
-
-
-@pytest.mark.parametrize('change',['v1_suite','v1_cohort','suite_source','budget_source','legacy_budget',
-                                  'dirty_source','missing_row','over_budget'])
-def test_set_inputs_reject_version_source_and_capacity_mismatch(bound_set_inputs,tmp_path,change):
-    from werewolf.tom_llm.task import SET_VERSION,task_binding
-    from werewolf.tom_llm.common import strict_json
-    p=bound_set_inputs;key='qwen3';spec=ModelSpec(key)
-    suite=strict_json((p.suites[key].path/'suite.json').read_bytes())
-    report=strict_json((p.budgets[key].path/'budget.json').read_bytes())
-    if change=='v1_suite':
-        old=qi.legacy_suite()
-        # 原冻结 Qwen IDs 和 Wire 不变；只按 V1 Suite 合同封装。
-        suite={'schema_version':qi.VERSION,'purpose':'synthetic_gpu_qualification_only',
-            'key':key,'model_spec_digest':spec.digest,'legacy_public_suite_sha256':qi.LEGACY_SHA,
-            'cases':[{'case_index':i,'task':task,'input_ids':old['cases'][i]['input_ids'],
-                      'wire_digest':old['cases'][i]['wire_digest'],'rendered_sha256':qi.render(task,spec)['text_sha256']}
-                     for i,task in enumerate(qi.synthetic_tasks())],
-            'schedule':qi.SCHEDULE,'vocabulary_size':200000,'cpu_native_tokenizer_verified':True}
-    elif change=='v1_cohort':p.cohort.manifest['task']=task_binding()
-    elif change=='suite_source':suite['source']={**p.source,'source_revision':'f'*40}
-    elif change=='budget_source':report['source']={**p.source,'source_revision':'f'*40}
-    elif change=='legacy_budget':report.pop('task');report.pop('source')
-    elif change=='dirty_source':p.source['source_inventory_clean']=False
-    elif change=='missing_row':report['request_count']-=1
-    elif change=='over_budget':report['input_token_counts'][0]=7681
-    if change in ('v1_suite','suite_source'):
-        with pytest.raises(ValueError):qi.validate_suite(suite,spec,expected_source=p.source)
+@pytest.mark.parametrize('failure',('permission','pid_reused'))
+def test_ownership_evidence_unavailable_is_terminal(listener_fixture,monkeypatch,failure):
+    manager,ident,install,calls = listener_fixture
+    if failure=='permission':
+        monkeypatch.setattr(sm.os,'readlink',lambda *_:(_ for _ in ()).throw(PermissionError('denied')))
     else:
-        a=publish_budget_record(tmp_path/'bad-budget',report)
-        with pytest.raises(ValueError):
-            qi.open_budget(a.path,spec,a.manifest_digest,task_schema_version=SET_VERSION,expected_source=p.source)
-
-
-def test_same_wire_suite_without_source_is_offline_only(set_suites_mock):
-    """同一 Wire 可缺 Source 离线核读；投影前输入另有专门拒绝用例。"""
-    suite=deepcopy(set_suites_mock['qwen3']);source=suite.pop('source')
-    assert qi.validate_suite(suite,ModelSpec('qwen3'))==suite
-    with pytest.raises(ValueError,match='Source binding'):
-        qi.validate_suite(suite,ModelSpec('qwen3'),expected_source=source)
-
-
-@pytest.mark.parametrize('cohort_version',[qi.TASK_VERSION,qi.SET_VERSION])
-@pytest.mark.parametrize('configured_version',[qi.TASK_VERSION,qi.SET_VERSION])
-def test_budget_task_version_binding_in_both_directions(bound_set_inputs,tmp_path,cohort_version,configured_version):
-    from werewolf.tom_llm.task import task_binding
-    from werewolf.tom_llm.common import strict_json
-    p=bound_set_inputs;a=p.budgets['yi'];report=strict_json((a.path/'budget.json').read_bytes())
-    p.cohort.manifest['task']=task_binding(cohort_version)
-    if cohort_version==qi.TASK_VERSION:
-        report.pop('task');report.pop('source')
-    a=publish_budget_record(tmp_path/'task-budget',report)
-    options={'task_schema_version':configured_version}
-    if configured_version==qi.SET_VERSION:options['expected_source']=p.source
-    if cohort_version==configured_version:
-        assert qi.open_budget(a.path,ModelSpec('yi'),a.manifest_digest,**options)==report
-    else:
-        with pytest.raises(ValueError,match='task protocol mismatch'):
-            qi.open_budget(a.path,ModelSpec('yi'),a.manifest_digest,**options)
-
-
-def test_set_budget_publisher_refuses_partial_population_before_tokenizer(bound_set_inputs,tmp_path,monkeypatch):
-    p=bound_set_inputs;p.tasks.pop()
-    monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda *a:pytest.fail('partial cohort reached Tokenizer'))
-    with pytest.raises(ValueError,match='complete frozen 10714'):
-        qi.publish_budget(tmp_path/'refused-budget',p.cohort.path,p.cohort.manifest_digest,ModelSpec('yi'),'UNIT')
-    assert not (tmp_path/'refused-budget').exists()
-
-
-@pytest.mark.parametrize('suite_version,run_version',[(qi.TASK_VERSION,qi.SET_VERSION),(qi.SET_VERSION,qi.TASK_VERSION)])
-def test_physical_admission_rejects_both_task_crossovers_before_assets(tmp_path,monkeypatch,suite_version,run_version):
-    from werewolf.tom_llm import live_admission as live,physical_admission as admission
-    a=publish_artifact(tmp_path/'admission',manifest_fields={'artifact_type':'mm_physical_gpu_admission',
-        'schema_version':admission.ADMISSION_VERSION},files={'admission.json':canonical_json_bytes({'deployment_manifest_digest':'a'*64})})
-    monkeypatch.setattr(admission,'open_admission',lambda *a,**kw:(None,{'deployment_root':'UNIT','deployment_manifest_digest':'a'*64}))
-    monkeypatch.setattr(live,'open_deployment',lambda *a,**kw:(None,{'suite':{'cases':[{'task':qi.synthetic_tasks(version=suite_version)[0]}]}}))
-    monkeypatch.setattr(physical,'verify_model',lambda *a:pytest.fail('task mismatch reached physical assets'))
-    with pytest.raises(ValueError,match='Admission/Run task protocol mismatch'):
-        live.qualified_offline(a.path,a.manifest_digest,ModelSpec('qwen3'),task_schema_version=run_version)
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_set_schema_suite_and_mock_two_round_evidence(set_suites_mock,tmp_path,key):
-    from werewolf.tom_llm.task import SET_VERSION
-    suite=set_suites_mock[key];spec=ModelSpec(key)
-    assert suite['schema_version']==qi.SET_SUITE_VERSION and suite['task']['schema_version']==SET_VERSION
-    assert suite['wire_schema_projection']==SET_WIRE_SCHEMA_PROJECTION
-    assert len(suite['cases'])==12 and suite['schedule']==qi.SCHEDULE
-    for case in suite['cases']:
-        schema=case['task']['response_schema']['properties']['suspected_players']
-        assert schema['minItems']==0 and schema['maxItems']==6 and schema['uniqueItems'] is True
-        validate_sampling(sampling(spec,wire_schema(case['task'])),wire_schema(case['task']),spec)
-    record=model_record(key,set_suites_mock);rounds=[]
-    for run in range(2):
-        path=tmp_path/str(run);path.mkdir()
-        client,events,_=fake_candidate(path,record,run)
-        root=path/'round'
-        artifact=collect_round(root,client,run=run,event_reader=lambda:events,memory_monitor=Memory)
-        rounds.append(open_round(root,artifact.manifest_digest,record,
-                                 deployment_manifest_digest=client.deployment.manifest_digest)[1])
-    report=validate_qualification(record,rounds)
-    assert report['formal_execution_authorized'] is False and report['dispatches']==76
-    assert report['conversion_status_counts']=={'valid':76}
-    invalid=deepcopy(rounds)
-    player=suite['cases'][0]['task']['response_schema']['properties']['suspected_players']['items']['enum'][0]
-    invalid[0]['events'][2]['content']=invalid[0]['calls'][0]['content']=json.dumps({'suspected_players':[player,player]})
-    with pytest.raises(ValueError,match='set schema'):validate_qualification(record,invalid)
-
-
-def test_set_suite_rejects_task_drift(set_suites_mock):
-    suite=deepcopy(set_suites_mock['yi'])
-    suite['task']['system_sha256']='0'*64
-    with pytest.raises(ValueError,match='binding drift'):qi.validate_suite(suite,ModelSpec('yi'))
-
-
-@pytest.mark.parametrize('change',['projection','old_wire_digest','missing_projection'])
-def test_set_suite_rejects_unprojected_or_changed_wire_contract(set_suites_mock,change):
-    from werewolf.tom_llm.model_spec import wire
-    suite=deepcopy(set_suites_mock['yi']);spec=ModelSpec('yi')
-    if change=='projection':suite['wire_schema_projection']['removed_keywords']=[]
-    elif change=='missing_projection':suite.pop('wire_schema_projection')
-    else:
-        case=suite['cases'][0];old=wire(case['task'],spec)
-        old['response_format']['json_schema']['schema']=case['task']['response_schema']
-        case['wire_digest']=digest(old)
-    with pytest.raises(ValueError):qi.validate_suite(suite,spec)
-
-
-@pytest.mark.parametrize('key',KEYS)
-@pytest.mark.parametrize('keyword',['uniqueItems','contains','minContains','maxContains'])
-def test_actual_sampling_rejects_unapproved_wire_schema_features(set_suites_mock,key,keyword):
-    task=set_suites_mock[key]['cases'][0]['task'];spec=ModelSpec(key);expected=wire_schema(task)
-    params=sampling(spec,expected)
-    validate_sampling(params,expected,spec)
-    params=deepcopy(params)
-    params['json_schema']['properties']['suspected_players'][keyword]=True
-    with pytest.raises(ValueError,match='JSON Schema drift'):validate_sampling(params,expected,spec)
-
-
-def model_record(key,suites):
-    spec=ModelSpec(key)
-    return {'schema_version':dep.VERSION,'key':key,'model_spec':spec.record(),'source':mm.source_identity(),
-        'profile':dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel'/spec.key/'unit-candidate'),'model':{'evidence_kind':'SYNTHETIC_UNIT_FIXTURE'},
-        'environment':{'evidence_kind':'SYNTHETIC_UNIT_FIXTURE'},'suite':suites[key],'budget':{},
-        'upstream_receipts':{},'purpose':'synthetic_gpu_qualification_only','physical_gpu_admission':False}
-
-
-def candidate_artifact(tmp_path,record):
-    spec=ModelSpec(record['key'])
-    return publish_artifact(tmp_path/'deployment',manifest_fields={'artifact_type':'mm_deployment_candidate','schema_version':dep.VERSION,
-        'deployment_digest':digest(record),'model_spec_digest':spec.digest,'gpu_qualification_passed':False},
-        files={'deployment.json':canonical_json_bytes(record),'vllm.yaml':dep.vllm_config_bytes(record['profile']['argv_options']),
-               'chat_template.jinja':dep.template_bytes(spec)})
-
-
-def sampling(spec,schema):
-    eos=spec.record()['termination']['generation_eos_token_id'];eos=eos if isinstance(eos,list) else [eos]
-    eos=sorted(set(eos)|{spec.record()['tokenizer']['eos_token_id']})
-    return {**NUMERIC,'stop':[],'stop_token_ids':spec.record()['termination']['extra_stop_token_ids'],
-        'eos_token_ids':eos,'primary_eos_token_id':spec.record()['tokenizer']['eos_token_id'],'ignore_eos':False,
-        'json_schema':schema,'bad_words':[],**{k:None for k in ('logit_bias','allowed_token_ids','logits_processors')}}
-
-
-def params_object(record,case):
-    p=sampling(ModelSpec(record['key']),wire_schema(case['task']));kwargs={k:p[k] for k in NUMERIC}
-    kwargs.update({k:p[k] for k in ('stop','stop_token_ids','ignore_eos','bad_words')})
-    return NS(**kwargs,_all_stop_token_ids=set(p['eos_token_ids']),_eos_token_id=p['primary_eos_token_id'],
-        structured_outputs=NS(json=p['json_schema']))
-
-
-class Memory:
-    measurement_identity=MEMORY
-    def __enter__(self):
-        self.samples=[{'monotonic_seconds':1.,'used_bytes':100,'gpu_uuid':'GPU-unit-only'},
-                      {'monotonic_seconds':1.1,'used_bytes':200,'gpu_uuid':'GPU-unit-only'}]
-        self.peak_bytes=200;return self
-    def __exit__(self,*_):return False
-
-
-def fake_candidate(tmp_path,record,run,*,failure=None,after_response_failure=False):
-    artifact=candidate_artifact(tmp_path,record)
-    life={'pid':100+run,'boot_id':'UNIT-BOOT','start_ticks':str(10+run)}
-    instance={**life,'deployment_manifest_digest':artifact.manifest_digest,'gpu':record['profile']['gpu'],
-              'argv':['SYNTHETIC_ONLY'],'driver_version':'UNIT','kernel_release':'UNIT','environment_requirements':record['profile']['environment_requirements']}
-    instance['instance_digest']=digest(instance)
-    events=[];count={'calls':0,'returned':False}
-    class Engine:
-        async def _add_request(self,core):return core.request_id
-        async def generate(self,output):yield output
-    engine=Engine();install_probe(engine,events.append,deployment=record,process_lifetime=life)
-    def create(**wire):
-        count['calls']+=1
-        if failure:raise failure
-        item=record['suite']['cases'][qi.SCHEDULE[count['calls']-1][1]]
-        properties=item['task']['response_schema']['properties']
-        if 'suspected_players' in properties:
-            seats=properties['suspected_players']['items']['enum']
-            content=json.dumps({'suspected_players':seats[:qi.SCHEDULE[count['calls']-1][1]%7]})
-        else:
-            seats=properties['probabilities']['required']
-            content=json.dumps({'probabilities':{p:1/6 for p in seats}})
-        external=f'UNIT-{run}-{count["calls"]}'
-        core=NS(prompt_embeds=None,mm_features=[],pooling_params=None,lora_request=None,cache_salt=None,
-            reasoning_ended=None,reasoning_parser_kwargs=None,resumable=False,priority=0,
-            prompt_token_ids=item['input_ids'],sampling_params=params_object(record,item),external_req_id=external,request_id=external)
-        choice=NS(token_ids=[10,11],text=content,finish_reason='stop',stop_reason=None)
-        async def execute():
-            await engine._add_request(core)
-            async for _ in engine.generate(NS(finished=True,request_id=external,outputs=[choice])):pass
-        asyncio.run(execute())
-        raw={'model':record['model_spec']['model'],'choices':[{'message':{'content':content,'refusal':None},'finish_reason':'stop'}],
-             'usage':{'prompt_tokens':len(item['input_ids']),'completion_tokens':2,'total_tokens':len(item['input_ids'])+2}}
-        count['returned']=True
-        return NS(model=raw['model'],choices=[NS(message=NS(content=content,refusal=None),finish_reason='stop')],
-            usage=NS(**raw['usage']),model_dump=lambda **_:raw)
-    sdk=NS(base_url=f"http://127.0.0.1:{record['profile']['argv_options']['port']}/v1",max_retries=0,
-        _client=NS(_trust_env=False,_transport=NS(_pool=NS(_retries=0))),chat=NS(completions=NS(create=create)),close=lambda:None)
-    def guard():
-        if after_response_failure and count['returned']:raise ValueError('UNIT service lifetime drift')
-    return SyntheticCandidateClient(sdk,deployment=artifact,record=record,instance=instance,guard=guard),events,count
-
-
-def test_source_v2_git_status_covers_all_extended_runtime_paths(monkeypatch):
-    original=mm.development_source_identity()
-    monkeypatch.setattr(mm,'development_source_identity',lambda:{**original,'source_inventory_clean':True})
-    observed=[]
-    def status(command,**kwargs):observed.append(command);return b'?? configs/paper/tom-llm-models-v1.json\n'
-    monkeypatch.setattr(mm.subprocess,'check_output',status)
-    source=mm.source_identity()
-    assert source['schema_version']=='classic7_multimodel_source_v2'
-    assert source['source_inventory_clean'] is False
-    paths=observed[0][observed[0].index('--')+1:]
-    assert set(paths)==set(source['file_digests'])
-    assert {'scripts/tom_multimodel_admission.py','configs/paper/tom-llm-physical-assets-v1.json',
-            'configs/paper/tom-llm-qualification-recipe-v1.json','werewolf/tom_llm/qualification_assets/qwen3-suite-v1.json'}<=set(paths)
-    assert source['qualification']=='CPU_MOCK_ONLY_NOT_ADMITTED'
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_official_physical_inventory_is_closed_and_pinned(key):
-    spec=ModelSpec(key);assets=physical.asset_spec(spec)
-    assert assets['revision']==spec.record()['revision'] and assets['model']==spec.record()['model']
-    assert assets['license']=='apache-2.0'
-    shards=[r for n,r in assets['files'].items() if n.endswith('.safetensors')]
-    assert len(shards)=={'qwen3':5,'yi':4,'mistral':3}[key]
-    assert all(len(r['sha256'])==64 and r['bytes']>0 for r in shards)
-
-
-@pytest.mark.parametrize('change',['bytes','revision','extra','symlink','index'])
-def test_streamed_model_physical_mismatch_rejected(tmp_path,monkeypatch,change):
-    files={'config.json':b'{}','model-00001.safetensors':b'UNIT_NOT_REAL_WEIGHTS',
-           'model.safetensors.index.json':canonical_json_bytes({'weight_map':{'unit':'model-00001.safetensors'}})}
-    for name,raw in files.items():(tmp_path/name).write_bytes(raw)
-    rev=ModelSpec('qwen3').record()['revision'];(tmp_path/'HF_REVISION').write_text(rev+'\n')
-    manifest={n:{'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'git_blob_oid':None} for n,b in files.items()}
-    monkeypatch.setattr(physical,'asset_spec',lambda _: {'model':'Qwen/Qwen3-8B','revision':rev,'files':manifest})
-    assert physical.verify_model(ModelSpec('qwen3'),tmp_path)['weights_loaded'] is False
-    if change=='bytes':(tmp_path/'model-00001.safetensors').write_bytes(b'changed')
-    elif change=='revision':(tmp_path/'HF_REVISION').write_text('0'*40+'\n')
-    elif change=='extra':(tmp_path/'unbound.json').write_text('{}')
-    elif change=='symlink':(tmp_path/'link').symlink_to(tmp_path/'config.json')
-    else:
-        raw=canonical_json_bytes({'weight_map':{'unit':'foreign.safetensors'}})
-        (tmp_path/'model.safetensors.index.json').write_bytes(raw)
-        manifest['model.safetensors.index.json']={'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'git_blob_oid':None}
-    with pytest.raises(ValueError):physical.verify_model(ModelSpec('qwen3'),tmp_path)
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_native_suite_preserves_shared_cases_and_qwen_76_protocol(native_suites,key):
-    suite=qi.validate_suite(native_suites[key],ModelSpec(key))
-    assert len(suite['schedule'])*2==76 and len(suite['cases'])==12
-    assert [c['task'] for c in suite['cases']]==qi.synthetic_tasks()
-    if key=='qwen3':
-        for c,old in zip(suite['cases'],qi.legacy_suite()['cases'],strict=True):
-            assert c['input_ids']==old['input_ids'] and c['wire_digest']==old['wire_digest']
-    other=deepcopy(suite);other['cases'][0]['task']['q']=[1]
-    with pytest.raises(ValueError):qi.validate_suite(other,ModelSpec(key))
-    with pytest.raises(ValueError):qi.validate_suite(suite,ModelSpec('yi' if key!='yi' else 'mistral'))
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_native_sampling_eos_schema_and_parameters_are_strict(native_suites,key):
-    spec=ModelSpec(key);schema=native_suites[key]['cases'][0]['task']['response_schema'];p=sampling(spec,schema)
-    validate_sampling(p,schema,spec)
-    disabled=deepcopy(p);disabled['bad_words']=None
-    validate_sampling(disabled,schema,spec)
-    if key=='yi':assert p['eos_token_ids']==[2,7] and p['stop_token_ids']==[7]
-    for field,value in [('top_k',-1),('max_tokens',513),('temperature',True),('json_schema',{}),('ignore_eos',True),('eos_token_ids',[999]),('bad_words',['blocked'])]:
-        wrong=deepcopy(p);wrong[field]=value
-        with pytest.raises(ValueError):validate_sampling(wrong,schema,spec)
-    assert snapshot_sampling(params_object(model_record(key,native_suites),native_suites[key]['cases'][0]))==p
-
-
-def test_profiles_are_disjoint_and_cache_scoped():
-    profiles=[dep.profile(ModelSpec(k),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel'/k/'unit-candidate') for k in KEYS]
-    assert len({p['root'] for p in profiles})==len({p['argv_options']['port'] for p in profiles})==3
-    for p in profiles:
-        for k,v in p['environment_requirements'].items():
-            if k.endswith('_DIR') or k in ('HF_HOME','XDG_CACHE_HOME','TORCH_HOME','VLLM_CACHE_ROOT','FLASHINFER_WORKSPACE_BASE','TMPDIR'):
-                assert Path(v).is_relative_to(Path(p['root']))
-        assert p['argv_options']['trust-request-chat-template'] is False
-        with pytest.raises(ValueError):dep.profile(ModelSpec(p['key']),gpu_uuid='GPU-unit-only',candidate_root=p['root'],model_directory='/outside/model')
-
-
-@pytest.mark.parametrize('key',KEYS)
-@pytest.mark.parametrize('model_store',['historical','shared'])
-def test_cross_root_deployments_preserve_original_assets_and_offline_source_identity(short_root,monkeypatch,key,model_store):
-    """Real artifact/byte checks over tiny unit assets; no native/GPU evidence."""
-    from werewolf.tom_llm import live_admission as live
-    tmp_path=short_root
-    old=tmp_path/'historical';new=tmp_path/'TomBaseline-data'
-    monkeypatch.setattr(dep,'BASE',old);monkeypatch.setattr(dep,'EXPERIMENT_BASE',new)
-    models=tmp_path/'models';monkeypatch.setattr(dep,'MODEL_BASE',models)
-    spec=ModelSpec(key);model=(old/'models' if model_store=='historical' else models)/key;model.mkdir(parents=True)
-    files={'config.json':b'{}','model-00001.safetensors':b'UNIT_NOT_REAL_WEIGHTS',
-        'model.safetensors.index.json':canonical_json_bytes({'weight_map':{'unit':'model-00001.safetensors'}})}
-    for name,raw in files.items():(model/name).write_bytes(raw)
-    revision=spec.record()['revision'];(model/'HF_REVISION').write_text(revision+'\n')
-    inventory={n:{'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'git_blob_oid':None} for n,b in files.items()}
-    monkeypatch.setattr(physical,'asset_spec',lambda s:{'model':s.record()['model'],'revision':revision,'files':inventory})
-    env=old/'env';environment={'schema_version':physical.VERSION+'_environment','evidence_kind':'physical_cpu',
-        'prefix':str(env),'prior_audit_digest':'a'*64,'UNIT_ONLY':True}
-    monkeypatch.setattr(live,'capture_bound_environment',lambda *a:deepcopy(environment))
-    assets=physical.publish_receipt(old/'receipts/assets','model',physical.verify_model(spec,model))
-    receipt=physical.publish_receipt(old/'receipts/environment','environment',environment)
-    # Native suite/budget construction is outside this path/identity unit test.
-    suite={'UNIT_ONLY':key,'cases':[{'task':qi.synthetic_tasks()[0]}]};budget={'UNIT_ONLY':key}
-    monkeypatch.setattr(dep,'open_suite',lambda *a:suite)
-    monkeypatch.setattr(dep,'open_budget',lambda *a,**kw:budget)
-    monkeypatch.setattr(qi,'validate_suite',lambda s,spec:s)
-    source=dep.source_identity();source['source_inventory_clean']=True
-    monkeypatch.setattr(dep,'source_identity',lambda:source)
-    args=dict(gpu_uuid='GPU-unit-only',model_root=model,model_receipt=assets.path,expected_model=assets.manifest_digest,
-        environment_root=env,environment_receipt=receipt.path,expected_environment=receipt.manifest_digest,
-        suite_root=old/'suite',expected_suite='b'*64,budget_root=old/'budget',expected_budget='c'*64)
-    original=dep.prepare_deployment(old/'multimodel'/key/'unit-candidate/deployment',spec,**args)
-    protected={p:p.read_bytes() for p in old.rglob('*') if p.is_file()}
-    current=deepcopy(source);current['source_revision']='f'*40
-    current['file_digests']['werewolf/unknown_unit_runtime.py']='d'*64
-    current['implementation_digest']=digest(current['file_digests'])
-    monkeypatch.setattr(dep,'source_identity',lambda:current)
-    destination=new/'multimodel'/key/'unit-candidate/deployment'
-    artifact=dep.prepare_deployment(destination,spec,**args)
-    _,record=dep.open_deployment(artifact.path,artifact.manifest_digest,physical_recheck=True)
-    assert record['source']==current and record['model']['directory']==str(model)
-    assert record['environment']==environment and record['physical_gpu_admission'] is False
-    assert record['upstream_receipts']['model']==assets.manifest_digest
-    assert record['upstream_receipts']['environment']==receipt.manifest_digest
-    # A different absolute model path cannot borrow this physical receipt,
-    # even if its Profile is allowed and the original model bytes still pass.
-    switched=deepcopy(record)
-    other=models/(key+'-other');other.mkdir(parents=True)
-    switched['profile']['argv_options'].update(model=str(other),tokenizer=str(other))
-    assert digest(switched)!=digest(record)
-    with pytest.raises(ValueError,match='physical path mismatch'):dep.verify_cpu_binding(switched,spec)
-    switched['model']['directory']=str(other)
-    with pytest.raises(ValueError,match='physical model inventory'):dep.verify_cpu_binding(switched,spec)
-    with pytest.raises(ValueError,match='deployment artifact identity'):
-        dep.open_deployment(artifact.path,original.manifest_digest,current_source=False)
-    _,historical=dep.open_deployment(original.path,original.manifest_digest,current_source=False)
-    assert historical['source']==source and historical['profile']['root']==str(original.path.parent)
-    with pytest.raises(ValueError,match='identity/domain'):dep.open_deployment(original.path,original.manifest_digest)
-    with pytest.raises(ValueError,match='new GPU qualification'):dep.qualification_compatibility(historical['source'])
-    with pytest.raises(ValueError,match='new ROOT/deployment'):dep.prepare_deployment(destination,spec,**args)
-    assert all(p.read_bytes()==raw for p,raw in protected.items())
-    bad={**args,'expected_model':'0'*64}
-    with pytest.raises(ValueError,match='CPU receipt identity'):
-        dep.prepare_deployment(new/'multimodel'/key/'other-candidate/deployment',spec,**bad)
-    environment['UNIT_ONLY']='changed environment'
-    with pytest.raises(ValueError,match='physical environment changed'):
-        dep.open_deployment(artifact.path,artifact.manifest_digest,physical_recheck=True)
-    environment['UNIT_ONLY']=True
-    (model/'model-00001.safetensors').write_bytes(b'changed')
-    with pytest.raises(ValueError,match='official physical bytes drift'):
-        dep.open_deployment(artifact.path,artifact.manifest_digest,physical_recheck=True)
-    # Offline history does not touch the now-changed physical assets.
-    assert dep.open_deployment(original.path,original.manifest_digest,current_source=False)[1]==historical
-    schema=qi.synthetic_tasks()[0]['response_schema'];params=sampling(spec,schema)
-    validate_sampling(params,schema,spec)
-    if key=='yi':assert params['eos_token_ids']==[2,7]
-    # A retired evidence copy keeps its original path claims and identity;
-    # moving the tiny unit Artifact does not authorize execution there.
-    archive=tmp_path/'retired-evidence';original.path.parent.rename(archive)
-    archived,historical_copy=dep.open_deployment(archive/'deployment',original.manifest_digest,current_source=False)
-    assert archived.manifest_digest==original.manifest_digest and historical_copy==historical
-    assert historical_copy['profile']['root']!=str(archive)
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_two_native_rounds_join_durable_engine_and_reply_evidence(tmp_path,native_suites,key,monkeypatch):
-    record=model_record(key,native_suites);rounds=[]
-    for run in (0,1):
-        client,events,count=fake_candidate(tmp_path/str(run),record,run)
-        root=tmp_path/str(run)/'round'
-        seal=collect_round(root,client,run=run,event_reader=lambda:events,memory_monitor=Memory)
-        _,r=open_round(root,seal.manifest_digest,record,deployment_manifest_digest=client.deployment.manifest_digest);rounds.append(r)
-        assert count['calls']==38 and len(events)==77
-        with pytest.raises(ValueError):collect_round(root,client,run=run,event_reader=lambda:events,memory_monitor=Memory)
-    report=validate_qualification(record,rounds)
-    assert report['dispatches']==76 and report['measurement_dispatches']==72
-    assert report['conversion_status_counts']=={'valid':76}
-    assert report['formal_execution_authorized'] is False
-    changed=deepcopy(rounds);changed[1]['instance']=deepcopy(changed[0]['instance'])
-    with pytest.raises(ValueError):validate_qualification(record,changed)
-    changed=deepcopy(rounds);changed[1]['events'][2]['content']='{}'
-    with pytest.raises(ValueError):validate_qualification(record,changed)
-    changed=deepcopy(rounds);changed[1]['events'][1]['input_ids']=[1]
-    with pytest.raises(ValueError):validate_qualification(record,changed)
-    changed=deepcopy(rounds);changed[1]['calls'][0]['gpu_peak_bytes']=999
-    with pytest.raises(ValueError):validate_qualification(record,changed)
-    assert record['source']['qualification']=='CPU_MOCK_ONLY_NOT_ADMITTED'
-    monkeypatch.setattr('sys.platform','darwin')
-    with pytest.raises(ValueError,match='Mac/Mock'):publish_admission(tmp_path/'never',tmp_path,'0'*64,round_roots=[],expected_rounds=[])
-
-
-@pytest.mark.parametrize('failure',['timeout','not_executed','after_reply'])
-def test_uncertain_or_received_failures_never_retry_or_resume(tmp_path,native_suites,failure):
-    record=model_record('qwen3',native_suites)
-    error=openai.APITimeoutError(request=object()) if failure=='timeout' else NotExecuted('UNIT confirmed rejection') if failure=='not_executed' else None
-    client,events,count=fake_candidate(tmp_path,record,0,failure=error,after_response_failure=failure=='after_reply')
-    root=tmp_path/'round'
-    with pytest.raises(Exception):collect_round(root,client,run=0,event_reader=lambda:events,memory_monitor=Memory)
-    with pytest.raises(ValueError):collect_round(root,client,run=0,event_reader=lambda:events,memory_monitor=Memory)
-    assert count['calls']==1 and not (root/'seal').exists()
-    event=verify_artifact(root/'failures/0',expected_artifact_type='mm_probe_failure',expected_schema_version='classic7_multimodel_gpu_evidence_v1')
-    assert event.manifest['outcome']=={'timeout':'outcome_unknown','not_executed':'confirmed_not_executed','after_reply':'reply_received_invalid'}[failure]
-    assert event.manifest['automatic_retry'] is False
-    assert (root/'responses/0').exists()==(failure=='after_reply')
-
-
-@pytest.mark.parametrize('field',['model','endpoint','sdk','http','proxy'])
-def test_candidate_gate_rejects_wire_service_and_hidden_retries(tmp_path,native_suites,field):
-    record=model_record('qwen3',native_suites);client,events,count=fake_candidate(tmp_path,record,0)
-    request=__import__('werewolf.tom_llm.model_spec',fromlist=['wire']).wire(record['suite']['cases'][0]['task'],ModelSpec('qwen3'))
-    if field=='model':request['model']='unapproved'
-    elif field=='endpoint':client.client.base_url='http://127.0.0.1:1/v1'
-    elif field=='sdk':client.client.max_retries=1
-    elif field=='http':client.client._client._transport._pool._retries=1
-    else:client.client._client._trust_env=True
-    with pytest.raises(NotExecuted):client.dispatch(request)
-    assert count['calls']==0
-
-
-@pytest.mark.parametrize('key',KEYS)
-def test_deployment_reader_rejects_template_source_model_drift(tmp_path,native_suites,key,monkeypatch):
-    r=model_record(key,native_suites);a=candidate_artifact(tmp_path,r)
-    assert dep.open_deployment(a.path,a.manifest_digest)[1]==r
-    with pytest.raises(ValueError):dep.open_deployment(a.path,'0'*64)
-    original=dep.source_identity()
-    monkeypatch.setattr(dep,'source_identity',lambda:{**original,'source_revision':'0'*40})
-    with pytest.raises(ValueError,match='identity/domain'):dep.open_deployment(a.path,a.manifest_digest)
-
-
-def test_full_queue_budget_no_truncation_or_model_filtering(native_suites):
-    task=qi.synthetic_tasks()[0]
-    tasks=[{**deepcopy(task),'game_id':f'UNIT-{i:03}','fold':i//30} for i in range(150)]
-    class Tokens:
-        def encode(self,*_,**__):return [1]*100
-        def apply_chat_template(self,*_,**__):return [1]*100
-    results=[qi.budget_record(tasks,ModelSpec(k),Tokens()) for k in KEYS]
-    assert len({r['row_identity_digest'] for r in results})==1
-    assert all(r['request_count']==150 and r['input_tokens_total']==15000 for r in results)
-    records={k:{**r,'schema_version':qi.VERSION+'_budget','model_spec_digest':ModelSpec(k).digest,
-        'cohort_digest':'a'*64,'selection':{'game_ids':[f'UNIT-{i:03}' for i in range(150)]},'reference':{'seal':'b'*64}}
-        for k,r in zip(KEYS,results,strict=True)}
-    assert qi.budget_matrix(records)['common']['request_count']==150
-    bad=deepcopy(records);bad['yi']['cohort_digest']='c'*64
-    with pytest.raises(ValueError):qi.budget_matrix(bad)
-    class Overflow(Tokens):
-        def encode(self,*_,**__):return [1]*7681
-        def apply_chat_template(self,*_,**__):return [1]*7681
-    with pytest.raises(ValueError,match='no row filtering'):qi.budget_record(tasks,ModelSpec('yi'),Overflow())
-
-
-def test_probe_launch_effective_options_and_mac_gpu_guard(tmp_path,monkeypatch):
-    p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/qwen3/unit-candidate')
-    args=NS(**{k.replace('-','_'):v for k,v in p['argv_options'].items()},quantization=None,reasoning_parser='')
-    validate_launch_args(args,p)
-    for field,value in [('reasoning_parser','qwen3'),('reasoning_parser',None),('quantization','awq'),('quantization','')]:
-        wrong=deepcopy(args);setattr(wrong,field,value)
-        with pytest.raises(ValueError,match='undeclared quantization/reasoning parser'):validate_launch_args(wrong,p)
-    args.max_model_len=4096
-    with pytest.raises(ValueError):validate_launch_args(args,p)
-    from werewolf.tom_llm.gpu_probe import main
-    monkeypatch.setattr('sys.argv',['probe','--deployment','missing','--expected-deployment','0'*64])
-    with pytest.raises(ValueError,match='authorized Linux'):main()
-    log=tmp_path/'audit.jsonl';sink=JsonlSink(log);sink({'unit':1});sink.close()
-    assert json.loads(log.read_bytes())=={'unit':1}
-    with pytest.raises(FileExistsError):JsonlSink(log)
-
-
-@pytest.mark.parametrize('version,message', [((3,10),'Python 3.12'),((3,12),'own isolated interpreter')])
-def test_cpu_env_audit_wrong_interpreter_does_not_install_or_import_gpu(tmp_path,monkeypatch,version,message):
-    import sys
-    monkeypatch.setattr(physical,'sys',NS(version_info=version,prefix=sys.prefix,executable=sys.executable))
-    with pytest.raises(ValueError,match=message):physical.capture_environment(tmp_path,prior_audit_digest='a'*64)
-
-
-def test_linux_service_process_listener_log_and_environment_identity(tmp_path,native_suites,monkeypatch):
-    record=model_record('qwen3',native_suites);record['source']['source_inventory_clean']=True
-    prefix=tmp_path/'env';(prefix/'bin').mkdir(parents=True);(prefix/'bin/python').write_bytes(b'UNIT_INTERPRETER')
-    record['profile']['environment_prefix']=str(prefix)
-    record['profile']['engine_log_root']=str(tmp_path/'engine')
-    installed=tmp_path/'installed-template.jinja';installed.write_bytes(dep.template_bytes(ModelSpec('qwen3')))
-    record['profile']['argv_options']['chat-template']=str(installed)
-    a=candidate_artifact(tmp_path,record);proc=tmp_path/'proc';pid=100
-    process=proc/str(pid);(process/'fd').mkdir(parents=True);(proc/'sys/kernel/random').mkdir(parents=True);(proc/'net').mkdir()
-    (proc/'sys/kernel/random/boot_id').write_text('UNIT')
-    (process/'stat').write_text('100 (unit process) '+' '.join(['S']+['0']*18+['10']))
-    argv=[str(prefix/'bin/python'),'-m','werewolf.tom_llm.gpu_probe','--deployment',str(a.path),
-          '--expected-deployment',a.manifest_digest,'--execute-synthetic-gpu-qualification']
-    (process/'cmdline').write_bytes(b'\0'.join(s.encode() for s in argv)+b'\0')
-    (process/'exe').symlink_to(prefix/'bin/python')
-    env=record['profile']['environment_requirements']
-    (process/'environ').write_bytes(b'\0'.join((k+'='+v).encode() for k,v in env.items()))
-    (process/'fd/1').symlink_to('socket:[123]')
-    life={'pid':100,'boot_id':'UNIT','start_ticks':'10'}
-    log=Path(record['profile']['engine_log_root'])/digest(life)/'engine-events.jsonl';log.parent.mkdir(parents=True);log.write_text('')
-    (process/'fd/2').symlink_to(log)
-    port=record['profile']['argv_options']['port']
-    (proc/'net/tcp').write_text('header\n'+' '.join(['0:',f'0100007F:{port:04X}','0','0A','0','0','0','0','0','123'])+'\n')
-    monkeypatch.setattr(dep,'Path',lambda p:proc if str(p)=='/proc' else Path(p))
-    monkeypatch.setattr('sys.platform','linux');monkeypatch.setattr(dep,'gpu_snapshot',lambda:record['profile']['gpu']);monkeypatch.setattr(dep,'driver_version',lambda:'UNIT')
-    instance=dep.capture_instance(a,record,100)
-    assert instance['start_ticks']=='10' and instance['instance_digest']==digest({k:v for k,v in instance.items() if k!='instance_digest'})
-    (process/'environ').write_bytes((process/'environ').read_bytes()+b'\0HTTPS_PROXY=http://invalid')
-    with pytest.raises(ValueError,match='proxies'):dep.capture_instance(a,record,100)
-    (process/'environ').write_bytes(b'\0'.join((k+'='+v).encode() for k,v in env.items()))
-    (process/'fd/2').unlink()
-    with pytest.raises(ValueError,match='audit log'):dep.capture_instance(a,record,100)
-
-
-@pytest.fixture
-def environment_snapshot(tmp_path,monkeypatch):
-    import sys
-    import subprocess
-    from pathlib import PurePosixPath
-    if sys.version_info[:2]!=(3,12):pytest.skip('NOT_RUN: actual Python 3.12 required for physical environment fixture')
-    prefix=tmp_path/'env';binary=prefix/'bin/python'
-    subprocess.run([sys.executable,'-I','-B','-m','venv','--copies',str(prefix)],
-        check=True,capture_output=True,text=True,timeout=60)
-    site=prefix/'lib/python3.12/site-packages'
-    class Distribution:
-        def __init__(self,name):
-            self.version='0.27.0' if name=='vllm' else '1.0'
-            self.files=[PurePosixPath(name.replace('-','_')+'-'+self.version+'.dist-info/'+n) for n in ('METADATA','RECORD')]
-            for relative in self.files:
-                file=site/str(relative);file.parent.mkdir(parents=True,exist_ok=True)
-                file.write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: {self.version}\n'
-                    if file.name=='METADATA' else 'UNIT KNOWN MISMATCH PRESERVED')
-        def locate_file(self,path):return site/str(path)
-    distributions={n:Distribution(n) for n in physical.CORE_PACKAGES}
-    original=dep.recipe();critical={}
-    for name in original['vllm_source_sha256']:
-        file=site/'vllm'/name;file.parent.mkdir(parents=True,exist_ok=True);file.write_bytes(b'UNIT CODE')
-        critical[name]=hashlib.sha256(file.read_bytes()).hexdigest()
-    for name in ['openai/_base_client.py','torch/__init__.py','flashinfer/__init__.py','tvm_ffi/__init__.py']:
-        file=site/name;file.parent.mkdir(parents=True,exist_ok=True);file.write_bytes(b'UNIT CODE')
-    monkeypatch.setattr(physical,'sys',NS(prefix=str(prefix),executable=str(binary),version_info=sys.version_info,version=sys.version))
-    monkeypatch.setattr(physical.importlib.metadata,'distribution',lambda n:distributions[n])
-    monkeypatch.setattr(dep,'recipe',lambda:{**original,'vllm_source_sha256':critical})
-    return prefix,site,binary
-
-
-def test_environment_snapshot_retains_record_deviations_and_pins_probe_code(environment_snapshot,monkeypatch):
-    prefix,site,binary=environment_snapshot
-    def check(command,**kwargs):
-        assert command==[str(binary),'-I','-B','-m','pip','check']
-        return NS(returncode=0,stdout='UNIT pip check PASS',stderr='')
-    monkeypatch.setattr(physical.subprocess,'run',check)
-    result=physical.capture_environment(prefix,prior_audit_digest='a'*64)
-    assert result['gpu_runtime_imported'] is False and result['record_integrity']=='PRIOR_STRICT_FAILURES_RETAINED_NOT_REPAIRED'
-    assert (site/'vllm-0.27.0.dist-info/RECORD').read_text()=='UNIT KNOWN MISMATCH PRESERVED'
-    monkeypatch.setattr(physical.subprocess,'run',lambda *a,**k:NS(returncode=1,stdout='UNIT stdout conflict',stderr='UNIT stderr error'))
-    with pytest.raises(ValueError,match='exit 1') as error:
-        physical.capture_environment(prefix,prior_audit_digest='a'*64)
-    assert 'UNIT stdout conflict' in str(error.value) and 'UNIT stderr error' in str(error.value)
-    (site/'vllm/v1/engine/async_llm.py').write_bytes(b'drift')
-    with pytest.raises(ValueError,match='seam code drift'):physical.capture_environment(prefix,prior_audit_digest='a'*64)
-
-
-def test_environment_pip_check_ignores_external_packages_but_reports_local_conflicts(environment_snapshot,tmp_path,monkeypatch):
-    prefix,site,binary=environment_snapshot
-    external=tmp_path/'user-packages';external.mkdir()
-    def broken(root,name,dependency):
-        metadata=root/(name.replace('-','_')+'-1.0.dist-info')/'METADATA';metadata.parent.mkdir()
-        metadata.write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\nRequires-Dist: {dependency}==1.0\n')
-    broken(external,'uns-external-broken','uns-external-missing')
-    monkeypatch.setenv('PYTHONPATH',str(external))
-    # A new interpreter does not inherit its parent's isolation flags.
-    unisolated=physical.subprocess.run([str(binary),'-B','-m','pip','check'],capture_output=True,text=True,timeout=120)
-    assert unisolated.returncode!=0 and 'uns-external-missing' in unisolated.stdout
-    result=physical.capture_environment(prefix,prior_audit_digest='a'*64)
-    assert 'No broken requirements found' in result['pip_check']
-    broken(site,'uns-local-broken','uns-local-missing')
-    with pytest.raises(ValueError,match='uns-local-missing') as error:
-        physical.capture_environment(prefix,prior_audit_digest='a'*64)
-    assert 'dependency integrity failure' in str(error.value)
-    assert 'uns-external-missing' not in str(error.value)
-    assert (site/'vllm-0.27.0.dist-info/RECORD').read_text()=='UNIT KNOWN MISMATCH PRESERVED'
-
-
-def test_old_w5_or_mock_admission_domains_are_never_upgraded(tmp_path):
-    old=publish_artifact(tmp_path/'old',manifest_fields={'artifact_type':'llm_physical_service_admission',
-        'schema_version':'classic7_llm_physical_service_admission_v1'},files={})
-    with pytest.raises(ValueError):open_admission(old.path,expected_manifest=old.manifest_digest,
-        expected_deployment='a'*64,model_spec=ModelSpec('qwen3'))
-
-
-def test_budget_artifact_full_150_rows_and_model_binding(tmp_path,monkeypatch):
-    task=qi.synthetic_tasks()[0]
-    tasks=[{**deepcopy(task),'game_id':f'UNIT-{i:03}','fold':i//30} for i in range(150)]
-    from werewolf.tom_llm.task import task_binding
-    manifest={'selection':{'game_ids':[t['game_id'] for t in tasks]},'reference':{'seal_digest':'b'*64},'task':task_binding()}
-    cohort=NS(manifest=manifest,manifest_digest='a'*64,path=tmp_path/'cohort')
-    monkeypatch.setattr(mm,'read_cohort',lambda *_:(cohort,tasks))
-    class Tokens:
-        def encode(self,*_,**__):return [1]*100
-        def apply_chat_template(self,*_,**__):return [1]*100
-    monkeypatch.setattr(qi,'load_cpu_tokenizer',lambda *_:Tokens())
-    artifact=qi.publish_budget(tmp_path/'budget',cohort.path,'a'*64,ModelSpec('qwen3'),tmp_path)
-    report=qi.open_budget(artifact.path,ModelSpec('qwen3'),artifact.manifest_digest)
-    assert report['request_count']==150 and report['input_tokens_total']==15000
-    with pytest.raises(ValueError):qi.open_budget(artifact.path,ModelSpec('yi'),artifact.manifest_digest)
-    tasks.pop();manifest['selection']['game_ids'].pop()
-    with pytest.raises(ValueError,match='150-game'):qi.publish_budget(tmp_path/'never',cohort.path,'a'*64,ModelSpec('qwen3'),tmp_path)
-
-
-def test_cohort_export_builds_public_tasks_before_opening_reference(tmp_path,monkeypatch):
-    import werewolf.development_publication as publication
-    import werewolf.tom_llm.selection_binding as selection_binding
-    import werewolf.tom_llm.reference as reference
-    import werewolf.tom_llm.task as task_module
-    import werewolf.tom_llm.multimodel_evaluation as evaluation
-    games=[f'UNIT-{i:03}' for i in range(150)]
-    folds=[{'fold':i,'held_out_game_ids':games[i*30:(i+1)*30]} for i in range(5)]
-    monkeypatch.setattr(qi,'verify_artifact',lambda *_a,**_k:NS(manifest={'folds':folds}))
-    calls=[]
-    monkeypatch.setattr(selection_binding,'open_selection_binding',lambda *_a,**_k:calls.append('selection'))
-    (tmp_path/'selection.json').write_bytes(canonical_json_bytes({'game_ids':games}))
-    public=NS(public_view=NS(games=[NS(game_id=g,authoritative_pre_prefixes=[g]) for g in games+['EXCLUDED']]))
-    monkeypatch.setattr(publication,'open_publication',lambda _:public)
-    def build(prefixes,membership,*,version):
-        assert version == task_module.VERSION
-        calls.append('public');assert prefixes==games and len(membership)==150
-        return ['UNIT_PUBLIC_TASKS']
-    monkeypatch.setattr(task_module,'public_tasks',build)
-    def open_ref(*_a,**_k):
-        assert calls==['selection','public'];calls.append('reference');return 'UNIT_REF'
-    monkeypatch.setattr(reference,'open_reference',open_ref)
-    def publish(*args,**kwargs):
-        assert args[1:]==(['UNIT_PUBLIC_TASKS'],'UNIT_REF');return 'UNIT_COHORT'
-    monkeypatch.setattr(evaluation,'publish_mock_cohort',publish)
-    assert qi.export_cpu_cohort(tmp_path/'out',publication_root=tmp_path,evaluation_root=tmp_path,
-        expected_reference='a'*64,selection_root=tmp_path,expected_selection={},selection_provenance={},prepared_root=tmp_path)=='UNIT_COHORT'
-    assert calls==['selection','public','reference']
-
-
-def test_cache_and_engine_log_symlinks_cannot_escape_model_directory(short_root,monkeypatch):
-    tmp_path=short_root;monkeypatch.setattr(dep,'BASE',tmp_path/'base')
-    profile=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/qwen3/unit-candidate')
-    profile['root']=str(tmp_path/'model')
-    for name in dep.CACHE_VARIABLES:profile['environment_requirements'][name]=str(tmp_path/'model/cache'/name)
-    dep.validate_cache_paths(profile)
-    with pytest.raises(ValueError,match='missing'):dep.validate_cache_paths(profile,require_existing=True)
-    for name in dep.CACHE_VARIABLES:Path(profile['environment_requirements'][name]).mkdir(parents=True,exist_ok=True)
-    Path(profile['environment_requirements']['VLLM_RPC_BASE_PATH']).mkdir(parents=True)
-    dep.validate_cache_paths(profile,require_existing=True)
-    for name in dep.CACHE_VARIABLES:Path(profile['environment_requirements'][name]).rmdir()
-    (tmp_path/'model/cache').rmdir();(tmp_path/'model').rmdir()
-    outside=tmp_path/'outside';outside.mkdir();(tmp_path/'model').mkdir()
-    (tmp_path/'model/cache').symlink_to(outside,target_is_directory=True)
-    with pytest.raises(ValueError,match='cache path'):dep.validate_cache_paths(profile)
-    with pytest.raises(ValueError,match='symlink'):JsonlSink(tmp_path/'model/cache/new/events.jsonl')
-    assert not (outside/'new').exists()
-
-
-@pytest.mark.parametrize('key',['CUDA_LAUNCH_BLOCKING','TORCH_ALLOW_TF32_CUBLAS_OVERRIDE','FLASHINFER_UNDECLARED','LD_PRELOAD'])
-def test_process_environment_rejects_undeclared_runtime_overrides(key):
-    p=dep.profile(ModelSpec('yi'),gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel/yi/unit-candidate')
-    values=dict(p['environment_requirements']);dep.validate_process_environment(p,values)
-    values[key]='UNIT_OVERRIDE'
-    with pytest.raises(ValueError):dep.validate_process_environment(p,values)
-
-
-@pytest.fixture
-def vllm027_parser(monkeypatch):
-    """Exact official CPU parser module; no vLLM engine/package import."""
-    import importlib.util,logging,sys,types
-    location=os.environ.get('UNS_VLLM027_ARGPARSE_SOURCE')
-    if not location:pytest.skip('NOT_RUN: official vLLM0.27 argparse source not supplied')
-    raw=Path(location).read_bytes()
-    assert hashlib.sha256(raw).hexdigest()=='e00efebd4e4f459391769ab8a46af9401e830e3be5226abcacfdfd09a77c6a4d'
-    logger=types.ModuleType('vllm.logger');logger.init_logger=lambda _:logging.getLogger('unit-vllm-parser')
-    package=types.ModuleType('vllm');package.__path__=[]
-    monkeypatch.setitem(sys.modules,'vllm',package);monkeypatch.setitem(sys.modules,'vllm.logger',logger)
-    spec=importlib.util.spec_from_file_location('unit_vllm027_argparse',location)
-    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    return module.FlexibleArgumentParser
-
-
-@pytest.mark.parametrize('key',KEYS)
-@pytest.mark.parametrize('stage',['qualification','formal'])
-def test_native_vllm_yaml_config_keeps_effective_parameters(tmp_path,vllm027_parser,key,stage):
-    import argparse
-    from werewolf.tom_llm.live_admission import service_profile
-    spec=ModelSpec(key)
-    p=dep.profile(spec,gpu_uuid='GPU-unit-only',candidate_root=dep.BASE/'multimodel'/key/'candidate-yaml-unit')
-    if stage=='formal':
-        qualified=p;p=service_profile(dep.BASE/'experiments/unit-run',spec,{'profile':qualified})
-        assert p['environment_prefix']==qualified['environment_prefix']
-        for name in ('PATH','CUDA_HOME'):assert p['environment_requirements'][name]==qualified['environment_requirements'][name]
-        for name in dep.CACHE_VARIABLES:assert Path(p['environment_requirements'][name]).is_relative_to(p['root'])
-    parser=vllm027_parser();parser.add_argument('--config')
-    for name,value in p['argv_options'].items():
-        if type(value) is bool:parser.add_argument('--'+name,action=argparse.BooleanOptionalAction,default=None)
-        elif type(value) is dict:parser.add_argument('--'+name,type=json.loads)
-        elif type(value) is list:parser.add_argument('--'+name,nargs='+')
-        else:parser.add_argument('--'+name,type=type(value))
-    parser.set_defaults(quantization=None,reasoning_parser='')
-    config=tmp_path/'vllm.yaml';config.write_bytes(dep.vllm_config_bytes(p['argv_options']))
-    parsed=parser.parse_args(['--config',str(config)]);validate_launch_args(parsed,p)
-    assert parsed.quantization is None and parsed.reasoning_parser==''
-    assert parsed.served_model_name==[spec.record()['model']]
-    assert parsed.enable_prefix_caching is False and parsed.trust_request_chat_template is False
-    assert parsed.structured_outputs_config=={'backend':'xgrammar'}
-    bad=tmp_path/'vllm.json';bad.write_bytes(config.read_bytes())
-    with pytest.raises(ValueError,match='yaml/yml type'):parser.parse_args(['--config',str(bad)])
-    plain=tmp_path/'false-omitted.yaml';plain.write_bytes(canonical_json_bytes(p['argv_options']))
-    assert parser.parse_args(['--config',str(plain)]).enable_prefix_caching is None
-    with pytest.raises(ValueError):validate_launch_args(parser.parse_args(['--config',str(plain)]),p)
-    with pytest.raises(ValueError):validate_launch_args(parser.parse_args(['--config',str(config),'--enable-prefix-caching']),p)
-
-
-def test_deployment_uses_new_output_root_and_keeps_old_assets(short_root,native_suites,monkeypatch):
-    tmp_path=short_root
-    base=tmp_path/'baseline';monkeypatch.setattr(dep,'BASE',base)
-    spec=ModelSpec('qwen3');old=base/'multimodel/qwen3/candidate-v1'
-    sealed=old/'deployment/sealed-original';sealed.parent.mkdir(parents=True);sealed.write_bytes(b'UNCHANGED_OLD_CANDIDATE')
-    model=old/'model';env=old/'env';destination=base/'multimodel/qwen3/candidate-yaml-v1/deployment'
-    monkeypatch.setattr(dep,'read_receipt',lambda path,kind,expected:{'directory':str(model)} if kind=='model' else {'prefix':str(env)})
-    monkeypatch.setattr(dep,'open_suite',lambda *a:native_suites['qwen3'])
-    monkeypatch.setattr(dep,'open_budget',lambda *a,**kw:{'UNIT_ONLY':'budget'})
-    checked=[];monkeypatch.setattr(dep,'verify_cpu_binding',lambda record,spec:checked.append(record))
-    args=dict(gpu_uuid='GPU-unit-only',model_root=model,model_receipt=tmp_path,expected_model='a'*64,
-        environment_root=env,environment_receipt=tmp_path,expected_environment='b'*64,
-        suite_root=tmp_path,expected_suite='c'*64,budget_root=tmp_path,expected_budget='d'*64)
-    artifact=dep.prepare_deployment(destination,spec,**args)
-    _,record=dep.open_deployment(artifact.path,artifact.manifest_digest)
-    p=record['profile'];assert p['root']==str(destination.parent) and len(checked)==1
-    assert p['argv_options']['model']==str(model) and p['environment_prefix']==str(env)
-    assert Path(p['argv_options']['chat-template'])==artifact.path/'chat_template.jinja'
-    assert set(artifact.manifest['file_table'])=={'deployment.json','vllm.yaml','chat_template.jinja'}
-    assert sealed.read_bytes()==b'UNCHANGED_OLD_CANDIDATE'
-    assert not (old/'cache').exists()
-    for key in dep.CACHE_VARIABLES:assert Path(p['environment_requirements'][key]).is_relative_to(destination.parent)
-    with pytest.raises(ValueError,match='new ROOT/deployment'):dep.prepare_deployment(destination,spec,**args)
-    with pytest.raises(ValueError,match='new ROOT/deployment'):dep.prepare_deployment(old/'deployment',spec,**args)
-    assert sealed.read_bytes()==b'UNCHANGED_OLD_CANDIDATE'
-
-
-def test_qualification_start_is_foreground_exec_with_bound_environment(short_root,monkeypatch):
-    from werewolf.tom_llm import gpu_probe
-    tmp_path=short_root
-    base=tmp_path/'base';monkeypatch.setattr(dep,'BASE',base)
-    p=dep.profile(ModelSpec('qwen3'),gpu_uuid='GPU-unit-only',candidate_root=base/'multimodel/qwen3/new-candidate')
-    artifact=NS(path=Path(p['root'])/'deployment');seen={}
-    monkeypatch.setattr(gpu_probe,'sys',NS(platform='linux'))
-    monkeypatch.setattr(gpu_probe,'open_deployment',lambda *a,**kw:(artifact,{'profile':p,'source':{'source_inventory_clean':True}}))
-    monkeypatch.setattr(gpu_probe.os,'chdir',lambda path:seen.update(cwd=str(path)))
-    class Executed(BaseException):pass
-    def execute(binary,argv,env):seen.update(binary=binary,argv=argv,env=env);raise Executed()
-    monkeypatch.setattr(gpu_probe.os,'execve',execute)
-    with pytest.raises(ValueError,match='authorized Linux'):gpu_probe.start_deployment(artifact.path,'a'*64)
-    assert not Path(p['root']).exists()
-    monkeypatch.setenv('HTTP_PROXY','UNIT_PROXY_MUST_NOT_LEAK');monkeypatch.setenv('VLLM_UNIT_OVERRIDE','MUST_NOT_LEAK')
-    with pytest.raises(Executed):gpu_probe.start_deployment(artifact.path,'a'*64,execute=True)
-    assert seen['binary']==p['environment_prefix']+'/bin/python'
-    assert seen['argv']==[seen['binary'],'-m','werewolf.tom_llm.gpu_probe','--deployment',str(artifact.path),
-        '--expected-deployment','a'*64,'--execute-synthetic-gpu-qualification']
-    assert seen['cwd']==str(dep.ROOT)
-    dep.validate_process_environment(p,seen['env']);dep.validate_cache_paths(p,require_existing=True)
-    assert 'HTTP_PROXY' not in seen['env'] and 'VLLM_UNIT_OVERRIDE' not in seen['env']
-    from scripts import tom_multimodel_admission as cli
-    monkeypatch.setattr(cli.sys,'argv',['tool','start','--deployment',str(artifact.path),
-        '--expected-deployment','a'*64,'--execute-synthetic-gpu-qualification'])
-    with pytest.raises(Executed):cli.main()
+        identities = iter((dict(ident),dict(ident,start_ticks='8')))
+        monkeypatch.setattr(manager,'identity',lambda _:next(identities))
+    with pytest.raises(RuntimeError):
+        manager.ready()
+    assert calls==[]

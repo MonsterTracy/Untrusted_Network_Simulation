@@ -143,12 +143,11 @@ def set_scores(prediction, gold):
     return result
 
 
-def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to_set_rule=None,
-                 formal_game_ids, approved=False, engineering_only=False):
+def compare_sets(reference, predictions, game_ids, raw_labels, *, engineering_only=False):
     """共用原始集合人口、游戏级统计与完整预测分母的多模型评价。"""
     from itertools import combinations
     from werewolf.canonical_collection.public_history import PLAYER_IDS
-    from werewolf.tom_llm.output import SET_OUTPUT_VERSION, parse_set_output, probability_to_set
+    from werewolf.tom_llm.output import SET_OUTPUT_VERSION, parse_set_output
     from werewolf.artifact_io import canonical_json_bytes
 
     games = tuple(sorted(game_ids))
@@ -166,22 +165,20 @@ def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to
                 'mixed probability/set result protocols')
     require(indexed, 'set evaluation requires model predictions')
     derived_methods = {}
-    if approved:
-        require(set(indexed)<={'qwen3','yi','mistral'} and probability_to_set_rule is None,
-                'approved set evaluation forbids legacy threshold or extra model runs')
-        original = next(iter(indexed.values()))
-        for name in ('Always Empty','Always All-Six'):
-            derived = {}
-            for key, row in original.items():
-                players = [] if name=='Always Empty' else [p for j,p in enumerate(PLAYER_IDS) if j!=row['observer']]
-                fields = ('game_id','boundary_id','prefix_digest','plan_digest','observer','fold','canonical_shift','temporal_condition')
-                derived[key] = {k:row[k] for k in fields}
-                derived[key]['prediction'] = parse_set_output(
-                    canonical_json_bytes({'suspected_players':players}).decode(),row['observer']).to_record()
-            indexed[name] = derived
-            derived_methods[name] = {'kind':'deterministic_reference', 'model_run_seal':None,
-                'parent_public_row_identity_digest':digest(list(original)),
-                'predictions_digest':digest([[list(k),r['prediction']['suspected_players']] for k,r in derived.items()])}
+    require(set(indexed)<={'qwen3','yi','mistral'},'unexpected model runs')
+    original = next(iter(indexed.values()))
+    for name in ('Always Empty','Always All-Six'):
+        derived = {}
+        for key, row in original.items():
+            players = [] if name=='Always Empty' else [p for j,p in enumerate(PLAYER_IDS) if j!=row['observer']]
+            fields = ('game_id','boundary_id','prefix_digest','plan_digest','observer','fold','canonical_shift','temporal_condition')
+            derived[key] = {k:row[k] for k in fields}
+            derived[key]['prediction'] = parse_set_output(
+                canonical_json_bytes({'suspected_players':players}).decode(),row['observer']).to_record()
+        indexed[name] = derived
+        derived_methods[name] = {'kind':'deterministic_reference', 'model_run_seal':None,
+            'parent_public_row_identity_digest':digest(list(original)),
+            'predictions_digest':digest([[list(k),r['prediction']['suspected_players']] for k,r in derived.items()])}
     groups = {name:[] for name in ('full_primary_raw', 'primary_comparable_nu', 'empty', 'nonempty_proper', 'all_six')}
     unavailable = []
     label_statuses = Counter()
@@ -211,25 +208,15 @@ def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to
         groups[group].append(key)
         if group == 'nonempty_proper':
             groups['primary_comparable_nu'].append(key)
-    mapper = {'status':'BLOCKED_INDEPENDENT_DEVELOPMENT_NOT_VERIFIED', 'rule':None}
-    tom_sets = {}
-    if approved:
-        from werewolf.tom_llm.output import uniform_reference_projection, fixed_projection_rule
-        from werewolf.tom_llm.reference import projection_source
-        source = projection_source(reference,engineering_only=engineering_only)
-        tom_sets = {key:uniform_reference_projection(ref['probability'],ref['observer']) for key,ref in refs.items()}
-        rule = fixed_projection_rule()
-        mapper = {'status':source['status'], 'rule':rule, 'rule_digest':digest(rule), 'source':source,
-                  'predictions_digest':digest([[list(k),v] for k,v in tom_sets.items()])}
-        derived_methods['Observer-ToM'] = {'kind':'fixed_oof_projection', 'model_run_seal':None,
-                                          'source_digest':source['actual_digest'], 'rule_digest':digest(rule)}
-    elif probability_to_set_rule is not None:
-        # Mock 只证明接口，摘要及分离名单不提升为真实开发来源资格。
-        for key, ref in refs.items():
-            tom_sets[key] = probability_to_set(ref['probability'], ref['observer'], probability_to_set_rule,
-                                                formal_game_ids=formal_game_ids)
-        mapper = {'status':'ENGINEERING_ONLY_NOT_CALIBRATED', 'rule':probability_to_set_rule,
-                  'rule_digest':digest(probability_to_set_rule)}
+    from werewolf.tom_llm.output import uniform_reference_projection, fixed_projection_rule
+    from werewolf.tom_llm.reference import projection_source
+    source = projection_source(reference,engineering_only=engineering_only)
+    tom_sets = {key:uniform_reference_projection(ref['probability'],ref['observer']) for key,ref in refs.items()}
+    rule = fixed_projection_rule()
+    mapper = {'status':source['status'], 'rule':rule, 'rule_digest':digest(rule), 'source':source,
+              'predictions_digest':digest([[list(k),v] for k,v in tom_sets.items()])}
+    derived_methods['Observer-ToM'] = {'kind':'fixed_oof_projection', 'model_run_seal':None,
+                                      'source_digest':source['actual_digest'], 'rule_digest':digest(rule)}
     populations = {}
     for name, keys in groups.items():
         hit_games = sorted({key[0] for key in keys})
@@ -257,16 +244,15 @@ def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to
         pairs = []
         for left, right in combinations(models, 2):
             pair = {'left':left, 'right':right, 'direction':'left_minus_right'}
-            if approved:
-                simple = {'Always Empty','Always All-Six'}
-                if name not in ('full_primary_raw','primary_comparable_nu'):
-                    pair['tier'] = 'diagnostic'
-                elif 'Observer-ToM' in (left,right) and not ({left,right}&simple):
-                    pair['tier'] = 'key_method'
-                elif len({left,right}&simple)==1:
-                    pair['tier'] = 'simple_baseline'
-                else:
-                    pair['tier'] = 'exploratory'
+            simple = {'Always Empty','Always All-Six'}
+            if name not in ('full_primary_raw','primary_comparable_nu'):
+                pair['tier'] = 'diagnostic'
+            elif 'Observer-ToM' in (left,right) and not ({left,right}&simple):
+                pair['tier'] = 'key_method'
+            elif len({left,right}&simple)==1:
+                pair['tier'] = 'simple_baseline'
+            else:
+                pair['tier'] = 'exploratory'
             pair['metrics'] = {metric:paired_summary([row_values[left][g][metric] for g in hit_games],
                 [row_values[right][g][metric] for g in hit_games], indices, .95) if hit_games else None
                 for metric in SET_METRICS}
@@ -276,9 +262,8 @@ def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to
             'bootstrap_replicates':POLICY['bootstrap']['replicates'],
             'bootstrap_indices_digest':None if indices is None else sha256_bytes(indices.tobytes()),
             'cells':cells, 'paired':pairs}
-        if approved:
-            populations[name]['reporting_tier'] = ('primary_descriptive' if name=='full_primary_raw' else
-                'key_secondary' if name=='primary_comparable_nu' else 'diagnostic')
+        populations[name]['reporting_tier'] = ('primary_descriptive' if name=='full_primary_raw' else
+            'key_secondary' if name=='primary_comparable_nu' else 'diagnostic')
     coverage = {}
     for model, rows in predictions.items():
         valid = [r['prediction'] for r in rows if r['prediction']['status'] == 'valid']
@@ -297,28 +282,8 @@ def compare_sets(reference, predictions, game_ids, raw_labels, *, probability_to
             'public_output_coverage':coverage,
             'interval_scope':'fixed_predictions_game_bootstrap_not_simultaneous',
             'uniform_reference_limitation':'empty_and_all_six_raw_reports_share_q; Observer-ToM set comparison is NU only'}
-    if approved:
-        result.update(research_protocol_approved=True, physical_qualification=False,
-            derived_methods=derived_methods, comparison_complete=set(predictions)=={'qwen3','yi','mistral'},
-            primary_endpoint='full_primary_raw/set_f1',
-            valid_output_definitions={'public':'row_micro_all_public_alive', 'populations':'game_macro_same_gold_denominator'})
+    result.update(research_protocol_approved=True,
+        derived_methods=derived_methods, comparison_complete=set(predictions)=={'qwen3','yi','mistral'},
+        primary_endpoint='full_primary_raw/set_f1',
+        valid_output_definitions={'public':'row_micro_all_public_alive', 'populations':'game_macro_same_gold_denominator'})
     return result
-
-
-def analyze_mock(reference, study_root, game_ids, destination):
-    """Publish only engineering comparisons from a verified mock prediction seal."""
-    from pathlib import Path
-    from werewolf.artifact_io import publish_artifact, canonical_json_bytes
-    from werewolf.tom_llm.inference import open_mock_predictions
-    seal, rows = open_mock_predictions(study_root)
-    output = Path(destination).absolute()
-    require(not output.exists() and not output.is_relative_to(Path(study_root).absolute()),
-            "analysis output must be new and outside the sealed study")
-    result = compare(reference, rows, game_ids)
-    return publish_artifact(output, manifest_fields={
-        "artifact_type": "llm_mock_comparison", "schema_version": "classic7_llm_mainline_mock_comparison_v1",
-        "engineering_only": True, "llm_prediction_seal_digest": seal.manifest_digest,
-        "reference_seal_digest": reference.seal_digest, "game_ids": result["game_ids"],
-        "bootstrap_indices_digest": result["bootstrap_indices_digest"],
-        "nu_bootstrap_indices_digest": result["nu_bootstrap_indices_digest"],
-    }, files={"comparison.json": canonical_json_bytes(result)})

@@ -1,16 +1,16 @@
-"""Closed, versioned CPU/Mock model registry. No model or service admission."""
+"""固定模型注册表、原生模板、Wire 和真实 CPU Tokenizer 校验。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
 
-from werewolf.artifact_io import sha256_bytes
+from werewolf.artifact_io import sha256_bytes,canonical_json_bytes
 from werewolf.tom_llm.common import digest, require, strict_json
 from werewolf.tom_llm.policy import policy_binding
-from werewolf.tom_llm.task import validate_task, to_legacy, task_version, SET_VERSION
-from werewolf.tom_llm.server_fixed import wire_request_v2
+from werewolf.tom_llm.task import validate_task, task_version, SET_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / 'configs/paper/tom-llm-models-v1.json'
@@ -35,13 +35,18 @@ def registry():
 @dataclass(frozen=True)
 class ModelSpec:
     key: str
+    _record: dict = field(init=False,repr=False,compare=False)
+    _template: bytes = field(init=False,repr=False,compare=False)
 
-    def record(self):
+    def __post_init__(self):
         rows = registry()
         require(self.key in rows, 'unauthorized model identity')
         row = rows[self.key]
-        template_bytes(self, row=row)
-        return row
+        object.__setattr__(self,'_template',template_bytes(self,row=row))
+        object.__setattr__(self,'_record',row)
+
+    def record(self):
+        return deepcopy(self._record)
 
     @property
     def digest(self):
@@ -50,7 +55,8 @@ class ModelSpec:
 
 def template_bytes(spec, *, row=None):
     require(type(spec) is ModelSpec, 'explicit ModelSpec required')
-    row = registry()[spec.key] if row is None else row
+    if row is None:
+        return spec._template
     p = Path(__file__).parent / row['chat_template']['path']
     require(p.is_file() and not any(x.is_symlink() for x in (p, *p.parents)), 'model template symlink/missing')
     raw = p.read_bytes()
@@ -77,8 +83,7 @@ def render(request, spec):
 def wire_schema(request):
     """仅投影后端不支持的唯一性约束，原任务、Prompt 和应用层校验不变。"""
     validate_task(request)
-    if task_version(request)!=SET_VERSION:
-        return request['response_schema']
+    require(task_version(request)==SET_VERSION,'only suspicion-set tasks are executable')
     schema=deepcopy(request['response_schema'])
     del schema['properties']['suspected_players']['uniqueItems']
     return schema
@@ -87,8 +92,6 @@ def wire_schema(request):
 def wire(request, spec):
     schema=wire_schema(request)
     row = spec.record()
-    if spec.key == 'qwen3' and task_version(request) != SET_VERSION:
-        return wire_request_v2(to_legacy(request))  # Exact original Wire v2 bytes, no extra fields.
     d = row['decoding']
     extra = {'chat_template_kwargs': dict(row['chat_template']['kwargs']), 'top_k': d['top_k'], 'min_p': d['min_p']}
     if row['termination']['extra_stop_token_ids']:
@@ -96,7 +99,7 @@ def wire(request, spec):
     return {'model': row['model'], 'messages': request['messages'], 'temperature': d['temperature'],
             'top_p': d['top_p'], 'n': d['n'], 'max_tokens': d['max_tokens'], 'seed': d['seed'],
             'response_format': {'type': 'json_schema', 'json_schema': {
-                'name': 'non_self_suspicion_set' if task_version(request) == SET_VERSION else 'non_self_suspicion',
+                'name': 'non_self_suspicion_set',
                 'strict': True, 'schema': schema}},
             'extra_body': extra}
 
@@ -128,40 +131,37 @@ def load_cpu_tokenizer(spec, directory):
     return tokenizer
 
 
-def token_preflight(requests, spec, *, count_tokens):
-    counts = [count_tokens(render(r, spec)['text']) for r in requests]
-    row = spec.record()
-    require(counts and all(type(n) is int and 0 < n <= row['context_length'] - row['decoding']['max_tokens']
-                          for n in counts), 'complete PRE exceeds context; truncation forbidden')
-    return {'request_count': len(counts), 'input_token_counts': counts, 'input_tokens_total': sum(counts),
-            'maximum_input_tokens': max(counts)}
 
 
 def check_cpu_parity(requests, spec, directory):
     """Compare native official chat template to this adapter, including every token ID."""
     tokenizer = load_cpu_tokenizer(spec, directory)
     spec_row = spec.record()
-    texts, token_ids = [], []
-    for request in requests:
+    lengths = []
+    states = [sha256(b'[') for _ in range(3)]
+    for ordinal,request in enumerate(requests):
         ours = render(request, spec)['text']
         kwargs = {'add_generation_prompt': True, **spec_row['chat_template']['kwargs']}
         official = tokenizer.apply_chat_template(request['messages'], tokenize=False, **kwargs)
         actual = tokenizer.encode(ours, add_special_tokens=False)
         expected = tokenizer.apply_chat_template(request['messages'], tokenize=True, return_dict=False, **kwargs)
         require(ours == official and actual == expected, 'native template/text/input_ids mismatch')
-        texts.append(ours)
-        token_ids.append(actual)
-        if spec.key == 'qwen3' and task_version(request) != SET_VERSION:
-            require(wire(request, spec) == wire_request_v2(to_legacy(request)), 'frozen Qwen wire compatibility failure')
-            require(ours == to_legacy(request)['rendered_prompt'] and actual[-7:] == [151644,77091,198,151667,271,151668,271],
-                    'frozen Qwen text/token compatibility failure')
-    counts = token_preflight(requests, spec, count_tokens=lambda t: len(tokenizer.encode(t, add_special_tokens=False)))
+        lengths.append(len(actual))
+        # 摘要与完整 canonical JSON 数组一致，但不保留全量文本和 token IDs。
+        for state,value in zip(states,(ours,actual,wire(request,spec)),strict=True):
+            if ordinal:
+                state.update(b',')
+            state.update(canonical_json_bytes(value))
+    for state in states:
+        state.update(b']')
+    require(lengths and all(0<n<=7680 for n in lengths),'complete PRE exceeds context; no truncation')
+    counts = {'request_count':len(lengths),'input_token_counts':lengths,'input_tokens_total':sum(lengths),
+              'maximum_input_tokens':max(lengths)}
     result = {'status': 'CPU_PARITY_PASS', 'model_spec_digest': spec.digest, 'weights_verified': False,
-            'gpu_admission': False, 'model': spec_row['model'], 'revision': spec_row['revision'],
-            'text_sequence_digest': digest(texts), 'input_ids_sequence_digest': digest(token_ids),
-            'legacy_qwen_compatibility': spec.key == 'qwen3' and all(task_version(r) != SET_VERSION for r in requests), **counts}
-    if any(task_version(r)==SET_VERSION for r in requests):
-        require(all(task_version(r)==SET_VERSION for r in requests),'mixed CPU parity task protocols')
-        result.update(wire_schema_projection=deepcopy(SET_WIRE_SCHEMA_PROJECTION),
-                      wire_sequence_digest=digest([wire(r,spec) for r in requests]))
+            'model': spec_row['model'], 'revision': spec_row['revision'],
+            'text_sequence_digest':states[0].hexdigest(),'input_ids_sequence_digest':states[1].hexdigest(),
+            **counts}
+    require(all(task_version(r)==SET_VERSION for r in requests),'only set tasks may enter CPU parity')
+    result.update(wire_schema_projection=deepcopy(SET_WIRE_SCHEMA_PROJECTION),
+                  wire_sequence_digest=states[2].hexdigest())
     return result
