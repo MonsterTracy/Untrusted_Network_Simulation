@@ -268,3 +268,122 @@ def test_all_ten_fixed_qwen_terminal_and_recovery_states_seal(
     experiment = _clone_unsealed_experiment(all_ten_unsealed_experiment, tmp_path)
     seal = seal_checkpoint_set(experiment)
     assert verify_checkpoint_set(experiment) == seal
+
+
+def test_training_gate_traverses_the_result_tree_once(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from werewolf.tom.training import _training_gate
+
+    (tmp_path/'implicit/0/recovery/1').mkdir(parents=True)
+    (tmp_path/'implicit/0/recovery/1/state.bin').write_bytes(b'fixture')
+    patterns = []
+    original = Path.rglob
+    def observe(path, pattern):
+        patterns.append(pattern)
+        return original(path, pattern)
+    monkeypatch.setattr(Path, 'rglob', observe)
+    _training_gate(SimpleNamespace(runs_path=tmp_path))
+    assert len(patterns) == 1
+
+
+@pytest.mark.parametrize('name', ('held_out_predictions.jsonl', 'fold_report.json'))
+@pytest.mark.parametrize('kind', ('file', 'directory', 'symlink', 'dangling_symlink'))
+def test_training_gate_preserves_entry_rules_without_reading_them(tmp_path, monkeypatch, name, kind):
+    from types import SimpleNamespace
+    from werewolf.tom.training import _training_gate
+
+    root = tmp_path/'runs'
+    parent = root/'implicit/4/nested'
+    parent.mkdir(parents=True)
+    path = parent/name
+    if kind == 'directory':
+        path.mkdir()
+    elif kind in ('symlink', 'dangling_symlink'):
+        target = tmp_path/'private-result'
+        if kind == 'symlink':
+            target.write_bytes(b'not a model input')
+        path.symlink_to(target)
+    else:
+        path.write_bytes(b'not a model input')
+    # 支持的 Python 版本对精确 glob 的悬空链接语义不同，保持原判定。
+    forbidden = bool(list(root.rglob(name)))
+    monkeypatch.setattr(Path, 'read_bytes', lambda path: pytest.fail('gate opened held-out content'))
+    if forbidden:
+        with pytest.raises(ValueError, match='held-out access'):
+            _training_gate(SimpleNamespace(runs_path=root))
+    else:
+        _training_gate(SimpleNamespace(runs_path=root))
+
+
+@pytest.mark.parametrize('name', ('held_out_predictions.jsonl', 'fold_report.json'))
+def test_training_stops_before_next_optimizer_step_when_held_out_appears(tmp_path, monkeypatch, name):
+    import torch
+    from werewolf.tom import training
+
+    experiment, _ = prepared_experiment(tmp_path)
+    steps = []
+    original = torch.optim.AdamW.step
+    def step(optimizer, *args, **kwargs):
+        result = original(optimizer, *args, **kwargs)
+        steps.append(1)
+        target = experiment.runs_path/'explicit_day_phase/4'/name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'forbidden result appeared during training')
+        return result
+    monkeypatch.setattr(torch.optim.AdamW, 'step', step)
+    with pytest.raises(ValueError, match='held-out access'):
+        training._train_worker(str(experiment.path), experiment.digest, 0, 'implicit')
+    assert len(steps) == 1
+    assert not (training.lineage_path(experiment, 0, 'implicit')/'terminal_checkpoint').exists()
+
+
+@pytest.mark.parametrize('name', ('held_out_predictions.jsonl', 'fold_report.json'))
+def test_resumed_worker_rechecks_held_out_before_reusing_terminal(tmp_path, monkeypatch, name):
+    from werewolf.tom import training
+
+    experiment, _ = prepared_experiment(tmp_path)
+    training._train_worker(str(experiment.path), experiment.digest, 0, 'implicit')
+    path = experiment.runs_path/'explicit_day_phase/4'/name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'forbidden result appeared between calls')
+    monkeypatch.setattr(training, 'build_model', lambda *args: pytest.fail('resume bypassed held-out gate'))
+    with pytest.raises(ValueError, match='held-out access'):
+        training._train_worker(str(experiment.path), experiment.digest, 0, 'implicit')
+
+
+def test_paper_gate_keeps_checking_both_families_on_every_call(tmp_path):
+    from types import SimpleNamespace
+    from werewolf.tom import paper_study_execution
+
+    full, agnostic = tmp_path/'full', tmp_path/'agnostic'
+    full.mkdir()
+    agnostic.mkdir()
+    study = SimpleNamespace(seal_path=tmp_path/'study-seal.json',
+        full=SimpleNamespace(runs_path=full), agnostic=SimpleNamespace(runs_path=agnostic))
+    paper_study_execution._training_gate(study)
+    (agnostic/'fold_report.json').write_bytes(b'forbidden')
+    with pytest.raises(ValueError, match='held-out access'):
+        paper_study_execution._training_gate(study)
+    (agnostic/'fold_report.json').unlink()
+    study.seal_path.write_bytes(b'sealed')
+    with pytest.raises(ValueError, match='study seal'):
+        paper_study_execution._training_gate(study)
+
+
+def test_training_gate_preserves_optimizer_rng_and_result_bytes(tmp_path, monkeypatch):
+    import shutil
+    from werewolf.tom import training
+
+    experiment, _ = prepared_experiment(tmp_path)
+    # 仅在干净的合成 Fixture 中使用空 gate 作为数值对照，不增加生产执行路径。
+    with monkeypatch.context() as control:
+        control.setattr(training, '_training_gate', lambda experiment: None)
+        training._train_worker(str(experiment.path), experiment.digest, 0, 'implicit')
+    def records():
+        return {str(p.relative_to(experiment.runs_path)): p.read_bytes()
+                for p in experiment.runs_path.rglob('*') if p.is_file()}
+    expected = records()
+    assert experiment.runs_path.is_relative_to(tmp_path)
+    shutil.rmtree(experiment.runs_path)
+    training._train_worker(str(experiment.path), experiment.digest, 0, 'implicit')
+    assert records() == expected

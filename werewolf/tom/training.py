@@ -36,8 +36,10 @@ def _training_gate(experiment):
     root = experiment.runs_path
     if (root / "checkpoint_set_manifest.json").exists():
         raise ValueError("checkpoint-set seal permanently closes training/recovery")
-    if list(root.rglob("held_out_predictions.jsonl")) or list(root.rglob("fold_report.json")):
-        raise ValueError("held-out access permanently closes training/recovery")
+    # 每步只递归遍历一次；匹配项仍沿用精确 glob 对文件、目录和链接的判定。
+    for path in root.rglob("*"):
+        if path.name in ("held_out_predictions.jsonl", "fold_report.json") and any(path.parent.glob(path.name)):
+            raise ValueError("held-out access permanently closes training/recovery")
 
 
 
