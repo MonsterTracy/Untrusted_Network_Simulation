@@ -10,7 +10,7 @@ import os
 import subprocess
 
 from werewolf.artifact_io import (
-    canonical_json_bytes, read_artifact_file, sha256_bytes, verify_artifact,
+    canonical_json_bytes, open_artifact_envelope, read_artifact_file, sha256_bytes, verify_artifact,
 )
 from werewolf.phase2_intervention import CHECKPOINT_CLOSURE_VERSION
 from werewolf.phase2_language import LANGUAGE_VERSION
@@ -176,20 +176,28 @@ def verify_probe_plan_provenance(repo: Path, plan, game_plan, profile) -> None:
         raise ValueError("Probe protocol/profile does not match frozen canonical plan")
 
 
-def _verify_frozen_artifacts(requirements: tuple[FrozenArtifactRequirement, ...]) -> bool:
+def _verify_frozen_artifacts(requirements: tuple[FrozenArtifactRequirement, ...]):
+    """逐一核验全部 payload，仅在本次调用内保留原始字节供专用检查复用。"""
     if not requirements or any(not isinstance(item, FrozenArtifactRequirement)
                                for item in requirements):
-        return False
+        return None
+    verified = {}
     try:
         for item in requirements:
-            artifact = verify_artifact(
+            key = (Path(item.path), item.artifact_type, item.schema_version, item.manifest_digest)
+            if key in verified:
+                continue
+            artifact = open_artifact_envelope(
                 item.path, expected_artifact_type=item.artifact_type,
                 expected_schema_version=item.schema_version)
             if artifact.manifest_digest != item.manifest_digest:
-                return False
+                return None
+            payloads = {name: read_artifact_file(artifact, name)
+                        for name in artifact.manifest["file_table"]}
+            verified[key] = artifact, payloads
     except (OSError, TypeError, ValueError, KeyError, RuntimeError):
-        return False
-    return True
+        return None
+    return verified
 
 
 def _frozen_q_runtime_ready(predictor) -> bool:
@@ -208,7 +216,7 @@ def _frozen_q_runtime_ready(predictor) -> bool:
 
 
 def _smoke_v3_gate(path: Path | None, digest: str | None,
-                   mapper_digest: str | None) -> bool:
+                   mapper_digest: str | None, verified_artifacts=None) -> bool:
     if path is None or digest is None:
         return False
     try:
@@ -216,13 +224,24 @@ def _smoke_v3_gate(path: Path | None, digest: str | None,
             EXPECTED_CASE_SELECTION_DIGEST, NAME, VERSION,
         )
         from werewolf.phase2_actions import CONTRACT_VERSION
-        artifact = verify_artifact(path,
-            expected_artifact_type="phase2_language_execution_smoke",
-            expected_schema_version=VERSION)
+        key = (Path(path), "phase2_language_execution_smoke", VERSION, digest)
+        verified = verified_artifacts.get(key) if verified_artifacts is not None else None
+        if verified is None:
+            artifact = verify_artifact(path,
+                expected_artifact_type="phase2_language_execution_smoke",
+                expected_schema_version=VERSION)
+            payloads = {name: read_artifact_file(artifact, name) for name in
+                        ("selected_cases.json", "case_executions.jsonl", "metrics.json")}
+        else:
+            artifact, payloads = verified
+            if (artifact.path != Path(path)
+                    or artifact.manifest["artifact_type"] != "phase2_language_execution_smoke"
+                    or artifact.manifest["schema_version"] != VERSION):
+                return False
         selected = artifact.manifest["case_selection"]
-        selected_cases = json.loads(read_artifact_file(artifact, "selected_cases.json"))
-        executions = read_artifact_file(artifact, "case_executions.jsonl").splitlines()
-        metrics = json.loads(read_artifact_file(artifact, "metrics.json"))
+        selected_cases = json.loads(payloads["selected_cases.json"])
+        executions = payloads["case_executions.jsonl"].splitlines()
+        metrics = json.loads(payloads["metrics.json"])
         gate = metrics["gate"]
         return (artifact.manifest_digest == digest
                 and artifact.manifest["study_name"] == NAME
@@ -267,20 +286,30 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
     if frozen_source is not None and frozen_source["commit"] != head:
         frozen_source = None
         clean = False
-    artifacts = _verify_frozen_artifacts(frozen_artifacts)
+    verified_artifacts = _verify_frozen_artifacts(frozen_artifacts)
+    artifacts = verified_artifacts is not None
     mapper_verified = False
     if mapper_artifact is not None and mapper_manifest_digest is not None:
         try:
-            from werewolf.phase2_mapper_runtime import load_runtime_mapper
-            loaded_mapper = load_runtime_mapper(mapper_artifact,
-                expected_manifest_digest=mapper_manifest_digest)
+            from werewolf.phase2_mapper_final import FINAL_VERSION
+            from werewolf.phase2_mapper_runtime import _load_verified_mapper, load_runtime_mapper
+            key = (Path(mapper_artifact), "phase2_full_development_oof_mapper",
+                   FINAL_VERSION, mapper_manifest_digest)
+            verified_mapper = verified_artifacts.get(key) if artifacts else None
+            if verified_mapper is None:
+                loaded_mapper = load_runtime_mapper(mapper_artifact,
+                    expected_manifest_digest=mapper_manifest_digest)
+            else:
+                artifact, payloads = verified_mapper
+                loaded_mapper = _load_verified_mapper(artifact, payloads["model.json"],
+                    expected_manifest_digest=mapper_manifest_digest)
             mapper_verified = (mapper_runtime is not None
                                and mapper_runtime.artifact_digest == loaded_mapper.artifact_digest
                                and mapper_runtime.model_digest == loaded_mapper.model_digest)
         except (OSError, TypeError, ValueError, KeyError, RuntimeError):
             mapper_verified = False
     smoke_passed = _smoke_v3_gate(smoke_v3_artifact, smoke_v3_manifest_digest,
-                                 mapper_manifest_digest)
+                                 mapper_manifest_digest, verified_artifacts)
     plan_types = (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1)
     plan_frozen = (isinstance(online_plan, plan_types)
                    and online_plan.selection_status == FROZEN)

@@ -37,7 +37,7 @@ def assess_bound_ledger(runtime, monkeypatch, tmp_path, f, ledger, *,
     monkeypatch.setattr(preflight, "tracked_source_clean", lambda *args: True)
     monkeypatch.setattr(preflight, "freeze_online_source_provenance",
                         lambda *args: {"commit": head})
-    monkeypatch.setattr(preflight, "_verify_frozen_artifacts", lambda *args: True)
+    monkeypatch.setattr(preflight, "_verify_frozen_artifacts", lambda *args: {})
     monkeypatch.setattr(preflight, "_smoke_v3_gate", lambda *args: True)
     monkeypatch.setattr(preflight, "_frozen_q_runtime_ready", lambda *args: True)
     mapper = f.pilot.mapper
@@ -81,6 +81,28 @@ def test_real_preflight_accepts_bound_endpoint_tail_for_resume_or_publication(
     assert report.assignment_ledger_bound
     assert report.ready and report.blockers == ()
     assert ledger.path.read_bytes() == frozen
+
+
+@pytest.mark.parametrize('binding,blocker', (
+    ('backend', 'PHASE2_BACKEND_AUDIT_UNBOUND'),
+    ('recorder', 'PHASE2_CANONICAL_COMMIT_BINDING_UNAVAILABLE'),
+    ('env', 'PHASE2_CANONICAL_COMMIT_BINDING_UNAVAILABLE'),
+    ('call_audit', 'PHASE2_BACKEND_AUDIT_UNBOUND'),
+))
+def test_preflight_rechecks_dynamic_binding_on_each_call(
+        runtime, monkeypatch, tmp_path, binding, blocker):
+    f = completed_probe_trace(runtime, monkeypatch, tmp_path/'complete', target_assignment_count=2)
+    ledger, _ = crash_prefix(f, tmp_path, 'CONSEQUENCE')
+    ledger.mark_interrupted_on_resume()
+    first = assess_bound_ledger(runtime, monkeypatch, tmp_path, f, ledger)
+    assert first.ready
+    original = assess_pilot_preflight
+    def changed(*args, **kwargs):
+        kwargs[binding] = object()
+        return original(*args, **kwargs)
+    monkeypatch.setattr(sys.modules[__name__], 'assess_pilot_preflight', changed)
+    second = assess_bound_ledger(runtime, monkeypatch, tmp_path, f, ledger)
+    assert not second.ready and blocker in second.blockers
 
 
 @pytest.mark.parametrize("kind,publication_only", [

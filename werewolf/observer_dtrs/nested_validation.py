@@ -53,6 +53,7 @@ def _checked_checkpoint(path, kind, identity, compute, verify):
         value=compute()
         verify(value)
         a=publish_unit(path,kind,identity,value)
+        return a,value
     verify(value)
     return a,value
 

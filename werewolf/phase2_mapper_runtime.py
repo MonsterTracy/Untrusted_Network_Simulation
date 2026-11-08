@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from werewolf.artifact_io import canonical_json_bytes, sha256_bytes, verify_artifact
+from werewolf.artifact_io import canonical_json_bytes, read_artifact_file, sha256_bytes, verify_artifact
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf import phase2_mapper as mapper
 from werewolf import phase2_offline as offline
@@ -135,6 +135,13 @@ def load_runtime_mapper(path: Path | str, *,
     artifact = verify_artifact(path,
         expected_artifact_type="phase2_full_development_oof_mapper",
         expected_schema_version=FINAL_VERSION)
+    return _load_verified_mapper(artifact, read_artifact_file(artifact, "model.json"),
+        expected_manifest_digest=expected_manifest_digest)
+
+
+def _load_verified_mapper(artifact, model_payload: bytes, *,
+                          expected_manifest_digest: str | None = None) -> RuntimeMapper:
+    """从本次已核验的 Manifest 与模型字节恢复 Mapper，保留全部科研语义检查。"""
     manifest = artifact.manifest
     if (expected_manifest_digest is not None
             and artifact.manifest_digest != expected_manifest_digest):
@@ -153,7 +160,7 @@ def load_runtime_mapper(path: Path | str, *,
                            ("werewolf/phase2_mapper_runtime.py", Path(__file__))):
         if sources.get(relative) != sha256_bytes(path.read_bytes()):
             raise RuntimeMapperError(f"runtime feature implementation differs from artifact: {relative}")
-    model = json.loads((artifact.path / "model.json").read_bytes())
+    model = json.loads(model_payload)
     unhashed = dict(model)
     model_digest = unhashed.pop("model_digest")
     if (model_digest != sha256_bytes(canonical_json_bytes(unhashed))

@@ -190,3 +190,57 @@ def test_duplicate_prediction_rehashed_checkpoint_stops_without_overwrite(tmp_pa
     with pytest.raises(ValueError,match='predictions'):
         execute(root,data=data,block=(0,0))
     assert len(json.loads((path/'record.json').read_bytes())['predictions']['OBS-EQ0'])==len(value['predictions']['OBS-EQ0'])
+
+
+def test_new_checkpoint_is_verified_once_and_returns_published_content(tmp_path, monkeypatch):
+    value = {'predictions': [0.25, 0.75], 'score': 0.125}
+    calls = []
+    artifact = object()
+
+    def verify(actual):
+        assert actual is value
+        calls.append('verify')
+
+    def publish(path, kind, identity, actual):
+        assert actual is value
+        calls.append('publish')
+        return artifact
+
+    monkeypatch.setattr(runner, 'publish_unit', publish)
+    result = runner._checked_checkpoint(tmp_path/'new', 'fixture', {}, lambda: value, verify)
+    assert result == (artifact, value)
+    assert calls == ['verify', 'publish']
+    assert value == {'predictions': [0.25, 0.75], 'score': 0.125}
+
+
+@pytest.mark.parametrize('failure', ('verify', 'publish'))
+def test_new_checkpoint_failure_never_returns_success(tmp_path, monkeypatch, failure):
+    calls = []
+
+    def verify(value):
+        calls.append('verify')
+        if failure == 'verify':
+            raise ValueError('invalid checkpoint')
+
+    def publish(*args):
+        calls.append('publish')
+        raise OSError('publication failed')
+
+    monkeypatch.setattr(runner, 'publish_unit', publish)
+    with pytest.raises(ValueError if failure == 'verify' else OSError):
+        runner._checked_checkpoint(tmp_path/'new', 'fixture', {}, lambda: {}, verify)
+    assert calls == (['verify'] if failure == 'verify' else ['verify', 'publish'])
+
+
+def test_existing_checkpoint_is_read_and_verified_without_computing(tmp_path, monkeypatch):
+    path = tmp_path/'existing'
+    path.mkdir()
+    value = {'score': 0.125}
+    artifact = object()
+    calls = []
+    monkeypatch.setattr(runner, 'read_unit', lambda *args: (artifact, value))
+    monkeypatch.setattr(runner, 'publish_unit', lambda *args: pytest.fail('existing checkpoint published'))
+    result = runner._checked_checkpoint(path, 'fixture', {},
+        lambda: pytest.fail('existing checkpoint recomputed'), lambda actual: calls.append(actual))
+    assert result == (artifact, value)
+    assert calls == [value]
