@@ -77,3 +77,92 @@ attempt完成态仍未知完整终局、重复读取、输入不可变以及受�
 
 真实来源核验：NOT_RUN。本轮未取得明确准入的真实完整native action与研究assignment共同来源，不打开本地受限private分区、不访问服务器。
 真实提交归属、完整终局正例、独立可信高水位、运行期联合读回/停止证明及F1准入均未完成；不能用人工测试或同PRE一致性替代。
+
+## 2026-10-30 增量：SpeechPlan日终狼队放逐事件合同
+
+开发基点为 Mac `twd/mainline@ebb2bd29a45f2ebee012b5dfe676d4e9b26c7bff`。
+本节追加离线事实评价，不改写上面的历史验收，也不改变原 `NativeActionLink`、五个Finding、
+`link_native_evidence()`或`_day()`的语义。不修改D1–D3、O/Z/T、G/π、执行路径及冻结Artifact。
+
+定义合法狼人发言PRE τ的事件：
+
+\[
+E=\mathbf1\{X^{final}_{g,d}\cap W_\tau\ne\varnothing\}.
+\]
+
+`W_τ`是该PRE时行动者合法已知且仍存活的狼人，不按日终存活状态重新计算；
+`X_final`是完整普通投票及必要PK结束后的最终公开放逐集合。
+即使E已知，它也只是一项事实结果，不是SpeechPlan成功、行动价值、因果效果或终局胜率。
+
+### 附加纯离线接口与当前阻断
+
+`evaluate_day_wolf_exile()`接收原联结器的同一组参数，另可接`request`与`acting_observation`，返回独立的`Finding`。
+其evidence保留原`native_link`全部五项结果、较严格的`public_day`、`PRE_wolf_team`以及`E`。
+不调用模型、Actor、Parser、env、reader、回放、writer或恢复，不生成随机分配。
+
+**当前状态：日终一致性检查已实现；真实狼队来源资格不足，确定E的构造保持阻断。**
+当前接口没有E=0/1的准入分支：E始终为None，存在可检测矛盾时为CONFLICT，否则为UNKNOWN。
+这不是证明事件没有发生，也不是用缺失补零。没有可由调用者设置的`trusted=True`、资格摘要或人工provider来解除阻断。
+若未来取得真实来源材料，仍需单独审定其消费合同；本轮没有修改其他模块建立来源证明系统。
+
+### 两份日终见证必须同时完整、一致
+
+`_day()`复用`_resolved_exiles()`，核对普通/PK投票与最终放逐的一致性，并区分开放日终。
+它没有覆盖所有公共合法性条件。例如，缺少部分存活投票人、投票含自身目标、
+PK投票指向普通平票集合外或缺少PK发言时，旧Finding仍可能为OBSERVED。
+
+附加评价原样调用`public_behavior_research.public_day_witness()`，复用其存活投票人覆盖、合法目标、
+PK阶段/候选/实际发言者及公开淘汰检查；没有复制解析器或修改该函数。
+之后将game/attempt、公共history与原生bundle来源绑定，核对两份见证的day、最终event_id、phase、
+放逐席位、是否最终无人放逐及完整同日事件摘要。公共辅助函数本身没有game字段，不能独立充当game来源证明。
+
+- 两份均完整且上述字段一致：附加`public_day=OBSERVED`，只确认公共事实。
+- 一份完整而另一份不完整，或事件身份/放逐集合/公开来源不一致：CONFLICT，不选较宽松结果。
+- 两份均未完成、没有结算或普通平票后PK未结束：UNKNOWN；临时空放逐不作最终零事件。
+- 原生来源已CONFLICT：保留CONFLICT；缺少来源/外部bundle锚则保持UNKNOWN。
+
+`shared_day_fact_digest`绑定game、attempt、day及最终事件身份。同日多个PRE可以共享该事实，
+它不是assignment ID或独立随机实验单位，接口不计算试验样本数。
+
+### 合法狼队的内容绑定不等于来源认证
+
+原`build_shadow_request()`只读取过滤观察中的actor/observer、Werewolf身份、公共日/阶段/存活状态，
+以及唯一的`werewolf_team_info.wolf_team`消息；原`contexts_for_pre()`在PRE存活集合中取交集。
+本接口复用该构造器，核对native PRE与request的game、attempt、boundary、prefix、step、actor、
+day/phase、完整公共前缀和捕获摘要，并重建request核对完整identity。
+
+这些检查可以拒绝错身份、错PRE、错attempt、观察与request队伍不一致等输入。
+但`ShadowRequest`可以直接构造，`ObserverContext`只校验字段，`legal_source`是固定声明，摘要只验证内容一致性。
+`build_shadow_request()`自己的合同也明确不能证明任意调用者提供观察的真实性。
+当前获准离线接口没有可验证的“原始执行路径→该attempt/PRE的行动者过滤观察”来源凭据及其消费合同。
+因此即使内容检查通过，`PRE_wolf_team`仍为`UNKNOWN / ACTOR_OBSERVATION_ORIGIN_UNVERIFIED`。
+`claimed_PRE_alive_wolf_ids`仅记录请求中未经来源认证的PRE声明，不是已确认狼队，不用于生成确定E。
+不读取角色sidecar、私有回放、BeliefObservation正文或后续放逐来补全角色身份。
+
+理论上，只有可信原始观察来源、全部PRE绑定及两份完整日终见证均成立，才可按定义给E=0/1；
+当前来源条件未满足，不能通过人工测试、同机摘要或新增声明将此理论前提冒充已获资格。
+
+### 独立行动证据及验收范围
+
+结果不以submission、assignment归属或单动作依从成功筛选日终事实。
+可以有完整公共日终，而assignment、submission或完整终局仍UNKNOWN；
+多动作、Parser错误和执行失败不被解释为行动成功。原始五项Finding原样保留，
+`randomized_assignment_inferred=False`、`continuation_verified=False`，不产生ITT或反事实行动值。
+
+本轮人工CPU测试覆盖当前actor/队友/非狼放逐、完整正常/PK空放逐、PK未结束、两份见证分歧、
+错PRE/attempt/观察、任意席位或自称可信来源、语义不依从、执行失败和共享日终。
+所有人工观察只验证接口内容绑定，**不构成真实来源资格；测试没有确定E的正例**。
+真实历史研究、真实来源资格、GPU、F0和行动实验均为`NOT_RUN`。
+
+实际CPU验收使用已有`/Users/name_yuxiao/anaconda3/envs/3wd/bin/python`（Python3.12.13），
+禁用GPU可见性、字节码和pytest缓存，最终命令为：
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' /Users/name_yuxiao/anaconda3/envs/3wd/bin/python -B -m pytest -q -p no:cacheprovider tests/observer_dtrs/test_native_action_link.py tests/observer_dtrs/test_public_behavior_research.py --tb=short
+```
+
+最终 **178 passed、0 failed、0 errors、0 skipped**（1.76秒），其中原生联结/新增评价103项，公共行为直接回归75项。
+开发首轮36 failed/55 passed源于新夹具把规范事件记录交给原始输入构造器；改用原`_history_from_records()`解码。
+次轮1 failed/90 passed源于新PK缺发言夹具留下未结束的turn_start；删除对应人工turn/speech对后通过。
+未放宽生产规则、断言或原有用例；这些中间计数不与最终通过数累加。
+静态AST对照确认原模块11项函数/类及原测试30项定义未改变，本文历史内容完整保留；`git diff --check`通过。

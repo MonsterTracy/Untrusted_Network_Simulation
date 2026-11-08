@@ -23,6 +23,8 @@ from werewolf.canonical_collection.public_history import validate_public_event_h
 from werewolf.canonical_collection.speech import validate_v1_annotation_binding, V1AnnotationStatus
 from werewolf.canonical_collection.trajectory_evidence import construct_submitted_gameplay_action
 from werewolf.observer_dtrs.action_evidence_ledger import digest, validate_ledger
+from werewolf.observer_dtrs.online_context import ShadowRequest, build_shadow_request
+from werewolf.observer_dtrs.public_behavior_research import public_day_witness
 from werewolf.phase2_offline import _resolved_exiles
 from scripts.speech_realization import expected_action
 from scripts.speech_planning import generate_candidates
@@ -333,3 +335,104 @@ def link_native_evidence(records, *, ledger_id, assignment_ref, plan, claim, bun
     except (TypeError, ValueError, KeyError, StopIteration) as error:
         conflict = _finding(Status.CONFLICT, str(error))
         return result(*([conflict]*5))
+
+
+def _complete_public_day(link, bundle, op):
+    """Intersect the existing native finding with the stronger public witness."""
+    if link.day.status is Status.CONFLICT:
+        return link.day
+    sources = json.loads(link.sources_json)
+    if bundle is None or 'public_history_digest' not in sources:
+        return _finding(Status.UNKNOWN, 'NATIVE_PUBLIC_SOURCE_UNAVAILABLE')
+    history = bundle.public_event_stream
+    _require(bundle.game_id == op['game_id'] == sources['game_id']
+             and bundle.manifest_digest == sources['native_bundle_digest']
+             and history.digest == sources['public_history_digest'], 'PUBLIC_DAY_SOURCE_CONFLICT')
+    witness = public_day_witness(history, op['day'])
+    complete = witness['day_status'] == 'COMPLETE'
+    if complete != (link.day.status is Status.OBSERVED):
+        return _finding(Status.CONFLICT, 'PUBLIC_DAY_WITNESSES_DISAGREE',
+                        native_day=link.day.to_record(), public_witness=witness)
+    if not complete:
+        return _finding(Status.UNKNOWN, 'PUBLIC_DAY_INCOMPLETE',
+                        native_day=link.day.to_record(), public_witness=witness)
+    native = json.loads(link.day.evidence_json)
+    events_digest = digest([e.to_record() for e in history.events if e.temporal_state.day == op['day']])
+    _require(native['day'] == witness['day'] == op['day']
+             and native['event_id'] == witness['final_exile_event_id']
+             and native['final_phase'] == witness['final_exile_phase']
+             and native['exiled_seats'] == witness['exiled_seats']
+             and native['observed_no_exile'] == witness['no_exile']
+             and native['day_events_digest'] == events_digest, 'PUBLIC_DAY_WITNESS_IDENTITY_CONFLICT')
+    # PRE references to the same day share this fact; they are not trial units.
+    fact = dict(game_id=op['game_id'], game_attempt_id=op['game_attempt_id'], day=op['day'],
+                event_id=witness['final_exile_event_id'],
+                final_exile_record_sha256=witness['final_exile_record_sha256'])
+    return _finding(Status.OBSERVED, 'CONSISTENT_COMPLETE_PUBLIC_DAY', **fact,
+                    final_phase=witness['final_exile_phase'], exiled_seats=witness['exiled_seats'],
+                    observed_no_exile=witness['no_exile'], public_history_digest=history.digest,
+                    day_events_digest=events_digest, shared_day_fact_digest=digest(fact))
+
+
+def evaluate_day_wolf_exile(records, *, ledger_id, assignment_ref, plan, claim, bundle=None,
+                            expected_bundle_digest=None, attempt_terminal=None,
+                            request=None, acting_observation=None):
+    """Offline E=1[final exiles intersect PRE living wolves], currently blocked.
+
+    No existing input authenticates the origin of a delivered actor observation.
+    ShadowRequest/build_shadow_request validate content, not upstream custody.
+    Consequently E remains None even for internally consistent artificial inputs.
+    There is deliberately no trusted=True flag, digest assertion or provider seam
+    that can manufacture the missing qualification. The five native findings are
+    retained independently; neither submission nor compliance gates day facts.
+    """
+    link = link_native_evidence(records, ledger_id=ledger_id, assignment_ref=assignment_ref,
+        plan=plan, claim=claim, bundle=bundle, expected_bundle_digest=expected_bundle_digest,
+        attempt_terminal=attempt_terminal)
+    sources = json.loads(link.sources_json)
+    day = _finding(Status.UNKNOWN, 'NATIVE_PUBLIC_SOURCE_UNAVAILABLE')
+    team = _finding(Status.UNKNOWN, 'ACTOR_OBSERVATION_ORIGIN_UNVERIFIED',
+                    content_binding_checked=False, upstream_origin_verified=False,
+                    missing_evidence='original_execution_path_to_delivered_actor_observation_custody')
+    if 'opportunity_ref' not in sources:
+        day = link.day
+    else:
+        op = next(r['payload'] for r in records if r['record_digest'] == sources['opportunity_ref'])
+        try:
+            day = _complete_public_day(link, bundle, op)
+        except (TypeError, ValueError, KeyError) as error:
+            day = _finding(Status.CONFLICT, str(error))
+        try:
+            if (type(request) is ShadowRequest and acting_observation is not None
+                    and type(bundle) is VerifiedCanonicalGameBundle):
+                _require(request.prefix.boundary_id == op['boundary_id'], 'OUTCOME_PRE_ATTEMPT_CONFLICT')
+                prefixes = [p for p in bundle.authoritative_pre_prefixes if p.boundary_id == op['boundary_id']]
+                if not prefixes:
+                    team = _finding(Status.UNKNOWN, 'OUTCOME_NATIVE_PRE_MISSING', upstream_origin_verified=False)
+                else:
+                    _require(len(prefixes) == 1, 'OUTCOME_NATIVE_PRE_DUPLICATE')
+                    pre = _prefix_from_record(prefixes[0].to_record())
+                    _require(claim is not None and request.attempt_id == claim.attempt_id == op['game_attempt_id']
+                             and pre.game_id == op['game_id'] and pre.prefix_digest == op['prefix_digest']
+                             and pre.step_index == op['step_index'] and pre.current_speaker == op['actor']
+                             and pre.public_temporal_state.day == op['day']
+                             and pre.public_temporal_state.phase.value == op['phase']
+                             and pre.public_event_digest == op['public_history_digest']
+                             and digest(pre.to_record()) == op['capture_digest']
+                             and pre.public_event_history.to_records() == bundle.public_event_stream.to_records()[
+                                 :len(pre.public_event_history.events)], 'OUTCOME_PRE_ATTEMPT_CONFLICT')
+                    rebuilt = build_shadow_request(pre, acting_observation,
+                        shadow_run_id=request.shadow_run_id, attempt_id=claim.attempt_id)
+                    _require(rebuilt.identity == request.identity, 'OUTCOME_ACTOR_OBSERVATION_REQUEST_CONFLICT')
+                    team = _finding(Status.UNKNOWN, 'ACTOR_OBSERVATION_ORIGIN_UNVERIFIED',
+                        content_binding_checked=True, upstream_origin_verified=False,
+                        request_digest=request.digest,
+                        claimed_PRE_alive_wolf_ids=list(rebuilt.contexts[0].alive_wolf_ids),
+                        missing_evidence='original_execution_path_to_delivered_actor_observation_custody')
+        except (TypeError, ValueError, KeyError) as error:
+            team = _finding(Status.CONFLICT, str(error), upstream_origin_verified=False)
+    status = Status.CONFLICT if Status.CONFLICT in (day.status, team.status) else Status.UNKNOWN
+    return _finding(status, 'DAY_WOLF_EXILE_NOT_IDENTIFIED', E=None,
+        scope='OFFLINE_FACTUAL_OUTCOME_NOT_ACTION_VALUE',
+        native_link=link.to_record(), public_day=day.to_record(), PRE_wolf_team=team.to_record(),
+        randomized_assignment_inferred=False, continuation_verified=False)

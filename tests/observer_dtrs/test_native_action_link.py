@@ -16,7 +16,7 @@ from tests.canonical_collection.test_game_bundle import _fixture
 from werewolf.artifact_io import VerifiedArtifact, canonical_json_bytes, sha256_bytes
 from werewolf.artifact_io.canonical import _build_manifest
 from werewolf.canonical_collection.game_bundle import (
-    VerifiedCanonicalGameBundle, _bundle_files, _manifest_fields, _replay_result,
+    VerifiedCanonicalGameBundle, _bundle_files, _manifest_fields, _replay_result, _history_from_records,
 )
 from werewolf.canonical_collection.attempt_ledger import (
     construct_attempt_claim, construct_attempt_terminal, TerminalOutcome,
@@ -26,12 +26,13 @@ from werewolf.canonical_collection.speech import (
     construct_v1_speech_annotation, V1SpeechAction, V1PerceptionAttempt, V1AnnotationStatus,
     V1_SPEECH_PROMPT_VERSION, V1_SPEECH_PARSER_VERSION,
 )
-from werewolf.canonical_collection.pre import construct_speaker_pre_belief_handoff
+from werewolf.canonical_collection.pre import construct_authoritative_pre_prefix, construct_speaker_pre_belief_handoff
 from werewolf.canonical_collection.trajectory_evidence import (
     construct_submitted_gameplay_action, construct_private_replay_evidence,
 )
 from werewolf.observer_dtrs.action_evidence_ledger import digest, extend_ledger
-from werewolf.observer_dtrs.native_action_link import link_native_evidence, Status
+from werewolf.observer_dtrs.native_action_link import link_native_evidence, evaluate_day_wolf_exile, Status
+from werewolf.observer_dtrs.online_context import ShadowRequest, build_shadow_request
 
 P = tuple(f'player{i}' for i in range(1,8))
 LEDGER = 'artificial-native-link-fixture'
@@ -418,3 +419,290 @@ def test_bad_declared_plan_does_not_erase_independently_observed_native_submissi
     assert r.submission.status is Status.OBSERVED
     assert r.assignment_link.status is Status.CONFLICT and r.semantics.status is Status.CONFLICT
     assert r.day.status is Status.OBSERVED
+
+
+def outcome_fixture(kind='normal_exile', *, exiled='player3', semantic='exact'):
+    """Artificial public facts and actor view; NO real observation custody."""
+    from tests.observer_dtrs.test_public_behavior_research import _complete_public_day_history
+    from tests.observer_dtrs.test_shadow import observation
+    a, e = fixture(day='missing', semantic=semantic)
+    raw = e.public_event_stream.to_records()
+    suffix = _complete_public_day_history(kind).to_records()
+    start = next(i for i, r in enumerate(suffix) if r['event_type'] == 'phase_change' and r['phase'] == 'vote')
+    for record in suffix[start:]:
+        record = dict(record)
+        if kind == 'normal_exile':
+            if record['event_type'] == 'vote_result':
+                other = next(p for p in P if p != exiled)
+                record['votes'] = [{'voter': p, 'target': other if p == exiled else exiled} for p in P]
+            elif record['event_type'] == 'exile_result':
+                record['exiled_players'] = [exiled]
+        record.update(event_id=f'event-{len(raw)}', event_index=len(raw))
+        raw.append(record)
+    e = replace(e, public_event_stream=_history_from_records(raw))
+    a = rewrap(a, e)
+    pre = e.authoritative_pre_prefixes[0]
+    view = observation(pre)
+    request = build_shadow_request(pre, view, shadow_run_id='artificial-shadow', attempt_id=a['claim'].attempt_id)
+    return {**a, 'request': request, 'acting_observation': view}, e
+
+
+def evaluate(args):
+    return evaluate_day_wolf_exile(**args).to_record()
+
+
+@pytest.mark.parametrize('exiled', ['player1', 'player2', 'player3'])
+def test_wolf_actor_teammate_or_nonwolf_exile_does_not_certify_artificial_team(exiled):
+    a, _ = outcome_fixture(exiled=exiled)
+    out = evaluate(a)
+    evidence = out['evidence']
+    assert out['status'] == 'UNKNOWN' and evidence['E'] is None
+    assert evidence['public_day']['status'] == 'OBSERVED'
+    assert evidence['public_day']['evidence']['exiled_seats'] == [exiled]
+    team = evidence['PRE_wolf_team']
+    assert team['status'] == 'UNKNOWN' and team['reason'] == 'ACTOR_OBSERVATION_ORIGIN_UNVERIFIED'
+    assert team['evidence']['content_binding_checked']
+    # Even when one is dead after exile, the claimed set is frozen at PRE.
+    assert team['evidence']['claimed_PRE_alive_wolf_ids'] == ['player1', 'player2']
+    assert not team['evidence']['upstream_origin_verified']
+    assert evidence['native_link']['assignment_link']['status'] == 'UNKNOWN'
+    assert evidence['native_link']['completion']['status'] == 'UNKNOWN'
+
+
+@pytest.mark.parametrize('kind', ['normal_abstain', 'pk_tie', 'pk_abstain'])
+def test_complete_final_empty_exile_is_a_fact_but_not_qualified_E_zero(kind):
+    a, _ = outcome_fixture(kind)
+    out = evaluate(a)['evidence']
+    assert out['public_day']['status'] == 'OBSERVED'
+    assert out['public_day']['evidence']['observed_no_exile']
+    assert out['public_day']['evidence']['exiled_seats'] == []
+    assert out['E'] is None
+
+
+def test_normal_tie_without_completed_pk_cannot_be_zero():
+    a, _ = outcome_fixture('pk_incomplete')
+    out = evaluate(a)
+    assert out['status'] == 'UNKNOWN' and out['evidence']['E'] is None
+    assert out['evidence']['public_day']['status'] == 'UNKNOWN'
+    assert out['evidence']['native_link']['day']['status'] == 'UNKNOWN'
+
+
+@pytest.mark.parametrize('kind', ['normal_missing_voter', 'pk_illegal_target', 'self_vote', 'pk_missing_speaker'])
+def test_stronger_public_rejection_never_falls_back_to_observed_native_day(kind):
+    a, e = outcome_fixture('pk_exile' if kind == 'pk_missing_speaker' else
+                           'normal_exile' if kind == 'self_vote' else kind)
+    if kind in ('self_vote', 'pk_missing_speaker'):
+        raw = e.public_event_stream.to_records()
+        if kind == 'self_vote':
+            vote = next(r for r in raw if r['event_type'] == 'vote_result')
+            vote['votes'][0]['target'] = 'player1'
+        else:
+            raw = [r for r in raw if not (r['event_type'] in ('turn_start', 'public_speech') and r['phase'] == 'pk_discussion'
+                                         and r['speaker'] == 'player2')]
+            for i, r in enumerate(raw):
+                r.update(event_id=f'event-{i}', event_index=i)
+        a = rewrap(a, replace(e, public_event_stream=_history_from_records(raw)))
+    out = evaluate(a)
+    assert out['evidence']['native_link']['day']['status'] == 'OBSERVED'
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+    assert out['evidence']['public_day']['reason'] == 'PUBLIC_DAY_WITNESSES_DISAGREE'
+
+
+@pytest.mark.parametrize('field,value', [('event_id', 'wrong'), ('exiled_seats', ['player1']),
+    ('day', 2), ('final_phase', 'pk_vote'), ('day_events_digest', 'f'*64)])
+def test_contradictory_day_identity_and_source_are_conflicts(monkeypatch, field, value):
+    import werewolf.observer_dtrs.native_action_link as module
+    a, _ = outcome_fixture()
+    original = module._day
+    def contradictory(bundle, op):
+        old = original(bundle, op)
+        return replace(old, evidence_json=canonical_json_bytes({**json.loads(old.evidence_json), field: value}))
+    monkeypatch.setattr(module, '_day', contradictory)
+    out = evaluate(a)
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+    assert out['evidence']['public_day']['status'] == 'CONFLICT'
+    assert out['evidence']['public_day']['reason'] == 'PUBLIC_DAY_WITNESS_IDENTITY_CONFLICT'
+
+
+@pytest.mark.parametrize('field,value', [('game_id', 'other'), ('boundary_id', 'other'),
+    ('prefix_digest', 'f'*64), ('step_index', 7), ('current_speaker', 'player2')])
+def test_wrong_request_pre_identity_cannot_support_outcome(field, value):
+    a, _ = outcome_fixture()
+    # Corrupt a copied request without invoking any runtime or original reader.
+    pre = replace(a['request'].prefix, **{field: value})
+    object.__setattr__(a['request'], 'prefix', pre)
+    out = evaluate(a)
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+    assert out['evidence']['public_day']['status'] == 'OBSERVED'
+
+
+def test_wrong_request_attempt_is_separate_from_observable_day():
+    a, _ = outcome_fixture()
+    a['request'] = replace(a['request'], attempt_id='other')
+    out = evaluate(a)
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+    assert out['evidence']['PRE_wolf_team']['reason'] == 'OUTCOME_PRE_ATTEMPT_CONFLICT'
+    assert out['evidence']['public_day']['status'] == 'OBSERVED'
+
+
+@pytest.mark.parametrize('kind', ['missing_view', 'seat_tuple', 'context', 'constructed_request', 'claimed_trust'])
+def test_declared_wolves_types_and_self_asserted_custody_never_qualify_E(kind):
+    a, _ = outcome_fixture()
+    if kind == 'missing_view':
+        a['acting_observation'] = None
+    elif kind == 'seat_tuple':
+        a['request'] = ('player1', 'player2')
+    elif kind == 'context':
+        a['request'] = a['request'].contexts[0]
+    elif kind == 'constructed_request':
+        r = a['request']
+        a['request'] = ShadowRequest(r.prefix, r.known_wolf_ids, r.shadow_run_id, r.attempt_id)
+    else:
+        a['acting_observation'].update(trusted=True, source_digest='f'*64,
+                                       original_execution_verified=True)
+    out = evaluate(a)
+    assert out['status'] == 'UNKNOWN' and out['evidence']['E'] is None
+    assert not out['evidence']['PRE_wolf_team']['evidence']['upstream_origin_verified']
+
+
+@pytest.mark.parametrize('kind', ['actor', 'identity', 'alive', 'team'])
+def test_actor_view_content_must_match_native_pre_before_origin_remains_unknown(kind):
+    a, _ = outcome_fixture()
+    view = a['acting_observation']
+    if kind == 'actor':view['observer_id'] = 2
+    elif kind == 'identity':view['identity'] = 'Villager'
+    elif kind == 'alive':view['authoritative_public_state']['alive_players'] = [1, 2, 3]
+    else:view['game_log'][0].content['wolf_team'] = [1, 3]
+    out = evaluate(a)
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+    assert out['evidence']['public_day']['status'] == 'OBSERVED'
+
+
+@pytest.mark.parametrize('semantic', ['multi', 'mismatch', 'empty', 'error', 'missing_submission'])
+def test_observable_day_never_manufactures_submission_or_semantic_success(semantic):
+    a, e = outcome_fixture(semantic='exact' if semantic == 'missing_submission' else semantic)
+    if semantic == 'missing_submission':a = rewrap(a, replace(e, submitted_gameplay_actions=()))
+    expected = run({k: v for k, v in a.items() if k not in ('request', 'acting_observation')}).to_record()
+    out = evaluate(a)['evidence']
+    assert out['public_day']['status'] == 'OBSERVED' and out['E'] is None
+    assert out['native_link'] == expected
+    assert out['native_link']['assignment_link']['status'] == 'UNKNOWN'
+    assert not out['randomized_assignment_inferred'] and not out['continuation_verified']
+    if semantic == 'missing_submission':assert out['native_link']['submission']['status'] == 'UNKNOWN'
+    else:assert not out['native_link']['semantics']['evidence']['exact_single_compliance']
+
+
+def outcome_records(a, op):
+    rows = extend_ledger((), ledger_id=LEDGER, operation_id='capture', kind='OPPORTUNITY', payload=op)
+    candidate = digest(op['candidates'][0])
+    assigned = {**a['records'][1]['payload'], 'opportunity_ref': rows[-1]['record_digest'],
+                'candidate_id': candidate, 'support': [candidate]}
+    return extend_ledger(rows, ledger_id=LEDGER, operation_id='assignment', kind='ASSIGNMENT', payload=assigned)
+
+
+@pytest.mark.parametrize('field,value', [('game_id', 'other'), ('game_attempt_id', 'other'),
+    ('boundary_id', 'other'), ('prefix_digest', 'f'*64), ('actor', 'player2')])
+def test_wrong_native_opportunity_cannot_borrow_a_day_outcome(field, value):
+    a, _ = outcome_fixture()
+    op = {**a['records'][0]['payload'], field: value}
+    if field == 'actor':
+        op['candidates'] = [{**op['candidates'][0], 'expected_v1': ['player2', 'point_as_werewolf', 'player3']}]
+    a['records'] = outcome_records(a, op)
+    a['assignment_ref'] = a['records'][-1]['record_digest']
+    out = evaluate(a)
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+
+
+def test_complete_public_witness_cannot_override_unknown_native_day(monkeypatch):
+    import werewolf.observer_dtrs.native_action_link as module
+    a, _ = outcome_fixture()
+    monkeypatch.setattr(module, '_day', lambda *args: module._finding(Status.UNKNOWN, 'ARTIFICIAL_MISSING'))
+    out = evaluate(a)
+    assert out['status'] == 'CONFLICT' and out['evidence']['E'] is None
+    assert out['evidence']['public_day']['reason'] == 'PUBLIC_DAY_WITNESSES_DISAGREE'
+
+
+def test_two_pre_references_share_one_day_fact_without_inventing_trial_units():
+    from tests.observer_dtrs.test_shadow import observation
+    a, e = outcome_fixture()
+    raw = e.public_event_stream.to_records()
+    raw[5:5] = [dict(event_type='turn_start', day=1, phase='discussion', speaker='player2'),
+                dict(event_type='public_speech', day=1, phase='discussion', speaker='player2', raw_text='Artificial reply.')]
+    for i, r in enumerate(raw):r.update(event_id=f'event-{i}', event_index=i)
+    history = _history_from_records(raw)
+    pre = construct_authoritative_pre_prefix(game_id=e.game_id, boundary_id='boundary-005', step_index=5,
+        report_trigger_id='pre-public-speech-005', current_speaker='player2', alive_observer_ids=P,
+        public_event_history=_history_from_records(raw[:6]), v1_annotations=e.speech_annotations_v1,
+        belief_observation_ids_by_observer={p: 'second-observation-'+p for p in P})
+    a = rewrap(a, replace(e, public_event_stream=history,
+                         authoritative_pre_prefixes=(*e.authoritative_pre_prefixes, pre)))
+    op = {**a['records'][0]['payload'], 'boundary_id': pre.boundary_id, 'prefix_digest': pre.prefix_digest,
+          'step_index': pre.step_index, 'actor': pre.current_speaker,
+          'public_history_digest': pre.public_event_digest, 'capture_digest': digest(pre.to_record()),
+          'candidates': [{'plan': {'action': 'ACCUSE_WOLF', 'target': 'player3'},
+                          'expected_v1': ['player2', 'point_as_werewolf', 'player3']}]}
+    rows = outcome_records(a, op)
+    view = observation(pre)
+    second = {**a, 'records': rows, 'assignment_ref': rows[-1]['record_digest'], 'acting_observation': view,
+              'request': build_shadow_request(pre, view, shadow_run_id='artificial-shadow', attempt_id=a['claim'].attempt_id)}
+    first, second = evaluate(a)['evidence'], evaluate(second)['evidence']
+    assert first['public_day']['status'] == second['public_day']['status'] == 'OBSERVED'
+    assert first['public_day']['evidence']['shared_day_fact_digest'] == second['public_day']['evidence']['shared_day_fact_digest']
+    assert first['E'] is second['E'] is None
+    assert not first['randomized_assignment_inferred'] and not second['randomized_assignment_inferred']
+
+
+def test_outcome_is_pure_and_does_not_access_private_sources_or_upgrade_native_findings(monkeypatch):
+    from copy import deepcopy
+    a, _ = outcome_fixture()
+    class Forbidden:
+        def __getattribute__(self, name):raise AssertionError('private source accessed: '+name)
+    a['bundle'] = replace(a['bundle'], private_replay_evidence=Forbidden(),
+        belief_observations=Forbidden(), backend_call_evidence=Forbidden())
+    before_records = canonical_json_bytes(a['records'])
+    before_manifest = canonical_json_bytes(a['bundle'].manifest)
+    before_view = deepcopy(a['acting_observation'])
+    def deny(*args, **kwargs):raise AssertionError('I/O prohibited')
+    monkeypatch.setattr(builtins, 'open', deny);monkeypatch.setattr(os, 'open', deny)
+    monkeypatch.setattr(Path, 'read_bytes', deny);monkeypatch.setattr(Path, 'write_bytes', deny)
+    state = random.getstate()
+    first = evaluate(a)
+    assert first == evaluate(a) and random.getstate() == state
+    assert canonical_json_bytes(a['records']) == before_records
+    assert canonical_json_bytes(a['bundle'].manifest) == before_manifest
+    assert a['acting_observation'] == before_view
+    assert first['evidence']['public_day']['status'] == 'OBSERVED'
+    assert first['evidence']['E'] is None
+    assert not first['evidence']['native_link']['submission_permission']
+    assert not first['evidence']['native_link']['external_custody_verified_by_linker']
+
+
+def test_failed_assignment_execution_does_not_erase_day_or_fabricate_submission():
+    a, e = outcome_fixture()
+    a = rewrap(a, replace(e, submitted_gameplay_actions=()))
+    started = extend_ledger(a['records'], ledger_id=LEDGER, operation_id='start', kind='EXECUTION',
+        payload=dict(assignment_ref=a['assignment_ref'], status='STARTED', execution_id='manual',
+                     implementation_ref=digest('ARTIFICIAL-NO-EXECUTION')))
+    a['records'] = extend_ledger(started, ledger_id=LEDGER, operation_id='failed', kind='EXECUTION',
+        payload=dict(assignment_ref=a['assignment_ref'], status='FAILED', started_ref=started[-1]['record_digest'],
+                     evidence_ref=digest('ARTIFICIAL-FAILURE'), speech_digest=None, actions=None, error_code='ACTOR_FAILURE'))
+    out = evaluate(a)['evidence']
+    assert out['public_day']['status'] == 'OBSERVED' and out['E'] is None
+    assert out['native_link']['submission']['status'] == 'UNKNOWN'
+    assert out['native_link']['semantics']['status'] == 'UNKNOWN'
+    assert out['native_link']['assignment_link']['status'] == 'UNKNOWN'
+    assert out['native_link']['sources']['research_input_digest'] == digest(a['records'])
+
+
+@pytest.mark.parametrize('case', ['missing_prefix', 'missing_bundle', 'missing_anchor'])
+def test_missing_source_is_unknown_without_turning_absence_into_conflict_or_E(case):
+    a, e = outcome_fixture()
+    if case == 'missing_prefix':a = rewrap(a, replace(e, authoritative_pre_prefixes=()))
+    elif case == 'missing_bundle':a['bundle'] = None
+    else:a['expected_bundle_digest'] = None
+    out = evaluate(a)
+    assert out['status'] == 'UNKNOWN' and out['evidence']['E'] is None
+    if case == 'missing_prefix':
+        assert out['evidence']['public_day']['status'] == 'OBSERVED'
+        assert out['evidence']['PRE_wolf_team']['reason'] == 'OUTCOME_NATIVE_PRE_MISSING'
+    else:assert out['evidence']['public_day']['status'] == 'UNKNOWN'
