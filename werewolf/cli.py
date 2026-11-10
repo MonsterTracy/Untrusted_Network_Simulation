@@ -316,10 +316,6 @@ def main(argv=None):
     if args.command == 'tom-llm':
         from werewolf.tom_llm.operations import invoke
         return invoke(args)
-    if args.command == "check-llm-reasoner-config":
-        from werewolf.tom_llm.cli import check_config
-        print(json.dumps(check_config(args.config), sort_keys=True))
-        return 0
     if args.command == "capacity-check":
         from werewolf.tom.capacity_check import NOTICE, check_training_capacity
         print(NOTICE, flush=True)
