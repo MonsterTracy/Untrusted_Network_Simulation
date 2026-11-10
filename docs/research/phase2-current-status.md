@@ -1,6 +1,8 @@
 # Phase-2：当前代码与研究责任
 
-本文是导航，不是新的实验协议。核对基准为 `twd/mainline`、HEAD `57fd2d716eff8ac83477a17298e160c04b7e98b5` 及本地 Router-v1 未提交实现。`research/main-experiments` 在该 HEAD 之上还有两个 paired mapper/development 研究提交；本工作区没有合并它们。
+本文是导航，不是新的实验协议。2026-11-10 本地核对基准为 `twd/mainline`、HEAD `9dbcdbb0f012ed815fe2d7d41a5c844a992a8758`（本次文档修改前）。`research/main-experiments` 的两个 paired mapper/development 研究提交 `39f4ea25906808bf1ed28b05fdfb63865cc3ffb3`、`13ca742d7d98e41d5f68e5cb98ad5901f017115c` 均已包含在该 HEAD 的祖先中；原始执行与分析 Source 身份保持不变。
+
+原审阅基于 `57fd2d716eff8ac83477a17298e160c04b7e98b5` 及当时尚未提交的 Router-v1；“本工作区没有合并它们”仅描述该历史快照，不代表当前主线。下列历史整理记录保留原有语境；本次仅修正导航，不改变 Terminal、Probe、Router 的科研合同或升级正式实验完成状态。
 
 ## 当前路径
 

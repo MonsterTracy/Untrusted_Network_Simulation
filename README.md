@@ -25,18 +25,16 @@ requires explicit authorization and file ownership.
 | Document role | Entry and scope |
 |---|---|
 | Current navigation | This README links implemented research modules; it is not a live experiment-status register. |
+| Research architecture | [Research overview](docs/research-overview.md): module responsibilities, data flow and evidence boundaries. |
 | Current TomBaseline operation | [Unified operations](docs/operations/tom-llm-unified.md); `uns tom-llm` is the recommended formal operator entry. |
 | Frozen scientific contracts | `CONTEXT.md`, approved ADRs and the protocol explicitly bound to each experiment. |
 | Historical provenance | [Branch/worktree registry](docs/BRANCHES.md), read at its stated snapshot date; completed runs retain their original Source and Artifact identities. |
 | Research documents | Module-specific protocols, drafts and implementation/evidence notes have different authority; use their stated approval, date and evidence limits. |
 
-The [run](scripts/run_tom_multimodel_baseline.py) and
-[analysis](scripts/analyze_tom_multimodel_baseline.py) scripts remain compatibility
-entries to the same Baseline implementation. The
-[CPU checker](scripts/check_tom_multimodel_cpu.py) and
-[admission tool](scripts/tom_multimodel_admission.py) are lower-level tools using
-existing modules. Their historical usage documentation remains available and
-does not replace the unified operations guide.
+TomBaseline uses only `uns tom-llm` for preparation, execution, recovery and
+three-run analysis. Superseded script entrypoints and the two-round physical
+qualification pipeline have been removed. Historical artifacts retain their
+original Source and protocol identities.
 
 ## Implemented research modules
 
@@ -50,7 +48,7 @@ line; `main` remains the stable-release branch. See the
 |---|---|
 | Canonical Data | Collection/evidence audit, whole-game split, V1/V2 publication and release: [Data lifecycle](docs/research/data-acquisition-preprocessing.md) |
 | Observer-conditioned ToM | Public-only non-self suspicion modeling, training/recovery, OOF and sealed Final Fit lifecycles: [ToM contract](docs/tom_contract.md), [Qwen3 Final Fit](docs/qwen3-final-fit.md) |
-| ToM LLM Baselines | Qwen3/Yi/Mistral via `uns tom-llm`: independent CPU Tokenizer/Suite/full-150 Budget, guarded service/qualification/execution and sealed paired reports: [operations and current limits](docs/operations/tom-llm-unified.md), [YAML example](configs/paper/tom-llm-operations.example.yaml) |
+| ToM LLM Baselines | Qwen3/Yi/Mistral via `uns tom-llm`: one shared set-task execution path, full-input CPU budget, owned service, durable recovery and sealed paired reports: [operations and current limits](docs/operations/tom-llm-unified.md), [YAML example](configs/paper/tom-llm-operations.example.yaml) |
 | Observer-DTRS D1–D4 | PRE features and conditional event estimation, `LossSpec`, conditional risks, derived thresholds and POS/BND/NEG; Capsule/Broker/Resident Service/Shadow/QUAL engineering: [D2](docs/research/observer-dtrs-v1-d2a-protocol.md), [D3](docs/research/observer-dtrs-v1-d3a-protocol.md), [D4](docs/research/observer-dtrs-v1-d4c2b2-resident-service.md) |
 | Contextual speech research | Opt-in contextual losses and strategy intents through existing Actor/Parser/verified speech, with three-condition synthetic comparisons: [prototype and evidence limits](docs/research/observer-dtrs-contextual-speech-prototype.md) |
 | Experiment A | Paired Qwen3 temporal conditions, continuous/competition-top1 Q and fixed-M3 development contrasts: [temporal contract](docs/adr/0005-isolate-direct-day-phase-features-in-temporal-ablation.md), [paired preparation](werewolf/tom/backbone_study.py), [mapper runner](scripts/run_phase2_mapper_study.py), [statistical consumer](scripts/experiment_a_mapper_contrasts.py) |
@@ -64,13 +62,11 @@ policy. Experiment A retains Execution Source
 `39f4ea25906808bf1ed28b05fdfb63865cc3ffb3` and Analysis Source
 `13ca742d7d98e41d5f68e5cb98ad5901f017115c` for the original study.
 
-The ToM LLM unified entry supports CPU Tokenizer/Suite/full-150 context checks
-before weights or a model environment are available, then explicit service,
-qualification and formal-experiment operations. Asset download and environment
-installation are **not implemented**; the pinned-revision acquisition proposal
-and stage-specific checks are documented in
-[the operations guide](docs/operations/tom-llm-unified.md). CPU/Mock tests do not
-establish physical Admission or completion of the 10,714-request formal run.
+The ToM LLM entry prepares the frozen set cohort and full-input tokenizer budget,
+then runs each model on one owned service instance with durable recovery.
+It reuses existing assets and environments; download and installation are not
+implemented. CPU/Mock tests do not establish completion of the 10,714-request
+formal run. See [the operations guide](docs/operations/tom-llm-unified.md).
 
 Mapper/Experiment A tools and their tests additionally use the `mapper` optional
 dependency group in [setup.py](setup.py). The default CLI and collection flow

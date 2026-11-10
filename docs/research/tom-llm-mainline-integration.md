@@ -60,6 +60,8 @@ does not qualify the old Candidate or any new deployment.
 
 ## Explicit CLI and tests
 
+> **历史 CLI 示例。** 本节命令及配套配置说明属于早期集成快照；`check-llm-reasoner-config` 已不在当前主线注册。当前 Baseline 操作见[统一操作说明](../operations/tom-llm-unified.md)中的 `uns tom-llm`。下方原文保留用于对应历史 Source 追溯，不作为现行可执行命令。
+
 The only additional shared CLI command is offline validation:
 
 ```sh

@@ -1,5 +1,8 @@
 # ToM multimodel Baseline experiment system
 
+> **历史操作文档。** 本文保留旧版 Baseline 执行与资格流程，供对应历史 Source／Artifact 追溯；文中的命令及 Qualification／Admission／Permit 流程不代表当前 Mainline 的正式操作入口。
+> 当前操作请使用 `uns tom-llm`，以[统一操作说明](tom-llm-unified.md)为准。下文历史正文保持原意，既有 Source／Artifact 身份不迁移、不重签。
+
 Mac develops and tests; the user manually deploys and operates Ubuntu. These commands are usage documentation, not server/GPU authorization. No model is admitted by local tests. The old 76-call Qwen synthetic qualification, all ModelSpecs, public PRE, Wire v2, parser/fallback, Primary and scoring implementations remain unchanged.
 
 ## Design and identities

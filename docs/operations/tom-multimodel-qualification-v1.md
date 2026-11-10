@@ -1,5 +1,8 @@
 # Multimodel physical Admission and GPU Qualification tools (local implementation)
 
+> **历史操作文档。** 本文保留旧版 Baseline 执行与资格流程，供对应历史 Source／Artifact 追溯；文中的命令及 Qualification／Admission／Permit 流程不代表当前 Mainline 的正式操作入口。
+> 当前操作请使用 `uns tom-llm`，以[统一操作说明](tom-llm-unified.md)为准。下文历史正文保持原意，既有 Source／Artifact 身份不迁移、不重签。
+
 This document prepares a later, explicitly authorized manual run. Codex performs Mac development only; every Ubuntu command is executed manually by the user. No physical model or GPU is qualified by the local CPU/Mock tests. No formal inference runner is introduced.
 
 ## Boundaries and artifact chain
