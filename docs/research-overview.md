@@ -1,6 +1,6 @@
 # 全项目科研架构与模块导航
 
-本文连接现有科研模块、数据流和文档，不新增开发规范、执行协议或实验门禁。状态依据截至 2026-11-10 的本地审阅、既有归档与用户确认，不是服务器实时状态。各实验仍以其原始 Source、冻结合同和封存证据为准。
+本文连接现有科研模块、数据流和文档，不新增开发规范、执行协议或实验门禁。状态依据截至 2026-11-11 的本地审阅、既有归档与最新用户交接确认，不是服务器实时状态。各实验仍以其原始 Source、冻结合同和封存证据为准。
 
 ## 1. 项目目标与科研问题
 
@@ -40,31 +40,32 @@ Publication 中的观察报告在下游用于训练监督、离线标签或评�
 | 游戏环境和 Canonical Collection | 执行 Classic7，记录因果合法的公共历史和采集来源 | [envs](../werewolf/envs/)、[canonical_collection](../werewolf/canonical_collection/) | Collection Plan、Agent、Backend、游戏规则 | PRE、观察报告、Bundle、Ledger、失败证据 | 可信数据基础设施已实现；具体采集完成以原产物为准 | [采集合同](collection_contract.md)、[数据生命周期](research/data-acquisition-preprocessing.md) |
 | Development Publication | 验证并发布 Development 人口与整局划分，隔离受限角色信息 | [Publication V1](../werewolf/development_publication.py)、[V2](../werewolf/development_publication_v2.py)、[Split](../werewolf/canonical_split.py) | 已验证 Collection、预定划分规则 | 公共 Publication、Fold、受限 Role Sidecar | V1/V2 合同并存；不是两个任意互换的数据入口 | [数据生命周期](research/data-acquisition-preprocessing.md) |
 | Observer-ToM | 建模 observer-specific 非自身怀疑质量 | [werewolf/tom](../werewolf/tom/) | 公共 PRE、观察者、合法训练监督与人口掩码 | OOF Q、Checkpoint、封存 Final Fit 预测器、认知评价 | OOF、Final Fit、独立评价生命周期已实现，各自保留来源 | [ToM 合同](tom_contract.md)、[Qwen3 Final Fit](qwen3-final-fit.md) |
-| TomBaseline | 在共同公共观察任务上比较通用模型与专用 ToM | [werewolf/tom_llm](../werewolf/tom_llm/) | 公共 Task、Selection / Cohort、模型、冻结 Reference | 模型预测、Run / Seal、配对分析 | 三模型 V2 GPU 推理及单模型分析获用户确认完成；联合分析待确认 | [现行操作说明](operations/tom-llm-unified.md)；历史实验仍用原 Source 合同 |
-| Observer-DTRS | 条件事件估计、显式损失与静态三支风险比较，以及 D4 工程证据链 | [werewolf/observer_dtrs](../werewolf/observer_dtrs/) | PRE、Q、离线事件标签、显式 LossSpec | 条件概率、风险、POS/BND/NEG、部署与审计证据 | D1–D4 分阶段实现和归档，不等于完整在线最优策略 | [D2 结果归档](research/observer-dtrs-v1-d2-results.md)、[D3 受控实现](research/observer-dtrs-v1-d3b.md)、[D4 工程](research/observer-dtrs-v1-d4c2b2-resident-service.md) |
+| TomBaseline | 在共同公共观察任务上比较通用模型与专用 ToM | [werewolf/tom_llm](../werewolf/tom_llm/) | 公共 Task、Selection / Cohort、模型、冻结 Reference | 模型预测、Run / Seal、配对分析 | V1/V2 三模型正式实验及单模型分析均获用户确认完成；联合配对分析尚无完成证据 | [现行操作说明](operations/tom-llm-unified.md)；历史实验仍用原 Source 合同 |
+| Observer-DTRS | 条件事件估计、显式损失与静态三支风险比较，以及 D4 工程证据链 | [werewolf/observer_dtrs](../werewolf/observer_dtrs/) | PRE、Q、离线事件标签、显式 LossSpec | 条件概率、风险、POS/BND/NEG、部署与审计证据 | D2 有历史 DEV 正式归档；D3 正式历史研究获用户确认；D4 工程与独立 CAL/TEST 状态分开 | [D1 事件](research/observer-dtrs-v1-d1a.md)、[D2 结果归档](research/observer-dtrs-v1-d2-results.md)、[D3 方法草案](research/observer-dtrs-v1-d3a-protocol.md)、[D3 受控实现](research/observer-dtrs-v1-d3b.md)、[D4 工程](research/observer-dtrs-v1-d4c2b2-resident-service.md) |
 | Phase-2 Mapper | 从 Q 和合法竞争状态构造 R2，估计社会状态 score | [phase2_offline.py](../werewolf/phase2_offline.py)、[phase2_mapper_runtime.py](../werewolf/phase2_mapper_runtime.py) | 离线 OOF Q / 标签；运行时 Final Q 与合法状态 | Mapper、p_tilde score panel | 离线 Study、Final Fit 与运行时路径已实现；不授予行动效果解释 | [离线数据合同](research/phase2-offline-data-contract.md)、[当前导航](research/phase2-current-status.md) |
-| Terminal / Probe / Router | 研究终止行动后果、固定序贯策略及游戏级策略比较 | [phase2_online_runner.py](../werewolf/phase2_online_runner.py)、[phase2_gameplay.py](../werewolf/phase2_gameplay.py) | 冻结预测器、Mapper、合法机会、实验 Plan 与 Ledger | Assignment、日终后果、ITT、完整游戏结果 | Terminal、Probe 有交接完成记录；Router 实现与正式游戏实验状态分开 | [Terminal 协议](research/phase2-terminal-estimator-protocol-v1.md)、[Probe 协议](research/phase2-probe-policy-protocol-v1.md)、[Router 合同](research/phase2-router-v1-contract.md) |
+| Terminal / Probe / Router | 研究终止行动后果、固定序贯策略及游戏级策略比较 | [phase2_online_runner.py](../werewolf/phase2_online_runner.py)、[phase2_gameplay.py](../werewolf/phase2_gameplay.py) | 冻结预测器、Mapper、合法机会、实验 Plan 与 Ledger | Assignment、日终后果、ITT、完整游戏结果 | Terminal 有正式 ITT 归档；Probe ITT 获用户确认、优势未确证；Router 是固定策略工程实现，尚无正式完整游戏胜率结果证据 | [Terminal 协议](research/phase2-terminal-estimator-protocol-v1.md)、[Probe 协议](research/phase2-probe-policy-protocol-v1.md)、[Router 合同](research/phase2-router-v1-contract.md) |
 | Language / Speech | 采集期 V1 语义感知；下游预定行动的语言实现、独立解析和验证 | [speech](../werewolf/speech/)、[phase2_verified_speech.py](../werewolf/phase2_verified_speech.py) | 合法观察、原始公开发言或冻结行动 Plan | V1 注释或经验证的行动发言、审计 | 两种职责均已实现，合同独立；语言层不替代实际投票 | [采集合同](collection_contract.md)、[Action 合同](research/phase2-action-contract-v1.md) |
 | Planning Research | 探索候选规划、情境损失和认知依据如何影响策略意图 | [planning_research.py](../werewolf/observer_dtrs/planning_research.py)、[speech_planning.py](../scripts/speech_planning.py) | 合法 PRE / 视角、Q、显式研究假设 | 候选、受控评分、策略意图和原型比较 | 研究进行中；历史消融与原型不等于当前 Router | [动态规划研究](research/observer-dtrs-dynamic-planning-phase1.md)、[情境发言原型](research/observer-dtrs-contextual-speech-prototype.md) |
 | Evaluation / Reporting | 按各任务固定人口和终点进行评分、统计及可视化 | [tom/reporting.py](../werewolf/tom/reporting.py)、[baseline_analysis.py](../werewolf/tom_llm/baseline_analysis.py)、[统计脚本](../scripts/) | 对应任务的封存预测、标签、Assignment 或游戏结果 | 认知指标、配对统计、ITT、游戏结果报告 | 实现存在不代表每份正式报告已生成 | [ToM 合同](tom_contract.md)、[Baseline 操作](operations/tom-llm-unified.md)、[Phase-2 导航](research/phase2-current-status.md) |
 
 ## 4. 各研究阶段的当前状态
 
-**代码已经实现**只说明功能存在；**正式实验已完成**需要用户确认、正式 Seal 或实验报告等明确来源；**研究仍在进行**表示方法或实验尚在完善；**历史研究**保留原始方法与执行记录，不代表现行操作协议。
+**代码已经实现**只说明功能存在；**正式实验已完成**需要用户确认、正式 Seal 或实验报告等明确来源；**研究仍在进行**表示方法或实验尚在完善；**历史研究**保留原始方法与执行记录，不代表现行操作协议。下文分别标明“用户已确认”与“正式归档”，不把交接确认当作本轮已在仓库核验实际 Artifact。
 
-- **TomBaseline**：用户确认 Qwen3、Yi、Mistral 三模型 V2 GPU 推理及单模型分析已完成，冻结执行 Source 为 `bacc35135fffa527f60b532ee12e3ca2859398fc`。本轮未复核其 Seal。三模型联合配对分析是否完成，待 Baseline 对话提供最新证据。当前开发主线的轻量执行合同不替换这一历史身份。
+- **TomBaseline**：用户已确认 Qwen3、Yi、Mistral 在 V1 概率任务及 V2 集合任务上的正式实验与单模型分析均有完成记录。V2 执行 Source 为 `bacc35135fffa527f60b532ee12e3ca2859398fc`，V1 执行 Source 待同步。本轮未独立复核其 Run Seal 或 Analysis Artifact。三模型联合配对分析尚无完成证据，待 Baseline 对话同步；当前开发 HEAD 与轻量执行合同不替换历史实验身份。
 - **Observer-ToM**：OOF、Final Fit 与独立 Final Evaluation 是不同生命周期。已有实现与历史模型来源不自动证明当前 Checkout 或服务器实例通过真实模型验证。
-- **Observer-DTRS**：D1 提供数据与特征，D2 有条件概率验证结果归档，D3 提供静态决策与受控评价，D4 提供 Capsule / Broker / Resident / Shadow 工程。D2 归档明示其来源核验范围；D3/D4 阶段文档中的受控验收或准备状态不能升级为完整正式实验完成。
-- **Terminal / Probe**：[当前导航](research/phase2-current-status.md)记录用户交接报告已完成 Terminal estimator fit 和 Formal Probe ITT；总览沿用该证据层级，未重新核验正式产物。**Router-v1** 的 hook 与游戏级实验基础设施已实现，正式游戏实验完成仍待相应证据；当前不能统称为完整的最优三支策略规划器。
+- **Observer-DTRS**：D1 研究“观察者有效嫌疑支持命中存活狼队”的事件；D2 具有历史 DEV 正式结果归档，并保留原报告的来源核验范围。用户交接确认 D3 的六损失、45 组规范性成本、风险及 POS/BND/NEG 三域判断已有正式历史研究；对应正式 Artifact／完整结果报告的定位待同步，不能把仓库已有方法草案或受控验收说明直接当作该正式成果的核验证据。D4 已有 Capsule / Broker / Resident / Shadow 工程实现，独立 CAL/TEST 是否完成仍待确认。
+- **Terminal / Probe**：Terminal 的 120 次分配、正式日终参考损失 ITT 有[协议](research/phase2-terminal-estimator-protocol-v1.md)及[Support Review](research/phase2-terminal-estimator-support-review-v1.md)中的归档来源；estimator fit 完成沿用[当前导航](research/phase2-current-status.md)中的用户交接。用户已确认 Probe 的 200 次分配正式策略 ITT 已完成，但优势尚未确证。本轮未独立复核两者正式产物。
+- **Router-v1**：固定 PROBE_THEN_REDIRECT / IMMEDIATE_REDIRECT 策略的 hook 与游戏级实验基础设施已实现，尚无正式完整游戏胜率结果证据；当前没有完整、已验证的动态最优三支规划器。
 - **历史方案与原型**：早期三支方法、旧 Baseline 执行／资格流程和规划消融保留追溯价值。草案、synthetic / CPU 验收和代码集成均不能单独证明真实模型效果或胜率提升。
 
 ## 5. 重要信息与方法边界
 
 1. **公共 PRE、合法私有视角、Gold 分开。** ToM 与 Baseline 的公共输入不包含角色真值、监督或未来事件。游戏角色可使用其实际合法收到的私有观察，但不能从 Role Sidecar 或环境完整角色表补造策略视角。模拟器执行规则所需真值不等于 Agent 可见信息。
 2. **OOF 与 Final Fit 分开。** OOF 用于 Development held-out 评价及相应离线消费者；Final Fit 预测器用于其合同允许的合法 PRE 推断。二者不替换来源，也不把在线策略结果当作 OOF 认知评价。
-3. **V1 概率与 V2 集合分开。** Baseline V1 输出非自身概率分布，V2 直接输出怀疑集合并以集合端点为主。原始空集与全六席集合不能从相同的均匀质量反推；解析、失败处理和补充概率评价分别服从原协议。
-4. **Q、事件概率与 Mapper score 分开。** Q 是 observer-specific 怀疑质量；Observer-DTRS 概率针对其定义的事件；Phase-2 p_tilde 是社会状态 score，没有外部 calibration，不能解释为行动成功概率。
-5. **静态风险与序贯规划分开。** 显式 LossSpec 下的风险比较不证明已识别真实行动损失。Terminal reduced-form risk 不是经典六损失；固定 PROBE→REDIRECT regime 与 Immediate Redirect 的比较也不是全局价值最优规划。
+3. **V1 概率与 V2 集合分开。** Baseline V1 输出非自身概率分布，V2 直接输出怀疑集合并以集合端点为主，二者不是统一输出协议。原始空集与全六席集合不能从相同的均匀质量反推；解析、失败处理和补充概率评价分别服从原协议。
+4. **Q、事件概率、score、条件风险与长期价值分开。** ToM Q 是 observer-specific 怀疑质量；D2 概率针对 D1 的支持命中事件；Mapper p_tilde 是社会状态 score，没有外部 calibration，不能解释为行动成功率。Terminal 条件风险针对预定分配策略下日终参考损失的条件均值；长期策略价值还取决于后续政策和完整游戏终点，不能与前述量互换。
+5. **认知判断、语言行动与序贯规划分开。** D3 的 POS/BND/NEG 是认知判断区域；Phase-2 的 PUSH/PROBE/REDIRECT 是语言行动或策略，二者不能直接一一对应。D3 六损失及规范性成本下的静态风险比较不证明已识别真实语言行动损失。Terminal reduced-form risk 不是经典六损失；固定 PROBE→REDIRECT regime 与 Immediate Redirect 的比较也不是全局价值最优规划。
 6. **语言执行与政策效果分开。** Actor 实现预定行动，Parser / Verifier 验证表达；合规发言不保证投票改变或胜率提高。语言失败及不依从按所属实验保留，不改成成功执行。
 7. **日终后果与完整 GAME_RESULT 分开。** Terminal / Probe 的日终终点不能替代整局策略评价；相同 seed 不保证相同 PRE，现有 Router 合同不提供严格 paired counterfactual replay。
 8. **冻结 Source 与开发 HEAD 分开。** 旧实验继续绑定原始 Source、协议、路径和摘要。后续入口、重构或总览不重签旧 Artifact，也不保证当前分析入口直接兼容旧 Run 格式。
