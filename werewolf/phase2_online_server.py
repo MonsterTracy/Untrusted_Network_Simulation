@@ -585,7 +585,15 @@ class ServerRuntimeFactory:
         return True
 
 
-def execute_server_campaign(args) -> int:
+def execute_server_campaign(args, *, predictor=None, public_pre=None) -> int:
+    if predictor is not None or public_pre is not None:
+        from werewolf.phase2_online_preflight import assess_capsule_q_interface
+        if (not args.preflight_only or args.resume
+                or Path(__file__).resolve().parents[1] != Path(args.repo).resolve(strict=True)):
+            raise ValueError('controlled capsule check requires preflight_only without campaign/resume')
+        result = assess_capsule_q_interface(predictor, public_pre)
+        print(json.dumps({'q_interface': result}, sort_keys=True), flush=True)
+        return 0
     plan, game_plan, config, call_limit, mapper, reference, bound = load_server_inputs(args)
     with ExitStack() as stack:
         # Startup verifies the pinned worker checkout/fit/seal; predict is not called by preflight.

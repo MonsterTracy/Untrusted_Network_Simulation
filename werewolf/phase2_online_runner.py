@@ -56,6 +56,22 @@ PROBE_ARTIFACT_NAME = "paper-phase2-online-probe-pilot-v1"
 PROBE_QUALIFICATION_NAME = "paper-phase2-online-probe-qualification-v3"
 
 
+def predictor_source_digest(predictor):
+    """旧执行保留原 Seal；Capsule 执行绑定完整会话与当前适配器身份。"""
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+    if type(predictor) is CapsuleGameplayPredictor:
+        return predictor.source_digest
+    return getattr(predictor, 'seal_digest', None)
+
+
+def predict_q(predictor, prefix, *, controlled=False):
+    """复用现有 Q 数值合同；受控 Capsule 不可被当成正式在线提供者。"""
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+    if type(predictor) is CapsuleGameplayPredictor:
+        predictor.require_ready(controlled=controlled)
+    return predictor.predict(prefix)
+
+
 def _legal_wolf_team(observation, actor: str) -> frozenset[str]:
     if observation.get("identity") != "Werewolf":
         raise ValueError("Pilot-T requires the current living wolf's legal observation")
@@ -85,7 +101,7 @@ class OnlineTerminalPilotRunnerV1:
         if (not isinstance(plan, (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1,
                                   Phase2RouterPolicyV1))
                 or not callable(getattr(predictor, "predict", None))
-                or not isinstance(getattr(predictor, "seal_digest", None), str)
+                or not isinstance(predictor_source_digest(predictor), str)
                 or not callable(getattr(mapper, "infer", None))
                 or not isinstance(getattr(mapper, "artifact_digest", None), str)
                 or not callable(getattr(backend, "chat_with_metadata", None))
@@ -121,6 +137,9 @@ class OnlineTerminalPilotRunnerV1:
         self._last_public_event_count = 0
 
     def start_game(self, game_id: str) -> None:
+        from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+        if type(self.predictor) is CapsuleGameplayPredictor:
+            self.predictor.require_ready()  # 当前 Scope 不允许启动真实游戏。
         if not game_id or self._active_game_id is not None:
             raise ValueError("Pilot-T game is already active")
         if isinstance(self.plan, Phase2RouterPolicyV1):
@@ -159,10 +178,10 @@ class OnlineTerminalPilotRunnerV1:
         selection = select_candidate(self.plan, context)
         if selection is None:
             return None
-        q = self.predictor.predict(prefix)
+        q = predict_q(self.predictor, prefix)
         opportunity = build_phase2_decision_opportunity(
             context, selection.candidate_j, q, self.mapper,
-            q_source_digest=self.predictor.seal_digest)
+            q_source_digest=predictor_source_digest(self.predictor))
         assignment = self.state.try_assign(
             self.plan, selection, opportunity,
             persist=self.ledger.persist_assignment if self.ledger is not None else None)
@@ -354,8 +373,8 @@ class OnlineTerminalPilotRunnerV1:
                 if candidate not in context.legal_targets:
                     raise ValueError("initial Probe candidate is no longer legal")
             opportunity = build_phase2_decision_opportunity(
-                context, candidate, self.predictor.predict(prefix), self.mapper,
-                q_source_digest=self.predictor.seal_digest)
+                context, candidate, predict_q(self.predictor, prefix), self.mapper,
+                q_source_digest=predictor_source_digest(self.predictor))
             if record is None:
                 assignment = self.state.try_assign(
                     self.plan, selection, opportunity,
@@ -661,7 +680,7 @@ def publish_online_pilot(destination: Path, *, pilot, dataset, preflight,
         "source_provenance": source_provenance,
         "smoke_v3_manifest_digest": smoke_v3_manifest_digest,
         "mapper_artifact_digest": pilot.mapper.artifact_digest,
-        "q_source_digest": pilot.predictor.seal_digest,
+        "q_source_digest": predictor_source_digest(pilot.predictor),
         "reference_artifact_digest": pilot.reference_artifact_digest,
         **({"server_run_provenance": server_run_provenance}
            if server_run_provenance is not None else {}),

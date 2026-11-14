@@ -17,7 +17,7 @@ import socket
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread
 import time
 
-from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.artifact_io import canonical_json_bytes, sha256_bytes, verify_artifact, read_artifact_file
 from werewolf.observer_dtrs.final_tom_service_audit import ServiceJournal, inspect_journal
 from werewolf.observer_dtrs.final_tom_wire import (
     Channel, Limits, ROOT, digest, envelope, frame, hex_id, require, service_source,
@@ -472,3 +472,196 @@ class ResidentOwner:
 
 def body_source(path):
     return sha256_bytes(path.read_bytes())
+
+
+def _qualified_capsule(capsule_path, capsule_digest, qualification_path, qualification_digest, source_path):
+    """核对带外固定的 CPU 回执；只认可模型/服务核心，不继承正式游戏资格。"""
+    from werewolf.observer_dtrs.final_tom_audit import _Pins
+    from werewolf.observer_dtrs.qual_sources import VERSION as SOURCE_VERSION
+    for path in (capsule_path, qualification_path, source_path):
+        require(Path(path).is_absolute() and Path(path).resolve(strict=True) == Path(path), 'canonical input paths required')
+    a = verify_artifact(qualification_path, expected_artifact_type='observer_dtrs_cpu_qualification_v1',
+                        expected_schema_version='observer_dtrs_cpu_qualification_v1')
+    require(a.manifest_digest == qualification_digest, 'qualification digest mismatch')
+    report = json.loads(read_artifact_file(a, 'report.json'))
+    reference = json.loads(read_artifact_file(a, 'reference.json'))
+    identity = report['capsule_identity']
+    require(report['status'] == 'REAL_MODEL_LOCAL_VALIDATED'
+            and report['authorization'] == 'NOT_FORMAL_DEPLOYMENT_NOT_CAL_TEST'
+            and identity['scope'] == report['scope'] == 'PINNED_FINAL_INFERENCE_UNQUALIFIED'
+            and identity['family'] == 'final_tom_capsule'
+            and identity['original_f199_execution'] is False
+            and identity['capsule_digest'] == a.manifest['capsule_digest'] == capsule_digest,
+            'passed real CPU qualification required')
+    capsule = verify_artifact(capsule_path, expected_artifact_type='observer_dtrs_final_tom_inference_capsule',
+                              expected_schema_version='observer_dtrs_final_tom_inference_capsule_v1')
+    pins = _Pins()
+    origin = identity['origin']
+    require(capsule.manifest_digest == capsule_digest and capsule.manifest['origin'] == origin
+            and capsule.manifest['scope'] == identity['scope']
+            and a.manifest['model_origin'] == {n: origin[n] for n in
+                ('source_revision', 'fit_digest', 'seal_digest', 'model_bin_raw_sha256')}
+            and all(origin[k] == v for k, v in {
+                'source_revision': pins.revision, 'fit_digest': pins.fit, 'terminal_digest': pins.terminal,
+                'seal_digest': pins.seal, 'model_container_descriptor_sha256': pins.model_descriptor}.items()),
+            'capsule model origin mismatch')
+    comparison = report['comparison']
+    require(comparison['atol'] == comparison['rtol'] == 0
+            and comparison['inference_state'] == {
+                'parameters_frozen': True, 'model_training': False, 'forward_inference_mode': True}
+            and reference['runtime'] == comparison['reference_runtime']
+            and reference['runtime']['parameters_frozen'] is True
+            and reference['runtime']['model_training'] is False
+            and reference['capsule_digest'] == capsule_digest
+            and reference['source_revision'] == origin['source_revision']
+            and reference['implementation_digest'] == origin['implementation_digest']
+            and reference['inputs_raw_sha256'] == report['inputs_raw_sha256'] == a.manifest['inputs_raw_sha256']
+            and reference['reference_kind'] == comparison['reference_kind'] ==
+                'PINNED_ORIGINAL_GRAPH_CPU_SAME_CAPSULE_NOT_SEALED_LIFECYCLE'
+            and reference['original_sealed_predictor'] == reference['full_semantic_recovery'] == 'NOT_RUN'
+            and report['cases'] and all(c['max_abs_log_q_error'] == c['max_abs_Q_error'] == 0
+                and c['status'] == 'PASS_EXACT_CPU_GRAPH_ENCODING_LOGQ_Q_AND_REPEAT' for c in report['cases'])
+            and report['resident']['one_load_one_PID'] is True and report['resident']['exit_confirmed'] is True
+            and report['resident']['submitted'] == report['resident']['terminal'] == len(report['cases']),
+            'qualification numerical/lifecycle checks not passed')
+    snapshot = verify_artifact(source_path, expected_artifact_type=SOURCE_VERSION, expected_schema_version=SOURCE_VERSION)
+    saved = json.loads(read_artifact_file(snapshot, 'snapshot.json'))
+    require(snapshot.manifest_digest == a.manifest['source_snapshot_digest'] == report['source_snapshot_digest']
+            and saved['base_head'] == a.manifest['source_commit'] == report['base_head'],
+            'qualification source identity mismatch')
+    loader = identity['loader_source']['loader']
+    spec = json.loads(read_artifact_file(capsule, 'inference.json'))
+    require(spec['loader_source'] == loader and digest(loader['file_sha256']) == loader['implementation_digest']
+            and all(body_source(ROOT/n) == sha == saved['inventory'][n]['sha256']
+                    for n, sha in loader['file_sha256'].items())
+            and all(sha == saved['inventory'][n]['sha256'] for n, sha in service_source()['sha256'].items()),
+            'qualified loader/service core changed')
+    runtime = identity['runtime']
+    require(runtime == a.manifest['runtime'] and runtime['device'] == 'cpu' and runtime['dtype'] == 'float32'
+            and all(type(runtime[n]) is int and 1 <= runtime[n] <= 64
+                    and runtime[n] == reference['runtime'][n] for n in ('torch_threads', 'torch_interop_threads')),
+            'qualified CPU runtime mismatch')
+    return report
+
+
+class CapsuleGameplayPredictor:
+    """复用 Owner/Broker 的同步 Q 接口；当前仅受控 CPU 预验，禁止正式游戏。"""
+
+    def __init__(self, capsule_path, *, capsule_digest, qualification_path, qualification_digest,
+                 qualification_source, journal_root, limits=Limits()):
+        for value in (capsule_digest, qualification_digest):
+            hex_id(value)
+        report = _qualified_capsule(capsule_path, capsule_digest, qualification_path,
+                                    qualification_digest, qualification_source)
+        identity = report['capsule_identity']
+        self._qualification = canonical_json_bytes({
+            'manifest_digest': qualification_digest, 'source_commit': report['base_head'],
+            'source_snapshot_digest': report['source_snapshot_digest']})
+        self._owner = ResidentOwner(capsule_path, trust=ServiceTrust(capsule_digest, identity['scope'],
+            identity['loader_source']['loader']['implementation_digest'], digest(identity['runtime'])),
+            journal_root=journal_root, limits=limits, cpu_threads=identity['runtime']['torch_threads'],
+            interop_threads=identity['runtime']['torch_interop_threads'])
+        self._broker = self._lease = None
+        self._identity_bytes = None
+        self._last_prediction_bytes = None
+        self._predict_lock = Lock()
+        self._closed = False
+        self._close_status = None
+
+    def start(self):
+        from werewolf.observer_dtrs.final_tom_broker import ResidentBroker
+        require(not self._closed and self._identity_bytes is None, 'explicit single client start required')
+        try:
+            require(self._owner.start(), 'capsule resident start failed')
+            session = self._owner.session
+            require(session['transport_scope'] == 'CAPSULE_CPU_QUALIFICATION_ONLY', 'controlled CPU scope required')
+            self._broker = ResidentBroker(self._owner)
+            self._lease = self._broker.lease()
+            self._identity_bytes = canonical_json_bytes({
+                'family': 'final_tom_capsule', 'scope': session['transport_scope'],
+                'model_origin': session['capsule']['origin'],
+                'qualification': json.loads(self._qualification), 'execution': session,
+                'adapter_sha256': body_source(Path(__file__)),
+                'broker_sha256': body_source(ROOT/'werewolf/observer_dtrs/final_tom_broker.py')})
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def identity(self):
+        require(self._identity_bytes is not None, 'client has not completed ready handshake')
+        return json.loads(self._identity_bytes)
+
+    @property
+    def source_digest(self):
+        return digest(self.identity)
+
+    def require_ready(self, *, controlled=False):
+        require(controlled is True, 'CAPSULE_ONLINE_SCOPE_NOT_QUALIFIED')
+        require(not self._closed and self._identity_bytes is not None
+                and self._owner.state == 'IDLE' and not self._owner.audit_unavailable
+                and not self._owner._tainted and self._owner._process.poll() is None
+                and self._owner.session == self.identity['execution']
+                and body_source(Path(__file__)) == self.identity['adapter_sha256']
+                and body_source(ROOT/'werewolf/observer_dtrs/final_tom_broker.py') == self.identity['broker_sha256']
+                and self._lease.binding['session_digest'] == digest(self._owner.session),
+                'qualified capsule client is not ready')
+
+    def predict(self, prefix):
+        with self._predict_lock:
+            self.require_ready(controlled=True)
+            plan = validate_final_pre(prefix, derived_capacity(1024))
+            request_id = digest({'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
+                                 'prefix_digest': prefix.prefix_digest})
+            try:
+                admission, result = self._lease.predict(prefix, request_id=request_id,
+                                                        timeout_s=self._owner.limits.query_s)
+            except BaseException:
+                self.close()
+                raise
+            if admission in ('DUPLICATE', 'DUPLICATE_PRE'):
+                raise ValueError('duplicate PRE; no replay or new inference')
+            try:
+                require(admission == 'SUBMITTED' and result is not None and result.status == 'SUCCEEDED',
+                        'capsule request failed; no retry or fallback')
+                p = result.record['prediction']
+                require(p['plan_digest'] == plan.plan_digest and p['token_count'] == plan.token_count
+                        and p['capsule_identity'] == self.identity['execution']['capsule'], 'prediction plan/source mismatch')
+                q = result.matrix.values
+                self._last_prediction_bytes = canonical_json_bytes({
+                    'request_id': request_id, 'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
+                    'prefix_digest': prefix.prefix_digest, 'plan_digest': plan.plan_digest,
+                    'Q_digest': digest(q), 'q_source_digest': self.source_digest,
+                    'owner_journal_head': self._owner.journal.head})
+                return q
+            except BaseException:
+                self.close()
+                raise
+
+    @property
+    def last_prediction(self):
+        require(self._last_prediction_bytes is not None, 'no completed client prediction')
+        return json.loads(self._last_prediction_bytes)
+
+    def close(self):
+        if self._closed:
+            require(self._close_status == 'CLOSED', 'capsule client cleanup unconfirmed')
+            return self._close_status
+        self._closed = True
+        try:
+            if self._lease is not None:
+                self._lease.close()
+            if self._broker is not None:
+                self._broker.close()
+        finally:
+            status = self._owner.close()
+        require(status == 'CLOSED' and self._owner.cleanup['pid_exit_confirmed'], 'capsule client cleanup unconfirmed')
+        self._close_status = status
+        return status
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, *_errors):
+        self.close()

@@ -295,7 +295,15 @@ def server_inputs(plan, repo):
     return paths, config, limit, mapper, reference
 
 
-def execute_server(plan, *, repo, work, destination, preflight_only=False, runtime_check_only=False, allow_gpu=False, resume=False):
+def execute_server(plan, *, repo, work, destination, preflight_only=False, runtime_check_only=False, allow_gpu=False, resume=False,
+                   predictor=None, public_pre=None):
+    if predictor is not None or public_pre is not None:
+        # 显式单 PRE 接口检查，先于游戏、语言、Ledger 构建；不冒充完整预验。
+        from werewolf.phase2_online_preflight import assess_capsule_q_interface
+        if (not runtime_check_only or preflight_only or allow_gpu or resume
+                or Path(__file__).resolve().parents[1] != safe_path(repo)):
+            raise ValueError('controlled capsule check requires runtime_check_only without gameplay/GPU/resume')
+        return assess_capsule_q_interface(predictor, public_pre)
     if preflight_only and (runtime_check_only or allow_gpu):
         raise ValueError("static preflight cannot request GPU/runtime check")
     if not preflight_only and allow_gpu is not True:

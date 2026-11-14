@@ -76,7 +76,7 @@ def _setup(tmp_path, monkeypatch, purpose="qualification"):
     game_path.write_bytes(canonical_json_bytes(game_plan.to_record()))
     mapper_artifact = publish_artifact(tmp_path / "mapper", manifest_fields={
         "artifact_type": "phase2_full_development_oof_mapper", "schema_version": FINAL_VERSION},
-        files={"fixture.json": b"{}"})
+        files={"model.json": b"{}"})
     mapper = Mapper()
     mapper.artifact_digest = mapper_artifact.manifest_digest
     mapper.model_digest = "f" * 64
@@ -86,6 +86,12 @@ def _setup(tmp_path, monkeypatch, purpose="qualification"):
         return mapper
     monkeypatch.setattr(server, "load_runtime_mapper", load_mapper)
     monkeypatch.setattr(mapper_module, "load_runtime_mapper", load_mapper)
+    # 同一个人工 Mapper 同时覆盖独立读取和同次已核验 payload 的加载接口。
+    def load_verified_mapper(artifact, payload, *, expected_manifest_digest):
+        assert payload == b"{}"
+        assert artifact.manifest_digest == expected_manifest_digest
+        return load_mapper(artifact.path, expected_manifest_digest=expected_manifest_digest)
+    monkeypatch.setattr(mapper_module, "_load_verified_mapper", load_verified_mapper)
     monkeypatch.setattr(server, "build_development_layer", lambda *_: SimpleNamespace(values=values()))
     cases = [{"game_id": f"g{i}", "boundary_id": f"b{i}"} for i in range(58)]
     selection_digest = sha256_bytes(canonical_json_bytes(cases))

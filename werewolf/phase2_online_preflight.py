@@ -200,9 +200,13 @@ def _verify_frozen_artifacts(requirements: tuple[FrozenArtifactRequirement, ...]
     return verified
 
 
-def _frozen_q_runtime_ready(predictor) -> bool:
-    """Only the client that completed the pinned worker handshake is admissible."""
+def _frozen_q_runtime_ready(predictor, *, controlled=False) -> bool:
+    """仅认可完成身份握手的明确实现；Capsule 目前只可用于受控预验。"""
     try:
+        from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+        if type(predictor) is CapsuleGameplayPredictor:
+            predictor.require_ready(controlled=controlled)
+            return True
         from scripts.qwen3_gameplay_predictor import (
             FIT_DIGEST, SEAL_DIGEST, Qwen3GameplayPredictorClient,
         )
@@ -211,8 +215,28 @@ def _frozen_q_runtime_ready(predictor) -> bool:
                 and predictor.seal_digest == SEAL_DIGEST
                 and isinstance(predictor._process, subprocess.Popen)
                 and predictor._process.poll() is None)
-    except (ImportError, AttributeError, OSError):
+    except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError):
         return False
+
+
+def assess_capsule_q_interface(predictor, prefix) -> dict:
+    """仅检验受控公共 PRE 的 Q 接口，不声称整套游戏/策略预验通过。"""
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+    from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
+    if type(predictor) is not CapsuleGameplayPredictor or not _frozen_q_runtime_ready(predictor, controlled=True):
+        raise ValueError('qualified controlled capsule client required')
+    from werewolf.phase2_online_runner import predict_q, predictor_source_digest
+    plan = validate_final_pre(prefix, derived_capacity(1024))
+    q = predict_q(predictor, prefix, controlled=True)
+    return {'status': 'CONTROLLED_Q_INTERFACE_PASS', 'scope': predictor.identity['scope'],
+            'online_gameplay_ready': False, 'full_campaign_preflight_passed': False,
+            'blockers': ['CAPSULE_ONLINE_SCOPE_NOT_QUALIFIED'],
+            'pre': {'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
+                    'prefix_digest': prefix.prefix_digest, 'plan_digest': plan.plan_digest,
+                    'token_count': plan.token_count},
+            'Q': q, 'q_source_digest': predictor_source_digest(predictor),
+            'prediction_evidence': predictor.last_prediction,
+            'q_execution_identity': predictor.identity}
 
 
 def _smoke_v3_gate(path: Path | None, digest: str | None,
@@ -378,6 +402,9 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
         blockers.append("FINAL_MAPPER_LINEAGE_NOT_VERIFIED")
     if not q_ready:
         blockers.append("FROZEN_Q_RUNTIME_UNAVAILABLE")
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+    if type(predictor) is CapsuleGameplayPredictor:
+        blockers.append("CAPSULE_ONLINE_SCOPE_NOT_QUALIFIED")
     if not smoke_passed:
         blockers.append("SMOKE_V3_GATE_NOT_VERIFIED")
     if not plan_frozen:

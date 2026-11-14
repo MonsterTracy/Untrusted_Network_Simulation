@@ -66,8 +66,11 @@ class SpawnLease:
                 result = ResidentResult(canonical_json_bytes(body['result']))
                 if result.status == 'SUCCEEDED':
                     p = result.record['prediction']
+                    from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
+                    plan = validate_final_pre(prefix, derived_capacity(1024))
                     require(p['game_id'] == prefix.game_id and p['boundary_id'] == prefix.boundary_id
                             and p['prefix_digest'] == prefix.prefix_digest
+                            and p['plan_digest'] == plan.plan_digest and p['token_count'] == plan.token_count
                             and digest(result.record['session']) == binding['session_digest'],
                             'broker result PRE/source mismatch')
                     result.matrix  # original probability validator; no conversion/renormalization
