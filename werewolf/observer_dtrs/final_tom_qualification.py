@@ -67,10 +67,17 @@ def compare_reference(model, cases, reference, *, inputs_sha256):
             'reference origin/scope mismatch')
     runtime=reference['runtime'];observed=model.identity['runtime']
     require(type(runtime) is dict and set(runtime)=={'python','packages','device','dtype','attention_backend',
-                'torch_threads','torch_interop_threads'}
-            and all(runtime[n]==observed[n] for n in ('python','packages','device','dtype','attention_backend','torch_threads'))
-            and type(runtime['torch_interop_threads']) is int and runtime['torch_interop_threads']>=1,
+                'torch_threads','torch_interop_threads','parameters_frozen','model_training'}
+            and all(runtime[n]==observed[n] for n in ('python','packages','device','dtype','attention_backend',
+                                                     'torch_threads','torch_interop_threads'))
+            and type(runtime['torch_interop_threads']) is int and runtime['torch_interop_threads']>=1
+            and runtime['torch_interop_threads']==torch.get_num_interop_threads(),
             'reference CPU runtime mismatch')
+    # 即使处于 inference_mode，参数梯度标记仍会改变 CPU matmul 的算子路径。
+    require(runtime['parameters_frozen'] is True and runtime['model_training'] is False
+            and model._model.training is False
+            and all(not p.requires_grad for p in model._model.parameters()),
+            'reference/capsule inference state mismatch')
     require(reference['model_tensors'] == {k:_tensor(v) for k,v in model._model.state_dict().items()},
             'restored tensor mismatch')
     require(reference['temporal'] == {k:sha256_bytes(getattr(model._model.temporal,k).tobytes())
@@ -95,10 +102,15 @@ def compare_reference(model, cases, reference, *, inputs_sha256):
         prediction = model.predict(prefix)
         require([list(row) for row in prediction.probabilities] == r['q'], 'Q conversion mismatch (atol=rtol=0)')
         require(model.predict(prefix).probabilities == prediction.probabilities, 'non-deterministic repeated PRE')
+        log_q_error=max(abs(a-b) for actual,expected in zip(nonself,r['log_q_nonself'])
+                        for a,b in zip(actual,expected))
+        q_error=max(abs(a-b) for actual,expected in zip(prediction.probabilities,r['q'])
+                    for a,b in zip(actual,expected))
         results.append({'case_id':case_id,'game_id':prefix.game_id,'boundary_id':prefix.boundary_id,
             'prefix_digest':prefix.prefix_digest,'plan_digest':plan.plan_digest,'token_count':plan.token_count,
             'phase':prefix.public_temporal_state.phase.value,'alive_players':len(prefix.alive_observer_ids),
             'input_tensor_digest':digest(r['inputs']),'Q_digest':digest(r['q']),
+            'max_abs_log_q_error':log_q_error,'max_abs_Q_error':q_error,
             'status':'PASS_EXACT_CPU_GRAPH_ENCODING_LOGQ_Q_AND_REPEAT'})
     return results
 
@@ -111,7 +123,8 @@ def capture_reference(checkout, model, inputs, inputs_sha256, *, deadline_s=120)
         '--implementation-digest',origin['implementation_digest'],
         '--capsule',str(inputs['capsule_path']),'--capsule-digest',model.identity['capsule_digest'],
         '--inputs',str(inputs['pre_path']),'--inputs-sha256',inputs_sha256,
-        '--threads',str(model.identity['runtime']['torch_threads'])]
+        '--threads',str(model.identity['runtime']['torch_threads']),
+        '--interop-threads',str(model.identity['runtime']['torch_interop_threads'])]
     env={k:v for k,v in os.environ.items() if k not in ('PYTHONPATH','PYTHONHOME') and not k.startswith('GIT_')}
     env.update(PYTHONDONTWRITEBYTECODE='1',TOKENIZERS_PARALLELISM='false')
     result=subprocess.run(command,env=env,cwd=checkout,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=deadline_s)
@@ -218,6 +231,9 @@ def _qualify_cpu(*, capsule_path, capsule_digest, source_path, source_digest, pr
             'capsule_identity':identity,'inputs_raw_sha256':pre_sha256,'cases':numerical,
             'provenance':provenance,
             'comparison':{'atol':0,'rtol':0,'reference_kind':reference['reference_kind'],
+                          'scope':'ORIGINAL_GRAPH_CPU_WITH_UNIFORM_FROZEN_PARAMETERS_NOT_HISTORICAL_LIFECYCLE',
+                          'inference_state':{'parameters_frozen':True,'model_training':False,
+                                             'forward_inference_mode':True},
                           'reference_runtime':reference['runtime']},
             'resident':{'journal_head':owner.journal.head,'submitted':audit['submitted'],
                 'terminal':audit['terminal'],'one_load_one_PID':True,'exit_confirmed':True,
@@ -230,13 +246,20 @@ def _qualify_cpu(*, capsule_path, capsule_digest, source_path, source_digest, pr
             'not_established':['original_sealed_predictor_initialization','full_semantic_recovery',
                 'OS_ACL_sandbox','process_tree_and_GPU_release','real_fault_campaign',
                 'formal_CAL_package','Shadow_game_hook_adapter','CAL_TEST_authorization']}
-        return publish_artifact(output/'complete',manifest_fields={'artifact_type':VERSION,'schema_version':VERSION},
+        return publish_artifact(output/'complete',manifest_fields={
+            'artifact_type':VERSION,'schema_version':VERSION,'source_commit':snapshot['base_head'],
+            'source_snapshot_digest':source_digest,'capsule_digest':capsule_digest,
+            'model_origin':{n:identity['origin'][n] for n in
+                            ('source_revision','fit_digest','seal_digest','model_bin_raw_sha256')},
+            'inputs_raw_sha256':pre_sha256,'runtime':identity['runtime'],
+            'comparison_inference_state':report['comparison']['inference_state']},
             files={'report.json':canonical_json_bytes(report),'reference.json':canonical_json_bytes(reference)})
     except Exception as error:
         if owner is not None: owner.close()
         checks={m:code for m,code in (
             ('reference origin/scope mismatch','REFERENCE_ORIGIN'),
             ('reference CPU runtime mismatch','REFERENCE_RUNTIME'),
+            ('reference/capsule inference state mismatch','INFERENCE_STATE'),
             ('restored tensor mismatch','MODEL_RESTORE'),('Temporal value mismatch','TEMPORAL'),
             ('reference coverage','REFERENCE_COVERAGE'),('reference case identity','REFERENCE_IDENTITY'),
             ('reference PRE/plan mismatch','PRE_PLAN'),('input encoding mismatch','INPUT_ENCODING'),

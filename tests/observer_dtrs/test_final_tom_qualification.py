@@ -45,7 +45,9 @@ def reference(model,cases,sha):
         'reference_kind':'PINNED_ORIGINAL_GRAPH_CPU_SAME_CAPSULE_NOT_SEALED_LIFECYCLE',
         'source_revision':origin['source_revision'],'implementation_digest':origin['implementation_digest'],
         'runtime':{k:model.identity['runtime'][k] for k in ('python','packages','device','dtype',
-                   'attention_backend','torch_threads','torch_interop_threads')},
+                   'attention_backend','torch_threads','torch_interop_threads')}
+                  | {'parameters_frozen':all(not p.requires_grad for p in model._model.parameters()),
+                     'model_training':model._model.training},
         'capsule_digest':model.identity['capsule_digest'],'inputs_raw_sha256':sha,
         'model_tensors':{k:qual._tensor(v) for k,v in model._model.state_dict().items()},
         'temporal':{k:sha256_bytes(getattr(model._model.temporal,k).tobytes()) for k in ('day','phase')},
@@ -110,6 +112,23 @@ def test_exact_comparison_stages(artificial,tmp_path,change):
         with pytest.raises(ValueError):qual.compare_reference(model,cases,r,inputs_sha256=sha)
 
 
+@pytest.mark.parametrize('change', ['reference_unfrozen', 'reference_training', 'missing_state',
+                                  'capsule_unfrozen', 'capsule_training', 'interop', 'interop_bool'])
+def test_inference_state_and_interop_mismatch_rejected_before_forward(artificial,tmp_path,monkeypatch,change):
+    model=load(artificial['capsule']);path,sha=packet(tmp_path/'pre.json')
+    _,cases=qual.read_pres(path,sha);r=reference(model,cases,sha)
+    if change=='reference_unfrozen':r['runtime']['parameters_frozen']=False
+    elif change=='reference_training':r['runtime']['model_training']=True
+    elif change=='missing_state':r['runtime'].pop('parameters_frozen')
+    elif change=='capsule_unfrozen':model._model.query_attention.in_proj_weight.requires_grad_(True)
+    elif change=='capsule_training':model._model.train()
+    elif change=='interop':r['runtime']['torch_interop_threads']+=1
+    else:r['runtime']['torch_interop_threads']=True
+    monkeypatch.setattr(model._model,'forward',lambda **kw:pytest.fail('forward after inference state mismatch'))
+    with pytest.raises(ValueError,match='runtime mismatch|inference state mismatch'):
+        qual.compare_reference(model,cases,r,inputs_sha256=sha)
+
+
 @pytest.fixture(scope='module')
 def original_fixture(tmp_path_factory,artificial):
     root=tmp_path_factory.mktemp('isolated-historical-graph')
@@ -122,6 +141,18 @@ def original_fixture(tmp_path_factory,artificial):
     a=republish(artificial['capsule'],root.parent/(root.name+'-capsule'),
         manifest_change=lambda m:m['origin'].update({k:identity[k] for k in ('source_revision','implementation_digest')}))
     return root,a
+
+
+def test_reference_export_freezes_parameters_and_matches_interop(original_fixture,tmp_path):
+    root,a=original_fixture;model=load(a);path,sha=packet(tmp_path/'inputs/pre.json')
+    _,cases=qual.read_pres(path,sha)
+    r=qual.capture_reference(root,model,{'capsule_path':a.path,'pre_path':path},sha)
+    assert r['runtime']['parameters_frozen'] is True
+    assert r['runtime']['model_training'] is False
+    assert r['runtime']['torch_interop_threads']==model.identity['runtime']['torch_interop_threads']
+    rows=qual.compare_reference(model,cases,r,inputs_sha256=sha)
+    assert all(row['max_abs_log_q_error']==row['max_abs_Q_error']==0 for row in rows)
+    assert r['original_sealed_predictor']==r['full_semantic_recovery']=='NOT_RUN'
 
 
 def test_isolated_original_graph_subprocess_and_full_controlled_qual(original_fixture,tmp_path,monkeypatch):
@@ -149,6 +180,11 @@ def test_isolated_original_graph_subprocess_and_full_controlled_qual(original_fi
     report=json.loads(read_artifact_file(result,'report.json'))
     assert report['status']=='QUAL_PREPARATION_ONLY'
     assert report['resident']['one_load_one_PID'] and report['resident']['exit_confirmed']
+    assert report['comparison']['inference_state']=={
+        'parameters_frozen':True,'model_training':False,'forward_inference_mode':True}
+    assert result.manifest['source_commit']==report['base_head']
+    assert result.manifest['capsule_digest']==a.manifest_digest
+    assert result.manifest['runtime']==report['capsule_identity']['runtime']
     assert calls == [sources.digest({'case_id':case_id}) for case_id,_ in cases for _ in range(2)]
     assert len(report['cases'])==3 and 'formal_CAL_package' in report['not_established']
 

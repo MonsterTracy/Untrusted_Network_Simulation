@@ -33,9 +33,11 @@ def main():
     p.add_argument('--inputs', required=True, type=Path)
     p.add_argument('--inputs-sha256', required=True)
     p.add_argument('--threads', required=True, type=int)
+    p.add_argument('--interop-threads', type=int, default=1)
     a = p.parse_args()
     root = a.checkout.absolute()
-    require(root.resolve(strict=True) == root and 1 <= a.threads <= 64)
+    require(root.resolve(strict=True) == root and 1 <= a.threads <= 64
+            and 1 <= a.interop_threads <= 64)
     env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
     env['GIT_OPTIONAL_LOCKS'] = '0'
     def git(*args):
@@ -63,7 +65,7 @@ def main():
     from werewolf.tom.temporal import TemporalCodeProvider
     from werewolf.artifact_io.tensor_state import decode_tensor_container
     from werewolf.canonical_collection.game_bundle import _prefix_from_record
-    torch.set_num_threads(a.threads);torch.set_num_interop_threads(1)
+    torch.set_num_threads(a.threads);torch.set_num_interop_threads(a.interop_threads)
     artifact = verify_artifact(a.capsule,
         expected_artifact_type='observer_dtrs_final_tom_inference_capsule',
         expected_schema_version='observer_dtrs_final_tom_inference_capsule_v1')
@@ -74,6 +76,8 @@ def main():
     model = BackboneToM('qwen3',temporal,study_seed=0,fold=0).eval()
     restore_model_tensors(model,decode_tensor_container(spec['model_container'],
         read_artifact_file(artifact,'model.bin'),payload_path='model.bin'))
+    # 统一冻结推理状态；这是原图 CPU 对照，不是原 Sealed 生命周期重放。
+    model.requires_grad_(False).eval()
     require(a.inputs.stat().st_size <= 16*1024*1024)
     raw = a.inputs.read_bytes();require(sha256_bytes(raw) == a.inputs_sha256)
     packet = json.loads(raw)
@@ -104,7 +108,9 @@ def main():
         'runtime':{'python':platform.python_version(),
             'packages':{n:metadata.version(n) for n in ('numpy','torch','transformers')},
             'device':'cpu','dtype':'float32','attention_backend':'eager',
-            'torch_threads':torch.get_num_threads(),'torch_interop_threads':torch.get_num_interop_threads()},
+            'torch_threads':torch.get_num_threads(),'torch_interop_threads':torch.get_num_interop_threads(),
+            'parameters_frozen':all(not p.requires_grad for p in model.parameters()),
+            'model_training':model.training},
         'capsule_digest':a.capsule_digest,'inputs_raw_sha256':a.inputs_sha256,
         'model_tensors':{k:tensor(v) for k,v in model.state_dict().items()},
         'temporal':{k:sha256_bytes(getattr(temporal,k).tobytes()) for k in ('day','phase')},
