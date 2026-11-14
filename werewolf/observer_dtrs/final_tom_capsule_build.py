@@ -28,6 +28,16 @@ REUSED_AUDIT_READERS = (
     'configs/paper/tom-backbone-study-v1.json',
 )
 
+# 仅接受已核对的 SHA-256 校验函数原样抽取；每项同时绑定审计旧字节与当前新字节。
+READER_REFACTOR_SHA256 = {
+    'werewolf/artifact_io/canonical.py': (
+        '5063a6f47906fa7beb3183abc8d85faaa277d42173402e472d05d879b9a0f3f6',
+        'a1ac5a7a755f93d832be6df1d11d3c25e9073b6d6d48606a13676c900245ecd8'),
+    'werewolf/canonical_collection/pre.py': (
+        '36c9e0330a6507acea9149af15eb09627720e63ac863af6d19dee48338446812',
+        '51474cd2deeb9ba58653ab074f2bda0f5002e96bdc0953457cbd62d13cf7a498'),
+}
+
 
 def _audit_packet(path, expected_raw_sha256, pins, *, controlled):
     sha(expected_raw_sha256)
@@ -89,10 +99,13 @@ def compile_capsule(fit_path, destination, *, audit_path, expected_audit_raw_sha
     pins = _pins or audit._Pins()
     report = _audit_packet(audit_path, expected_audit_raw_sha256, pins, controlled=_pins is not None)
     c = report['checks']
+    actual_readers = {n: sha256_bytes((ROOT/n).read_bytes()) for n in REUSED_AUDIT_READERS}
     if _pins is None:
         readers = c['reader_sources']['sha256']
         require(set(readers) == set(REUSED_AUDIT_READERS)
-                and all(sha256_bytes((ROOT/n).read_bytes()) == readers[n] for n in REUSED_AUDIT_READERS),
+                and all(readers[n] == actual_readers[n]
+                        or READER_REFACTOR_SHA256.get(n) == (readers[n], actual_readers[n])
+                        for n in REUSED_AUDIT_READERS),
                 'reused historical readers differ from audited bytes')
     fit = audit._envelope(fit_path, 'qwen3_all_development_final', audit.FIT_VERSION,
                           'qwen3_final_manifest.json')
@@ -151,6 +164,7 @@ def compile_capsule(fit_path, destination, *, audit_path, expected_audit_raw_sha
     compiler = {'source': source_observation(), 'runtime': runtime_identity(torch.device('cpu')),
                 'module_raw_sha256': sha256_bytes(Path(__file__).read_bytes()),
                 'audit_reader_raw_sha256': sha256_bytes(Path(audit.__file__).read_bytes()),
+                'reader_sources_sha256': actual_readers,
                 'forward': 'NOT_RUN', 'scope': 'INFERENCE_ONLY_EXPORT_NOT_QUALIFICATION'}
     return publish_artifact(output, manifest_fields={
         'artifact_type': TYPE, 'schema_version': VERSION, 'scope': scope,

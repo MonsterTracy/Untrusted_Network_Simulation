@@ -18,6 +18,7 @@ from werewolf.artifact_io.tensor_state import TensorValue, encode_tensor_contain
 from werewolf.artifact_io.tensor_state import decode_tensor_container
 from werewolf.observer_dtrs import final_tom_audit as audit
 from werewolf.observer_dtrs import final_tom_capsule as capsule
+from werewolf.observer_dtrs import final_tom_capsule_build as capsule_build
 from werewolf.observer_dtrs.final_tom_capsule_build import compile_capsule
 from werewolf.observer_dtrs.final_tom_graph import InferenceGraph, graph_identity
 from werewolf.tom.backbone_model import BackboneToM, graph_identity as original_graph_identity
@@ -31,6 +32,88 @@ from tests.observer_dtrs.test_final_tom_audit import git
 def contents(root):
     return {str(p.relative_to(root)): (sha256_bytes(p.read_bytes()), p.stat().st_mode)
             for p in root.rglob('*') if p.is_file()}
+
+
+@pytest.fixture
+def audited_readers(tmp_path, monkeypatch):
+    """隔离真实 Reader 字节，只执行编译入口至 Fit 读取前。"""
+    root = tmp_path/'readers'
+    hashes = {}
+    for name in capsule_build.REUSED_AUDIT_READERS:
+        raw = (capsule.ROOT/name).read_bytes()
+        target = root/name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        hashes[name] = sha256_bytes(raw)
+    hashes.update({
+        'werewolf/artifact_io/canonical.py': '5063a6f47906fa7beb3183abc8d85faaa277d42173402e472d05d879b9a0f3f6',
+        'werewolf/canonical_collection/pre.py': '36c9e0330a6507acea9149af15eb09627720e63ac863af6d19dee48338446812',
+    })
+    monkeypatch.setattr(capsule_build, 'ROOT', root)
+    monkeypatch.setattr(capsule_build, '_audit_packet', lambda *a, **kw: {
+        'checks': {'reader_sources': {'sha256': hashes}}})
+    def reached_fit(*a, **kw):
+        raise RuntimeError('reader gate passed; stop before fit')
+    monkeypatch.setattr(audit, '_envelope', reached_fit)
+    return root, hashes
+
+
+@pytest.mark.parametrize('already_current', [(), ('canonical',), ('pre',), ('canonical', 'pre')])
+def test_compiler_accepts_reviewed_reader_refactor(audited_readers, tmp_path, already_current):
+    root, hashes = audited_readers
+    paths = {'canonical': 'werewolf/artifact_io/canonical.py', 'pre': 'werewolf/canonical_collection/pre.py'}
+    for name in already_current:
+        path = paths[name]
+        hashes[path] = sha256_bytes((root/path).read_bytes())
+    with pytest.raises(RuntimeError, match='reader gate passed'):
+        compile_capsule(tmp_path/'fit', tmp_path/'output', audit_path=tmp_path/'audit',
+                        expected_audit_raw_sha256='a'*64)
+    assert not (tmp_path/'output').exists()
+
+
+@pytest.mark.parametrize('name', capsule_build.REUSED_AUDIT_READERS)
+def test_compiler_rejects_unreviewed_reader_bytes(audited_readers, tmp_path, name):
+    root, _ = audited_readers
+    path = root/name
+    path.write_bytes(path.read_bytes()+b'\n# unreviewed change\n')
+    with pytest.raises(ValueError, match='reused historical readers'):
+        compile_capsule(tmp_path/'fit', tmp_path/'output', audit_path=tmp_path/'audit',
+                        expected_audit_raw_sha256='a'*64)
+    assert not (tmp_path/'output').exists()
+
+
+@pytest.mark.parametrize('change', ['missing', 'extra', 'wrong_canonical_origin', 'wrong_pre_origin'])
+def test_compiler_rejects_changed_reader_audit(audited_readers, tmp_path, change):
+    _, hashes = audited_readers
+    if change == 'missing':
+        hashes.pop('werewolf/artifact_io/canonical.py')
+    elif change == 'extra':
+        hashes['unreviewed.py'] = 'a'*64
+    else:
+        name = ('werewolf/artifact_io/canonical.py' if change == 'wrong_canonical_origin'
+                else 'werewolf/canonical_collection/pre.py')
+        hashes[name] = 'a'*64
+    with pytest.raises(ValueError, match='reused historical readers'):
+        compile_capsule(tmp_path/'fit', tmp_path/'output', audit_path=tmp_path/'audit',
+                        expected_audit_raw_sha256='a'*64)
+
+
+@pytest.mark.parametrize('value', [None, False, 0, 0.0, b'a'*64, [], {}, '', 'a'*63,
+                                 'a'*65, 'A'*64, 'g'*64, 'é'*64, 'a'*63+'\n'])
+def test_shared_sha256_retains_historical_rejections(value):
+    from werewolf.canonical_collection.pre import _sha256
+    from werewolf.artifact_io.canonical import require_sha256
+    assert _sha256 is require_sha256
+    with pytest.raises(ValueError, match='^reader digest must be a lowercase SHA-256 digest$'):
+        _sha256(value, 'reader digest')
+
+
+def test_shared_sha256_preserves_string_subclass_identity():
+    from werewolf.canonical_collection.pre import _sha256
+    class DigestText(str):
+        pass
+    for value in ('0'*64, '0123456789abcdef'*4, DigestText('f'*64)):
+        assert _sha256(value, 'digest') is value
 
 
 @pytest.fixture(scope='module')
@@ -191,6 +274,8 @@ def test_compile_whitelist_and_restricted_payloads_never_open(artificial, tmp_pa
         deployed.predict(prefix_for())
     assert contents(artificial['root']) == before
     assert set(a.manifest['file_table']) == capsule.FILES
+    assert a.manifest['compiler']['reader_sources_sha256'] == {
+        name: sha256_bytes((capsule.ROOT/name).read_bytes()) for name in capsule_build.REUSED_AUDIT_READERS}
     spec = json.loads((a.path/'inference.json').read_bytes())
     assert len(spec['model_container']['tensors']) == len(artificial['model'].state_dict())
     text = canonical_json_bytes(a.manifest)+canonical_json_bytes(spec)
