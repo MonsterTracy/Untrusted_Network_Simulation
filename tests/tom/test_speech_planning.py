@@ -19,6 +19,17 @@ from tests.tom.test_counterfactual_consumer import PublicWitness, P, CAPACITY, s
 from werewolf.artifact_io import canonical_json_bytes
 
 
+def test_mcts_imports_share_core_types_and_candidate_helper():
+    """MCTS直接消费正式策略对象，候选和公共队列规则只有一份实现。"""
+    from werewolf.strategy import mcts_planning as search
+    from werewolf.strategy import counterfactual_tom as core_cf
+
+    for name in ('SpeechPlan', 'generate_candidates', '_ordered_candidates'):
+        assert getattr(search, name) is getattr(planning, name)
+    assert search.derive_public_phase_speaker_order is core_cf.derive_public_phase_speaker_order
+    assert planning.SpeechPlan.__module__ == 'werewolf.strategy.speech_planning'
+    parent = PublicWitness().pre()
+    assert search.generate_candidates(parent) == planning.generate_candidates(parent)
 
 
 def test_core_research_imports_without_legacy_planning_scripts():
@@ -36,6 +47,7 @@ from werewolf.observer_dtrs import (
     speech_evidence, planning_research, candidate_appraisal, cognition_gate_research,
     contextual_policy, speech_runtime, f0_slice, native_action_link,
 )
+from werewolf.strategy import mcts_planning
 '''
     subprocess.run([sys.executable, '-B', '-c', code], check=True)
 

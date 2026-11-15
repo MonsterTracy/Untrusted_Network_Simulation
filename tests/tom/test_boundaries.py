@@ -109,15 +109,17 @@ def _production_import_closure(root):
 
 
 def test_all_production_modules_belong_to_current_cli_import_closure():
-    """Only the two published read-only research libraries lack CLI roots."""
+    """正式运行模块须从入口可达；明确登记的受控研究库不必伪造CLI消费者。"""
     root = Path(__file__).resolve().parents[2]
     production, reached, _ = _production_import_closure(root)
     # Phase-1 cognition and Phase-2G offline linkage confer no execution authority.
     # See docs/research/observer-dtrs-dynamic-planning-phase1.md and
     # docs/research/observer-dtrs-phase-2g-native-evidence.md.
+    # MCTS仅研究人工公开响应树和叶值，不授予真实游戏执行资格。
     controlled_research_libraries = {
         "werewolf.observer_dtrs.planning_research",
         "werewolf.observer_dtrs.native_action_link",
+        "werewolf.strategy.mcts_planning",
     }
     assert production - reached == controlled_research_libraries
 
