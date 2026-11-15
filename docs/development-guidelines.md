@@ -85,7 +85,7 @@
 
 代码应让初次接触项目的开发者能够从上到下理解执行步骤及设计理由。这些是当前任务范围内的代码质量原则，不是强制重构命令。
 
-修改已有功能或验证机制时，应核对旧实现的实际调用方和合同依赖。对于已被新实现完全取代、不再使用且无科研证据保护要求的普通代码与执行步骤，应在同一次变更中删除或合并，包括旧函数、重复分支、过期参数、无效包装器、重复入口，以及等效验证、重复资格检查、失效审批入口和不再使用的许可逻辑。不得仅为避免删除而长期保留无效实现；已经失效的遗留逻辑不应继续参与正式执行路径。
+修改已有功能或验证机制时，应在本次影响范围内核对旧实现的实际调用方和科研协议依赖。对于已被新实现完全取代、不再使用且无科研证据保护要求的普通代码与执行步骤，应在同一次变更中删除或合并，包括旧函数、重复分支、过期参数、无效包装器、重复入口，以及等效验证、重复资格检查、失效审批入口和不再使用的许可逻辑。不得仅为避免删除而长期保留无效实现；已经失效的遗留逻辑不应继续参与正式执行路径。
 
 具体要求：
 
@@ -98,7 +98,7 @@
 - **命名清晰：** 变量、函数和类的名称应直观，使开发者无需反复跨文件跳转即可理解主要逻辑和对象职责；不得为统一风格随意改变已有公共接口、持久化字段或科研协议名称。
 - **保持原有功能：** 结构优化应保持已有功能、业务逻辑、公共接口、异常处理语义和科研实验行为，不破坏历史 Artifact 与 Source Identity 验证合同，并遵守第6条的科研证据保护要求。任何可能改变行为的修改，都应单独说明修改内容及风险，先由用户决定，不能伪装成纯代码整理。
 - **谨慎处理复杂机制：** 涉及异步执行、上下文传播、异常处理、资源释放、并发控制、文件锁与 GPU 锁、进程归属、数据完整性和安全、实验身份及科研证据验证时，正确性优先。已经实现并验证的资源锁、进程控制、异常恢复和并发机制，不得仅为降低复杂度而删除，也不得破坏已有安全性、确定性与恢复语义。
-- **控制优化范围：** 不引入不必要的第三方依赖，不为形式上的架构整洁增加抽象层或开展与当前研究任务无关的大规模重构，不对无关源码自动格式化或清理。按第2条复用已有实现，避免为同一问题新增功能重叠文件或通过复制旧模块形成新模块，采用最小、清晰、正确且可维护的实现。
+- **控制优化范围：** 不引入不必要的第三方依赖，不为形式上的架构整洁增加抽象层或开展与当前研究任务无关的大规模重构，不对无关源码自动格式化或清理。按第2条原位修复，避免复制平行执行系统，或新增重复 Runner、CLI、配置、入口及无实际职责的 Adapter/Wrapper；采用最小、清晰、正确且可维护的实现。
 
 普通源码的版本追溯由 Git 历史承担：已提交代码可通过历史查看和恢复，已推送提交可作为 GitHub 远端历史来源，不应为保存旧版本长期维护重复文件或旧函数。未提交代码不能假定可从 GitHub 恢复，未推送的本地提交不能假定已由 GitHub 保存；不得覆盖其他尚未提交的工作，也不得为了代码清理改写 Git 历史。
 
@@ -130,7 +130,7 @@
 
 - 为通过测试而增加的特殊处理分支。
 
-- 无明确研究必要性的强制门禁，例如多轮重复资格认证、多层审批和执行许可、合成推理门槛、每次运行全量扫描模型或数据、重复生成等效 Manifest、Receipt 或 Digest，以及无关的全仓库审计。
+- 无具体科研或运行风险依据的强制门禁，例如新增 Qualification、Admission、Permit，多轮重复 Source 审计或资格认证、合成推理门槛、每次运行全量扫描模型或数据、重复生成等效 Manifest、Receipt 或 Digest，以及专门门禁框架或无关全仓库审计。
 
 
 如果模型、数据或研究条件不满足要求，应明确报告原因。
@@ -174,9 +174,7 @@
 - 已提交的正式实验结果与评价证据。
 
 
-不允许因为当前 Mainline 已经包含相关源码，就直接删除原始实验 Checkout 或修改冻结 Artifact。
-
-历史实现确实不再参与日常开发时，可以经过依赖核查后归档，但不得损害研究可追溯性。
+历史科研 Source 的可追溯性与物理 Checkout 是否长期存在是两个不同问题。保留原 Git 来源、身份及恢复所需证据，物理 Checkout 的保留或退出按第14、25条及具体授权处理；Mainline 已收录源码不构成删除历史目录或冻结 Artifact 的依据。
 
 ---
 
@@ -209,49 +207,13 @@
 
 ### 8. 新建目录和文件必须遵守用户命名决定
 
-**所有新建的、可由开发者命名的项目目录和文件，应先由用户确定名称。**
+**所有新建的、可由开发者命名的项目目录、文件和实验标识，应先由用户确定名称，或遵循用户已批准的命名规则。** 范围包括源码模块、脚本、配置、测试、研究文档、Candidate 和运行目录。
 
-包括但不限于：
+默认选择简短、稳定、语义明确的名称。不得未经批准自行添加 `01`、`02` 等执行序号，`b2`、`v1`、`v2` 等无明确含义或非正式协议版本，日期时间、Git SHA、随机字符串、`new`、`final`、`final2` 等临时标记，也不建立多层重复表达同一研究含义的目录。例如，不自行创造 `gameplay-int-01` 或在名称中反复拼接长 SHA。
 
-- 项目源码目录。
+正式版本或唯一实验身份应在已有 Plan、Manifest、Digest 及不可覆盖写入机制中准确记录；确需不同用户可见名称时，先解释区别，再由用户决定。
 
-- 研究模块及脚本。
-
-- 配置文件。
-
-- 新建测试文件。
-
-- 研究文档。
-
-- Candidate 根目录。
-
-- 实验运行目录。
-
-- 用户定义的实验标识。
-
-- 需要长期维护的其他文件或目录。
-
-
-AI 不得擅自添加以下后缀作为默认命名方式：
-
-- `b2`、`v1`、`v2` 等无明确含义的编号。
-
-- 随机字符串。
-
-- 日期时间。
-
-- Git Commit 简写。
-
-- `new`、`final`、`final2` 等临时命名。
-
-
-确实需要区分不同对象时，应先解释区别，再由用户确定名称。
-
-**例外：** 已有程序或正式协议自动生成的内部文件名、内容摘要、Schema 版本和 Git Commit ID 不属于随意命名，不得为了遵守本条而擅自修改。
-
-已经冻结的历史 Artifact 也不因新命名规范而自动改名。
-
-若用户已明确批准某一命名规则，可以按该规则执行，不需要重复询问。
+**例外：** 已有程序或正式协议自动生成的内部名称、Schema 版本和 Git Commit ID 按原协议执行；历史冻结 Artifact 不因本条改名。第33条的 Codex 对话独立编号约定保持不变。
 
 ### 9. 优先复用现有环境和工具
 
@@ -290,67 +252,43 @@ AI 不得擅自添加以下后缀作为默认命名方式：
 
 负责真实游戏轨迹、规范事件、PRE 状态、数据来源及数据发布。
 
-**Observer-specific Theory of Mind（观察者特定心理理论）**
+**Observer-ToM（观察者特定心理理论）**
 
-负责从合法观察者信息出发，建立其对其他玩家状态和意图的认知估计。
+从合法观察者信息出发，进行认知预测与怀疑状态估计，不读取 Gold 或未来信息。
 
-**Decision-Theoretic Rough Sets（三支决策粗糙集）**
+**DTRS（三支决策粗糙集）**
 
-负责条件概率、损失函数、决策阈值及 POS、BND、NEG 三域决策。
+基于事件概率、损失函数和阈值形成 POS、BND、NEG 三域决策。
 
-**三支决策发言策略**
+**策略优化与三支决策发言策略**
 
-负责将三域决策映射为合法发言策略，并在真实游戏约束下验证。
+结合 ToM、DTRS、游戏约束和行动后果，选择策略及语言行动。不得将 POS、BND、NEG 与 PUSH、PROBE、REDIRECT 预设为一一对应。固定 Router 与 MCTS 等动态策略寻优方法应明确区分，不能将现有 Router 描述为已经完成的最优策略器。
+
+**游戏评价**
+
+使用完整游戏结果及狼人阵营胜率评价最终效果；局部决策或离线预测改善不能代替完整游戏证据。
 
 **TomBaseline**
 
-负责使用通用大语言模型构建 ToM 对照基线，形成可以比较的预测结果及研究评价。
+使用通用大语言模型构建 ToM 对照基线，形成可以比较的预测结果及研究评价。
 
-这些模块属于同一个项目，但其输入、输出、资格和实验结论不能混淆。
+这些模块属于同一个项目，但输入、输出、执行条件和研究结论不能混淆。上述职责说明不改变既有研究算法或实验定义。
 
 ### 11. 严格区分不同实验阶段
 
-以下阶段具有不同的验证含义：
+应分别判定以下结论：
 
-1. 源码开发与静态检查。
+1. 代码实现正确，相关单元、接口或回归测试通过。
+2. 模型推理正确，有对应模型、Tokenizer 和推理协议的真实证据。
+3. 真实运行链正常，服务可运行且请求、输出及恢复符合要求。
+4. 科研实验结果可靠，正式预测覆盖完整、身份一致且评价可追溯。
+5. 研究方法改善最终评价指标，有对应离线或完整游戏实验支持。
 
-2. CPU 单元测试。
+这些结论不能互相冒充，也不要求为每项结论建立独立执行系统或每次任务重走全部门禁。CPU、Mock 或源码导入成功不代表真实推理成功；Mock Seal 不代表真实 Prediction Seal；Deployment 存在不代表适用协议要求的 Admission 有效；给定概率和损失下风险最小不代表动态策略最优或狼人胜率提高。
 
-3. Mock、Stub 或合成输入验证。
-
-4. Tokenizer 和模型资产核验。
-
-5. CPU Deployment 准备。
-
-6. Source Identity 核验。
-
-7. GPU Qualification。
-
-8. Admission。
-
-9. 正式模型推理与实验运行。
-
-10. 实验统计分析与结果报告。
-
-这些阶段用于区分证据含义，不代表每项科研任务均须增设全部独立门禁或每次运行重走全链。真实模型服务可运行、已完成真实推理、正式预测结果完整与科研效果得到验证，应分别判定；工程认证层数不能替代科研进展。
+真实模型加载、Source 或 Artifact 重验、GPU 环境资格测试、完整 Gameplay 验证及正式评价，仅在当前修改风险或适用研究协议实际需要时执行，具体按第18条判断。现行 TomBaseline 合同见第29条，历史实验及其他模块明确要求的资格不得省略。
 
 本地精简或规范修订不自动授予新运行版本 Ubuntu GPU 资格，执行性能改善须有实测证据。
-
-
-不得将前一个阶段的成功直接解释为后一个阶段已经完成。
-
-特别是：
-
-- CPU 测试成功不代表 GPU Qualification 通过。
-
-- Mock Seal 不代表真实 Prediction Seal。
-
-- Deployment 存在不代表 Admission 有效。
-
-- 源码可以导入不代表真实实验成功。
-
-- 算法在给定概率和成本下最优，不代表动态策略最优或游戏胜率提高。
-
 
 ### 12. 保持科研协议及数据身份稳定
 
@@ -414,38 +352,17 @@ AI 不得擅自添加以下后缀作为默认命名方式：
 
 ### 14. 一个项目、一个主要开发工作区
 
-**本项目今后采用 Mac 单一日常开发目录。**
+本项目只维护一套正式项目源码，按平台使用以下标准主目录：
 
-正式 Mac 开发目录：
+- Mac 唯一日常开发目录：`/Users/name_yuxiao/Desktop/VscodeProjects/Untrusted_Network_Simulation`。
+- Ubuntu 唯一正式、持续维护的源码目录：`/home/dell/yuxiao/Untrusted_Network_Simulation`。
+- 正式 Git 分支：`twd/mainline`；GitHub：`MonsterTracy/Untrusted_Network_Simulation`。
 
-`/Users/name_yuxiao/Desktop/VscodeProjects/Untrusted_Network_Simulation`
+TomBaseline、三支决策及后续研究的新开发、实现和正常执行，统一优先使用标准主目录，不因研究方向或阶段不同而长期维护平行项目、Worktree 或源码副本。
 
-正式分支：
+历史实验确需固定 Source 时，可以按原 Git SHA 临时恢复对应 Worktree；须满足第8条命名及第30条服务器授权，不自动恢复，也不重新设为常驻开发目录。历史 Source 的可追溯性与物理 Checkout 是否长期存在分别判断，既有历史目录的退出按第25条核验并授权。
 
-`twd/mainline`
-
-**历史 Mac 快照（原登记，非当前状态）：**
-
-- 已检出 `twd/mainline`。
-
-- HEAD 为 `e56f7a28182559b2ef74cb5ef1568eb9580ff8dc`。
-
-- 与当时 `origin/twd/mainline` 一致。
-
-- 工作区干净。
-
-
-上述 `e56f7a28182559b2ef74cb5ef1568eb9580ff8dc` 仅为历史登记，不作为当前 HEAD。
-
-2026-11-02 本轮 Mac 本地实际检查：分支为 `twd/mainline`，HEAD 为 `98d8e038c86c35b87490c433acb9d97caf886c2d`，工作区存在未提交修改。该结论仅是本次检查快照，后续以实际 Git 状态为准；不得从 Ubuntu 的 HEAD 登记反推 Mac 当前 HEAD。
-
-正常开发不需要将 Git HEAD 永久锁定于某个功能提交，但每次实验必须精确记录实际 Source Identity，历史实验仍绑定其原始来源。
-
-TomBaseline 和三支决策都在该目录中按任务顺序开发。
-
-不再因为研究模块不同而自动创建独立 Worktree。
-
-历史 Worktree 暂时保留，不作为默认开发入口。
+任务开始时按需核对实际目录、分支、HEAD 和工作区修改。规范不维护随每次提交变化的 HEAD 或“工作区干净”登记；历史快照不能代替当前事实。正常开发不永久锁定某个功能提交，但每次实验必须精确记录实际 Source Identity，历史实验继续绑定原始来源。
 
 ### 15. GitHub Mainline 是新开发成果的整合主线
 
@@ -538,17 +455,17 @@ GitHub Linux CI 用于进一步验证正式提交的跨环境兼容性和完整�
 
 ### 18. 测试必须与实际风险匹配
 
-优先顺序为：
+**只执行与当前修改风险相关的必要验证。** 开发验证优先顺序为：
 
 1. 相关函数或模块测试。
 
-2. 对应集成测试。
+2. 必要的接口或集成测试。
 
 3. 受影响的依赖闭包检查。
 
 4. 必要的跨模块回归。
 
-5. 正式提交或实验所需的完整验收。
+5. 实际需要且适用协议要求的完整验收。
 
 验证按执行时机分层：
 
@@ -557,7 +474,7 @@ GitHub Linux CI 用于进一步验证正式提交的跨环境兼容性和完整�
 - **运行过程中：** 检查请求状态、真实输出持久化、重复执行防护、未知执行结果的安全处理、错误处理、断点恢复、原子写入及结果完整性。
 - **运行结束时：** 核验结果覆盖率、完整性、身份对应关系及正式评价所需证据。
 
-是否重新验证，由相关输入、身份、运行状态是否变化及错误影响决定；可安全复用的已核验证据不重复计算，不因检查存在而在每次执行时完整重跑。复用不得弱化正式协议所需的科研验证、运行安全或冻结证据核验，安全性质应优先由现有的最小正确实现保证。
+是否重新验证，由相关输入、身份、运行状态是否变化及错误影响决定；已完成且仍适用的真实资格或验收证据应复用，不因开发阶段变化自动重验，避免重复 CPU/GPU 加载及同一模型的数值比较。复用不得弱化正式协议所需的科研验证、运行安全或冻结证据核验，安全性质应优先由现有的最小正确实现保证。
 
 
 不应为普通局部修改重复扫描整个仓库。
@@ -592,6 +509,8 @@ GitHub Linux CI 用于进一步验证正式提交的跨环境兼容性和完整�
 
 - 哪些问题仍未解决。
 
+
+报告应区分本次实际执行的验证、复用的既有证据及其适用范围、尚未验证的结论，不为形成验收报告重复执行第18条不要求的检查。项目科研产出优先，不以验证数量衡量进展。
 
 没有运行的测试不能写成通过。
 
@@ -715,79 +634,34 @@ AI 开始修改代码前，应优先了解：
 
 ### 24. 统一目录管理原则
 
-本节及后续服务器状态登记依据用户于 **2026-11-02** 提供的人工核验结果；不表示 AI 访问过 Ubuntu，也不作为实时运行状态。
+Mac 与 Ubuntu 正式源码目录见第14条。Ubuntu 正式科研数据根目录为：
 
-本项目区分以下三类位置：
+`/data/yuxiao/Untrusted_Network_Simulation`
 
-**Mac 本地开发**
+数据目录不是另一套源码 Checkout。模型根目录 `/data/yuxiao/models`、TomBaseline 实验根目录 `/data/yuxiao/TomBaseline-data`、既有 Conda 环境及其他科研资产，继续按实际职责和绑定协议管理，不因统一源码目录而强制合并或迁移。
 
-`/Users/name_yuxiao/Desktop/VscodeProjects/Untrusted_Network_Simulation`
+本规范保存长期开发规则，不充当实时目录清单、Git HEAD 表或实验监控。历史操作文档、Git 记录及原始 Artifact 承担追溯职责；使用时核对其日期、Source 和适用条件，不将历史快照当作当前事实。删除规范中的过期登记不构成删除真实科研证据的授权。
 
-作为唯一日常开发入口。
-
-**Ubuntu 源码**
-
-`/home/dell/yuxiao/`
-
-保存服务器 Git Checkout 和历史研究源码。
-
-**Ubuntu 数据、模型及环境**
-
-`/data/yuxiao/`
-
-保存科研数据、模型、Conda 环境、运行配置和实验 Artifact。其中，模型正式存储根目录为 `/data/yuxiao/models`，现行 TomBaseline 实验根目录为 `/data/yuxiao/TomBaseline-data`；主科研数据根目录仍为 `/data/yuxiao/Untrusted_Network_Simulation/`，三者职责不同。
-
-源码目录、研究数据目录、模型环境与冻结 Artifact 必须区别管理。
-
-目录名称相近不代表用途相同。
-
-Mainline 已包含某项研究代码，不代表相关历史数据和执行证据可以删除。
-
-服务器目录整理不得优先于真实研究任务。
+服务器目录整理不得长期阻碍真实科研任务，也不得损害科研来源及复现。
 
 ### 25. Ubuntu 服务器源码目录
 
-目前已登记的主要目录如下：
+唯一正式、持续维护的源码目录为 `/home/dell/yuxiao/Untrusted_Network_Simulation`。用户已确认标准主目录此前已更新到 `twd/mainline`，不再登记为“尚未完成迁移”的未来目标；具体当前 HEAD 和工作区状态仍以有效核验为准。
 
-|目录|当前或历史职责|管理要求|
-|---|---|---|
-|`/home/dell/yuxiao/Untrusted_Network_Simulation`|历史主 Checkout，曾位于 `three-way`；同时关联部分历史 Git Worktree|**未来正式源码目录目标；尚未确认完成迁移，不得直接覆盖**|
-|`/home/dell/yuxiao/Untrusted_Network_Simulation_mainline_6249485c56cc`|用户已核验的现行 TomBaseline Mainline 运行 Checkout|继续使用并保留，不因目录后缀推断实际 HEAD|
-|`/home/dell/yuxiao/Untrusted_Network_Simulation_data_acquisition_99f559c`|冻结数据采集 Source|保留历史来源|
-|`/home/dell/yuxiao/Untrusted_Network_Simulation_qwen3_predictor_f199`|冻结 Qwen3 Final Predictor Source|保留历史来源|
-|`/home/dell/yuxiao/Untrusted_Network_Simulation_experiment_a_exec`|Experiment A 历史执行源码|待依赖核验|
-|`/home/dell/yuxiao/Untrusted_Network_Simulation_experiment_a_analysis`|Experiment A 历史分析源码|待依赖核验|
-|`/home/dell/yuxiao/3wd-tom`|旧三支决策项目来源|保留历史职责|
-|`/home/dell/yuxiao/3wd-tom/.worktrees/dev540-composite`|旧实验协议的历史 Worktree|待依赖核验|
+用户提供的已知历史进度如下，非本轮服务器检查：
 
-用户于 2026-11-02 已实际核验的现行 TomBaseline Checkout HEAD 为 `98d8e038c86c35b87490c433acb9d97caf886c2d`；该记录不证明其他 Checkout 或 Mac 工作区具备相同执行资格。
+|历史目录或来源|已知进度与保留边界|
+|---|---|
+|`Untrusted_Network_Simulation_data_acquisition_99f559c`（99f）|数据采集 Worktree 已正常退出；冻结 Git Source 及采集、Publication 来源继续保留|
+|`Untrusted_Network_Simulation_qwen3_predictor_f199`（f199）|Qwen3 Predictor Worktree 已正常退出；冻结 Git Source、模型及 fit/seal 来源继续保留|
+|`Untrusted_Network_Simulation_mainline_6249485c56cc`|历史运行目录仍有独立历史或资产依赖，不作为新的常驻开发入口，尚未批准直接删除|
+|`3wd-tom` 及其他历史实验目录|逐项核对独立 Git、环境、资产与实验依赖，未确认退出条件前不得直接删除|
 
-**用户已确定未来服务器正式源码路径：**
+表中目录名相对于 `/home/dell/yuxiao/`。Worktree 退出不等于相关 Source、证据或其他目录可删除，也不推定其物理目录已经清理。
 
-`/home/dell/yuxiao/Untrusted_Network_Simulation`
+最终整理目标是在 `/home/dell/yuxiao/` 下仅保留一个常驻项目源码目录 `Untrusted_Network_Simulation`。这不表示所有历史目录已经具备删除条件；历史 Source 必须保留可追溯、可恢复的 Git 来源及必要依赖证据。
 
-该路径尚未确认完成迁移，不能将其登记为现行 TomBaseline 运行 Checkout；现行目录仍为上表中的独立 Mainline Checkout。
-
-不能直接使用复制、覆盖或重命名操作实现目录统一。
-
-需要先确认：
-
-- 历史 Git 主目录和其他 Worktree 的关系。
-
-- 未提交文件及 Stash。
-
-- 冻结实验 Source 依赖。
-
-- Conda 环境的可编辑安装路径。
-
-- 正在使用的代码和服务。
-
-- Mac 备份是否足以恢复相关 Git 和研究证据。
-
-
-**完成 Mac 备份并不代表服务器目录可以删除。**
-
-只有完成依赖核验、迁移与恢复验证，并得到用户针对具体目录和删除操作的明确授权后，才可由用户或获授权的 AI 执行清理。
+后续整理具体目录前，按实际影响核对 Git/Worktree 关系、未提交文件与 Stash、冻结 Source 及路径引用、可编辑安装、任务和服务归属、恢复所需资产。不得通过直接复制、覆盖或重命名来伪造统一完成；备份存在或 Mainline 已收录源码均不构成删除授权。删除、迁移和恢复均须按第30条取得具体授权。
 
 ### 26. Python、Conda 和模型执行环境
 
@@ -879,63 +753,17 @@ Mainline 已包含某项研究代码，不代表相关历史数据和执行证�
 
 ### 28. TomBaseline 实验目录与迁移状态
 
-**历史 TomBaseline 根目录：**
+新代码与正常执行使用标准主源码目录；TomBaseline 数据、模型和环境按职责管理，不另建平行源码项目。
 
-`/data/yuxiao/tom-llm-reasoner-b2/`
+既有模型存储根目录为 `/data/yuxiao/models`，Tokenizer 位于其 `tokenizer-assets/{qwen3,yi,mistral}`。原有资产登记包括 `Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218`、`Yi-1.5-9B-Chat-16K`、`Mistral-7B-Instruct-v0.3`；这些名称及模型物理身份不得因目录整理而擅自修改。资产可用性与执行条件以适用合同和实际证据判定。
 
-该目录仍含历史证据、上游依赖和 GPU 锁等资源，不是普通缓存，也不是可以随意删除的重复项目。下表保留历史布局，不将已迁移的 Qwen3 权重与 Tokenizer 登记为仍物理存放在旧路径：
+TomBaseline 实验根目录为 `/data/yuxiao/TomBaseline-data`。已有 Qwen3 YAML `/data/yuxiao/TomBaseline-data/Qwen3-8B.yaml` 和 Candidate `/data/yuxiao/TomBaseline-data/multimodel/qwen3/TomBaseline-Qwen3-8B-unified-root` 已用于科研证据，名称及封存路径保持不变；旧规划 `Qwen3-8b.yaml` 不作为替代路径，不静默修正大小写。
 
-|相对目录|用途|
-|---|---|
-|`models/qwen3/`|历史 Qwen3 模型资产位置；已迁移权重的现行位置见统一模型根目录|
-|`models/yi/`|历史 Yi 模型资产位置登记，不作为现行模型入库位置|
-|`models/mistral/`|历史 Mistral 模型资产位置登记，不作为现行模型入库位置|
-|`tokenizer-assets/`|历史 Tokenizer 资产位置；已迁移 Qwen3 Tokenizer 的现行位置见下表|
-|`multimodel/`|历史 Candidate、Deployment 和资格证据及相关上游依赖|
-|`experiments/`|历史正式实验及结果|
-|`selection-subset150-first-publication-v1/`|既有150局 Selection 及相关绑定证据|
+旧根目录 `/data/yuxiao/tom-llm-reasoner-b2` 含历史证据、上游依赖及 GPU 锁等资源，未获具体授权不得删除。已迁移的权重与 Tokenizer 不再登记为物理存放在旧路径；是否复用由实际路径、模型摘要、环境及合同决定，迁移不自动继承旧物理资格。
 
-**统一模型与 Tokenizer 存储：**
+2026-11-02 的 Qwen3 Deployment、两轮 Qualification、Admission 及 Formal Run 登记均属历史证据，只绑定当时的 Source 和物理条件，不代表现行运行链或其他模型已通过相同验收。具体 Run ID、摘要、进度、Seal 和最终结果查原始 Artifact 及历史操作记录，本规范不重复维护动态状态；不得据旧快照推定完成、继承资格或重发结果未知的请求。
 
-模型正式存储根目录为 `/data/yuxiao/models`。用户已确认以下三个模型完成完整权重校验与入库，Tokenizer 资产也已准备：
-
-|模型目录（相对于模型根目录）|Tokenizer 路径|
-|---|---|
-|`Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218`|`/data/yuxiao/models/tokenizer-assets/qwen3`|
-|`Yi-1.5-9B-Chat-16K`|`/data/yuxiao/models/tokenizer-assets/yi`|
-|`Mistral-7B-Instruct-v0.3`|`/data/yuxiao/models/tokenizer-assets/mistral`|
-
-临时 `.tom-baseline-incoming` 已在两个模型通过完整校验和移动后清空并删除，不登记为长期存在的项目目录。资产准备与模型运行资格是不同阶段；Yi 和 Mistral 尚无已提交的 GPU Qualification、Admission 或正式结果证据。
-
-**现行 Qwen3 实验布局：**
-
-- TomBaseline 数据根目录：`/data/yuxiao/TomBaseline-data`，已实际使用。
-- Qwen3 YAML：`/data/yuxiao/TomBaseline-data/Qwen3-8B.yaml`。
-- Qwen3 Candidate：`/data/yuxiao/TomBaseline-data/multimodel/qwen3/TomBaseline-Qwen3-8B-unified-root`。
-
-上述 YAML 和 Candidate 名称已实际用于不可变科研证据，不得重命名。原规划名 `Qwen3-8b.yaml` 仅作历史记录，其大小写与实际名称不同；不得静默改名或改写封存路径。
-
-**已完成的 Qwen3 部署与资格证据：**
-
-|对象|已登记身份|
-|---|---|
-|新 Deployment|`2f23c1f8ff2abe57e8a105256f69d67d7360c8c26520ab56fc3c3e9d223e8d9f`|
-|GPU Qualification Round 0|`008224af8c55fdaa1678c9a88554bec28fc678b5dbe4f434ca6002539e114579`|
-|GPU Qualification Round 1|`a960539acbd2c3c98338ba8b8e1bb26be4f3fa14428bfc13851af7c38cca6bdd`|
-|GPU Admission|`bf44e6f07c11a843f1cccb8269666383d1708583d38ff9997054e55c616ee794`|
-
-两轮 GPU Qualification 和 Admission 已完成；这些结论只绑定对应的 Deployment、模型、环境、路径和 Source 合同，不代表其他模型、历史目录或后续实验自动获得资格。模型迁移后不自动继承旧物理资格。
-
-**Qwen3 正式实验登记：**
-
-- Run ID：`qwen3-formal-150-unified-20261102`。
-- Run Contract：`ca4675580ec7ed0277fb8f794a5e67f82c4a3acdb0eab89c1818bc2a2e26291e`。
-- Execution Permit：`8abdf7015c90581e5dce5858e4fe249df82551cdfabfd3e186797dab6a1d4fdb`。
-- 150 局、10,714 个预测任务的 Formal Run 已开始执行，不能据此宣布实验完成。
-
-用户最后提供的**历史进度快照（非当前状态）**为 `2084/10714`、`blocked=1`、`sealed=False`，blocked 原因为 `in-flight or unaccepted reply; no automatic resend`。该快照只供追溯，不能记录为持续有效的当前状态；当前进度、是否封存及最终结果须依据用户后续提供的实际证据，不能推定已完成，也不得擅自重发结果未知的请求。
-
-旧根目录继续保留尚存历史资料、Selection、Cohort、Receipt、Deployment、上游依赖、GPU 锁和相关证据。不得删除旧目录，或仅通过修改已封存 Manifest 中的绝对路径和 Digest 实现迁移；资产能否复用仍由实际物理路径、模型摘要、环境绑定及执行合同判定。
+现行轻量执行合同见第29条及 [TomBaseline 操作说明](operations/tom-llm-unified.md)。历史证据继续按原 Source 和协议解释，不改写其中的绝对路径、Manifest、Receipt、Digest 或 Seal。
 
 ### 29. YAML 配置、Source Identity 和路径迁移
 
@@ -1053,7 +881,7 @@ SSH 主机身份验证必须正常执行，不得禁用 Host Key 检查或通过
 4. 预期影响与风险。
 5. 是否影响既有冻结科研证据。
 
-获得用户明确批准后，才允许执行相应操作。**此前对某个任务的授权，不自动扩展到新的任务或新的修改范围。**
+获得用户明确批准后，才允许执行相应操作。同一项已明确批准且范围清楚的任务，其普通子命令无需逐条重复申请；未经批准的新操作、范围扩大或高风险删除仍须单独说明并取得批准。**此前对某个任务的授权，不自动扩展到新的任务或新的修改范围。**
 
 用户授权 AI 制定实验方案，不代表授权任何服务器修改性操作。已有备份不代表可以删除。
 
@@ -1133,7 +961,7 @@ SSH 主机身份验证必须正常执行，不得禁用 Host Key 检查或通过
 
 作为 Codex 等编程助手进入仓库时的简短指引，重点说明：
 
-- 正式 Mac 开发目录。
+- 唯一 Mac 与 Ubuntu 正式源码目录。
 
 - GitHub Mainline。
 
@@ -1147,6 +975,8 @@ SSH 主机身份验证必须正常执行，不得禁用 Host Key 检查或通过
 
 - 正式规范文档的位置。
 
+
+新对话先阅读 `AGENTS.md`，并在执行任务前按需读取本完整规范的相关章节；简单任务无需反复完整通读。涉及命名、冻结科研证据、服务器或高风险操作时，必须读取相应约束，不能只凭入口摘要执行。
 
 不应在 `AGENTS.md` 中重复复制整份规范。
 
@@ -1253,35 +1083,17 @@ SSH 主机身份验证必须正常执行，不得禁用 Host Key 检查或通过
 
 ## 十一、当前已确定的项目执行约定
 
-本节作为前述规范的状态登记，不新增其他权限。Mac 检查快照见第14条，2026-11-02 用户提供的服务器核验与实验状态见第24–31条；本表不作为实时运行监控。
+本节只汇总长期约定，不登记动态 HEAD、实验进度或目录退休结果；具体规则以前述条款为准。
 
-|项目事项|当前约定|
+|项目事项|执行约定|
 |---|---|
-|唯一日常 Mac 开发目录|`/Users/name_yuxiao/Desktop/VscodeProjects/Untrusted_Network_Simulation`|
-|正式 GitHub 开发主线|`twd/mainline`|
-|历史 Mac HEAD（原登记快照）|`e56f7a28182559b2ef74cb5ef1568eb9580ff8dc`，非当前状态|
-|Mac HEAD（2026-11-02 本轮实际检查）|`98d8e038c86c35b87490c433acb9d97caf886c2d`，工作区存在未提交修改；后续以实际 Git 为准|
-|Ubuntu TomBaseline 运行 Checkout|`/home/dell/yuxiao/Untrusted_Network_Simulation_mainline_6249485c56cc`|
-|Ubuntu TomBaseline HEAD（用户已核验）|`98d8e038c86c35b87490c433acb9d97caf886c2d`|
-|TomBaseline 开发|与三支决策共用主项目，按任务顺序开发|
-|历史 Mac Worktree|暂时保留，不作为默认日常开发入口|
-|未来 Ubuntu 正式源码目录|`/home/dell/yuxiao/Untrusted_Network_Simulation`，尚未确认完成迁移|
-|项目主 Conda 环境|`/data/yuxiao/envs/untrusted-network-simulation`|
-|TomBaseline 专用环境|`/data/yuxiao/envs/untrusted-network-simulation-tom-baseline`，当前保留|
-|历史 vLLM 环境|`/data/yuxiao/envs/untrusted-network-simulation-vllm`，当前保留|
-|旧 TomBaseline 数据根目录|`/data/yuxiao/tom-llm-reasoner-b2`，不得直接删除或覆盖|
-|模型正式存储根目录|`/data/yuxiao/models`；三个模型已完成权重校验与入库，详见第28条|
-|现行 TomBaseline 数据根目录|`/data/yuxiao/TomBaseline-data`，已实际使用|
-|现行 Qwen3 配置文件|`/data/yuxiao/TomBaseline-data/Qwen3-8B.yaml`；旧规划 `Qwen3-8b.yaml` 仅作历史记录|
-|现行 Qwen3 Candidate|`/data/yuxiao/TomBaseline-data/multimodel/qwen3/TomBaseline-Qwen3-8B-unified-root`，名称及证据路径不可变|
-|Qwen3 部署与 GPU 资格|新 Deployment、两轮 Qualification 和 Admission 已完成，身份见第28条|
-|Qwen3 Formal Run|`qwen3-formal-150-unified-20261102` 已启动；历史进度快照不代表当前进度或正式完成|
-|Yi / Mistral|权重与 Tokenizer 已准备；尚无已提交 GPU Qualification、Admission 或正式结果证据|
-|AI 服务器权限|仅在 `/home/dell/yuxiao`、`/data/yuxiao` 内对本项目授权资源进行只读核验；任何状态变更须用户事前针对具体操作明确授权，详见第30条|
-|新建文件和目录命名|由用户确定，或遵循用户预先批准的命名规则|
-|正式实验 Source、Deployment 和资格|依据实际 Manifest、Source Identity 与验证合同判定|
-|代码维护原则|第一性原理、最小正确实现、避免重复、不进行无依据扩展|
-|当前工作重心|推进实际科研开发，不以目录整理和重复工程审计阻碍研究|
+|正式源码与 Git 主线|Mac、Ubuntu 各使用第14条的唯一标准主目录，统一在 `twd/mainline` 开发|
+|科研数据与资产|数据根目录见第24、27条；模型、环境及历史资产按实际职责保留，不强制合并|
+|历史 Source 与 Checkout|保留科研来源；Worktree 仅在真实需要时按原 SHA 临时恢复，既有目录退出见第25条及授权要求|
+|实现与命名|原位修复、同步清理无用旧逻辑、简短稳定命名，按第2–9条执行|
+|验证与研究结论|按风险使用必要证据，复用仍有效的验收，不将工程检查数量当作科研进展|
+|服务器访问|按第30条限定只读范围；状态变更须针对任务明确授权|
+|协作入口|先读 `AGENTS.md`，按任务读取完整规范相关章节，Codex 对话规则见第33条|
 
 本规范自用户确认采用后，作为项目后续研发与 AI 协作的统一约束。
 
