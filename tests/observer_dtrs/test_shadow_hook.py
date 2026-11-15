@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from tests.agents.test_agent_backend import MetadataBackend, _belief_for, _day_cognition
 from tests.canonical_collection.test_runtime_game_evidence import ROLES, _runtime as canonical_runtime
 from tests.canonical_collection.test_game_bundle import _plan

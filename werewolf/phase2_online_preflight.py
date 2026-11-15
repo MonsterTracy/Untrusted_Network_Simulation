@@ -22,7 +22,7 @@ from werewolf.phase2_treatment import VERSION as TREATMENT_VERSION
 
 PREFLIGHT_VERSION = "phase2_intervention_pilot_preflight_v1"
 SOURCE_FILES = (
-    "run_random.py", "scripts/run_phase2_online_intervention_pilot.py",
+    "run_random.py", "werewolf/game_runtime.py", "scripts/run_phase2_online_intervention_pilot.py",
     "scripts/phase2_online_campaign.py",
     "scripts/phase2_intervention_preflight.py", "scripts/phase2_integration_seam.py",
     "scripts/phase2_language_realization.py", "werewolf/phase2_online_plan.py",

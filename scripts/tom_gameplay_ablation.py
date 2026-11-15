@@ -3,7 +3,7 @@
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.speech.validation import normalize_player
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 
 
 def eligible_observers(prefix, observation):

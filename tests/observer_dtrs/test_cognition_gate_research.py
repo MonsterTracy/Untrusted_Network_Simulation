@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from werewolf.observer_dtrs import cognition_gate_research as study
-from scripts.speech_planning import PlanningAction, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction, SpeechPlan, generate_candidates
 from tests.observer_dtrs.test_speech_evidence import legal_population_pre
 from tests.observer_dtrs.test_speech_runtime import source, witness
 from tests.tom.test_counterfactual_consumer import P

@@ -5,10 +5,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from scripts.speech_planning import SpeechPlan, PlanningAction as A
+from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
 from scripts.speech_realization import expected_action, realize_parse_verify, PublicRealizationContext
 from scripts.verified_speech_commit import realize_and_commit
-from scripts.counterfactual_tom import build_continuation
+from werewolf.strategy.counterfactual_tom import build_continuation
 from tests.tom.test_counterfactual_consumer import CAPACITY
 from tests.tom.test_speech_realization import ActorBackend
 from tests.canonical_collection.test_final_capacity import _night

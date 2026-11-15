@@ -1,8 +1,7 @@
-"""Deterministic public-hook fixtures; no environment rollout or backend calls.
+"""确定性公共Hook夹具，不执行环境rollout或Backend调用。
 
-The runtime assembly imports optional server dependencies absent locally.
-Compile the actual runner and production eval definitions unchanged, excluding
-only run_random's module-level assembly import. No substitute gameplay loop.
+直接编译实际Runner与正式游戏循环定义，仅排除Runtime顶层的可选服务依赖，
+不替代实际游戏循环。
 """
 import ast
 from contextlib import nullcontext
@@ -36,7 +35,7 @@ def runtime(monkeypatch):
     root = Path(__file__).resolve().parents[2]
     source = ast.parse((root / "werewolf/phase2_online_runner.py").read_text())
     source.body = [node for node in source.body if not
-                   (isinstance(node, ast.ImportFrom) and node.module == "run_random")]
+                   (isinstance(node, ast.ImportFrom) and node.module == "werewolf.game_runtime")]
     scope = {"__name__": "probe_runner_test_source"}
     # Dataclass resolves module globals via sys.modules.
     import sys
@@ -44,12 +43,12 @@ def runtime(monkeypatch):
     module = ModuleType(scope["__name__"])
     module.__file__ = str(root / "werewolf/phase2_online_runner.py")
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    production = ast.parse((root / "run_random.py").read_text())
+    production = ast.parse((root / "werewolf/game_runtime.py").read_text())
     definitions = [node for node in production.body if isinstance(node, ast.FunctionDef)
                    and node.name in ("eval", "_act_at_boundary")]
     game_scope = {"nullcontext": nullcontext,
                   "PUBLIC_SPEECH_RUNTIME_PHASES": frozenset(("speech", "speech_pk"))}
-    exec(compile(ast.Module(body=definitions, type_ignores=[]), "run_random.py", "exec"), game_scope)
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), "werewolf/game_runtime.py", "exec"), game_scope)
     module.__dict__["run_canonical_game"] = game_scope["eval"]
     exec(compile(source, "werewolf/phase2_online_runner.py", "exec"), module.__dict__)
     return module

@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import torch
 
-from scripts import counterfactual_tom as cf
-from scripts.speech_planning import generate_candidates, evaluate_candidates
+from werewolf.strategy import counterfactual_tom as cf
+from werewolf.strategy.speech_planning import generate_candidates, evaluate_candidates
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.observer_dtrs.d3_protocol import load_protocol

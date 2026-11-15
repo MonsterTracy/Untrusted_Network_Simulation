@@ -56,12 +56,12 @@ def test_forbidden_paths_and_semantic_dependency_boundaries():
     import werewolf.tom.dataset as dataset
     import werewolf.tom.model as model
     import werewolf.tom.training as training
-    import run_random
+    from werewolf import game_runtime
     root = Path(__file__).resolve().parents[2]
     assert not (root / "werewolf/models/twd_tom/dataset.py").exists()
     assert not list((root / "script").rglob("*.py"))
-    assert not hasattr(run_random, "main_cli")
-    assert inspect.signature(run_random.eval).parameters["canonical_recorder"].default is inspect.Parameter.empty
+    assert not hasattr(game_runtime, "main_cli")
+    assert inspect.signature(game_runtime.eval).parameters["canonical_recorder"].default is inspect.Parameter.empty
     for module in (dataset, model):
         text = inspect.getsource(module)
         assert not any(word in text for word in ("RoleSidecar", "open_role_sidecar", "non_wolf_alive", "all_alive", "private_conditioning"))

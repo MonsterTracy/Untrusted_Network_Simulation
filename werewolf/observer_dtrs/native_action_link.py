@@ -27,7 +27,7 @@ from werewolf.observer_dtrs.online_context import ShadowRequest, build_shadow_re
 from werewolf.observer_dtrs.public_behavior_research import public_day_witness
 from werewolf.phase2_offline import _resolved_exiles
 from scripts.speech_realization import expected_action
-from scripts.speech_planning import generate_candidates
+from werewolf.strategy.speech_planning import generate_candidates
 
 VERSION = 'research_native_action_link_v1'
 

@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 
 from scripts.compare_observer_dtrs_synthetic import scenarios, synthetic_model
-from scripts.speech_planning import generate_candidates
+from werewolf.strategy.speech_planning import generate_candidates
 from tests.observer_dtrs.test_speech_runtime import EVIDENCE, POLICY, runtime, source
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.observer_dtrs.context import contexts_for_pre
@@ -99,7 +99,9 @@ def run(output):
     protocol, model = synthetic_model()
     root = Path(__file__).resolve().parents[1]
     paths = ['scripts/compare_observer_dtrs_s1a.py', 'scripts/compare_observer_dtrs_synthetic.py',
-             'scripts/speech_planning.py', 'werewolf/observer_dtrs/speech_evidence.py',
+             'werewolf/strategy/speech_planning.py', 'werewolf/strategy/counterfactual_tom.py',
+             'werewolf/strategy/suspicion_objectives.py', 'werewolf/strategy/speech_versions.py',
+             'werewolf/observer_dtrs/speech_evidence.py',
              'werewolf/observer_dtrs/speech_runtime.py', 'werewolf/observer_dtrs/contextual_policy.py',
              'tests/observer_dtrs/test_speech_runtime.py']
     plan = dict(version=VERSION, scenarios=scenarios(), arms=[[c, m.value] for c, m in ARMS],

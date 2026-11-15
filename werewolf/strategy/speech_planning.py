@@ -3,13 +3,13 @@
 from dataclasses import dataclass
 import math
 
-from scripts.counterfactual_tom import (
+from werewolf.strategy.counterfactual_tom import (
     CounterfactualSpeechAction, PlanningAction, ConsumerProvenance,
     derive_public_phase_speaker_order, UnsupportedOpportunityError,
 )
-from scripts.suspicion_objectives import WolfSuspicionMass, wolf_suspicion_mass
+from werewolf.strategy.suspicion_objectives import WolfSuspicionMass, wolf_suspicion_mass
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from scripts.speech_versions import CANDIDATE_ORDER_VERSION
+from werewolf.strategy.speech_versions import CANDIDATE_ORDER_VERSION
 
 
 SELECTOR_VERSION = "alive_conditional_argmin_exact_tie_v1"
@@ -53,18 +53,22 @@ def generate_candidates(parent):
     SUPPORT/OPPOSE refer to any prior speech on the same day, across phases.
     """
     derive_public_phase_speaker_order(parent)  # validates real public evidence
-    targets = tuple(p for p in PLAYER_IDS
-                    if p in parent.alive_observer_ids and p != parent.current_speaker)
     spoken = {e.speaker for e in parent.public_event_history.events
               if e.event_type == "public_speech"
               and e.temporal_state.day == parent.public_temporal_state.day}
+    return _ordered_candidates(parent.current_speaker, parent.alive_observer_ids, spoken)
+
+
+def _ordered_candidates(speaker, alive_players, spoken_today):
+    """共用原候选枚举；调用者分别负责真实PRE或人工公开状态的校验。"""
+    targets = tuple(p for p in PLAYER_IDS if p in alive_players and p != speaker)
     plans = []
     for action in ACTION_ORDER:
         if action in (PlanningAction.SELF_DEFEND, PlanningAction.NO_COMMITMENT):
             plans.append(SpeechPlan(action))
         else:
             for target in targets:
-                if action in (PlanningAction.SUPPORT, PlanningAction.OPPOSE) and target not in spoken:
+                if action in (PlanningAction.SUPPORT, PlanningAction.OPPOSE) and target not in spoken_today:
                     continue
                 plans.append(SpeechPlan(action, target))
     return tuple(plans)

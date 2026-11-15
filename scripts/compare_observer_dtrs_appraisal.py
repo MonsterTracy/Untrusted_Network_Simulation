@@ -13,7 +13,7 @@ import platform
 import subprocess
 
 from scripts.compare_observer_dtrs_synthetic import scenarios, synthetic_model
-from scripts.speech_planning import generate_candidates
+from werewolf.strategy.speech_planning import generate_candidates
 from tests.observer_dtrs.test_speech_runtime import EVIDENCE, POLICY, runtime, source
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.observer_dtrs.context import contexts_for_pre
@@ -169,7 +169,9 @@ def run(output):
     root=Path(__file__).resolve().parents[1]
     paths=['scripts/compare_observer_dtrs_appraisal.py','werewolf/observer_dtrs/candidate_appraisal.py',
         'werewolf/observer_dtrs/speech_evidence.py','werewolf/observer_dtrs/contextual_policy.py',
-        'werewolf/observer_dtrs/decision.py','scripts/speech_planning.py','scripts/compare_observer_dtrs_synthetic.py',
+        'werewolf/observer_dtrs/decision.py','werewolf/strategy/speech_planning.py',
+        'werewolf/strategy/counterfactual_tom.py','werewolf/strategy/suspicion_objectives.py',
+        'werewolf/strategy/speech_versions.py','scripts/compare_observer_dtrs_synthetic.py',
         'tests/observer_dtrs/test_speech_runtime.py']
     plan=dict(version=VERSION,scope='ARTIFICIAL_ONLY',scenarios=scenarios(),costs=COSTS,catalogs=CATALOGS,modes=MODES,
         shared_s1a_strategy=EVIDENCE.to_record(),static_loss=POLICY.static_loss.to_record(),

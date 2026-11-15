@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
 from tests.observer_dtrs.test_speech_evidence import legal_population_pre, panel
 from tests.observer_dtrs.test_speech_runtime import witness, P
 from werewolf.observer_dtrs.context import contexts_for_pre

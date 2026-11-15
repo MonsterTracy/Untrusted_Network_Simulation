@@ -7,8 +7,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import re
 
-from scripts.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
-from scripts.speech_versions import CANDIDATE_ORDER_VERSION
+from werewolf.strategy.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_versions import CANDIDATE_ORDER_VERSION
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.observer_dtrs.context import ObserverContext, contexts_for_pre

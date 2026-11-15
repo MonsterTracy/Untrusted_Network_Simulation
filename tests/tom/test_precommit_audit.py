@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from scripts.speech_planning import generate_candidates, SpeechPlan, PlanningAction as A
+from werewolf.strategy.speech_planning import generate_candidates, SpeechPlan, PlanningAction as A
 from scripts.speech_realization import expected_action
 from scripts import verified_speech_commit as module
 from scripts.verified_speech_commit import (
@@ -380,7 +380,7 @@ def test_existing_run_random_none_means_preassignment_baseline_not_assigned_fail
     # any env.step or real Agent call; there is no completed game or random draw.
     from contextlib import nullcontext
     from types import SimpleNamespace
-    from run_random import eval as run_eval
+    from werewolf.game_runtime import eval as run_eval
     handoff=SimpleNamespace(boundary_id='controlled-boundary')
     env=SimpleNamespace(phase='speech',public_events=[],reset=Mock(return_value={'current_act_idx':1}),
                         step=Mock(side_effect=AssertionError('no game execution')))

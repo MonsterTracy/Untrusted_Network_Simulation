@@ -1,5 +1,7 @@
 # Phase 1: Counterfactual ToM Consumer V1
 
+> 本文保留原Source下的研究记录。当前可复用实现已迁入[werewolf.strategy.counterfactual_tom](../../werewolf/strategy/counterfactual_tom.py)与[werewolf.strategy.suspicion_objectives](../../werewolf/strategy/suspicion_objectives.py)；下文旧路径用于历史追溯。迁移不改写原实验Source或模型来源。
+
 This is an independent intervention consumer, not an extension of the original
 `SealedFinalPredictor.log_probabilities(real_pre)` contract. Implementation lives
 in `scripts/counterfactual_tom.py`; peripheral scoring lives separately in

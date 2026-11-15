@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import threading
 
-from scripts.speech_planning import SpeechPlan, PlanningAction, generate_candidates, CANDIDATE_ORDER_VERSION
+from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction, generate_candidates, CANDIDATE_ORDER_VERSION
 from scripts.speech_realization import expected_action
 from scripts.verified_speech_commit import (
     PreCommitAudit, AuditAcknowledgement, capture_precommit_binding, realize_and_commit,

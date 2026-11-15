@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from scripts.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
 from tests.observer_dtrs.test_planning_research import Consumer, inputs, run
 from tests.tom.test_counterfactual_consumer import P, PublicWitness
 from werewolf.artifact_io import canonical_json_bytes

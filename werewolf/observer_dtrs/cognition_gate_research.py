@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 import re
 
-from scripts.speech_planning import PlanningAction, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction, SpeechPlan, generate_candidates
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.observer_dtrs.candidate_appraisal import (
     BasisKind, CandidateBasis, GateMode, PublicReference, appraise_candidates, bind_bases,

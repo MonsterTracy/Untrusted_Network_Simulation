@@ -10,8 +10,8 @@ import math
 from numbers import Real
 import re
 
-from scripts.speech_planning import SpeechPlan, generate_candidates
-from scripts.speech_versions import CANDIDATE_ORDER_VERSION
+from werewolf.strategy.speech_planning import SpeechPlan, generate_candidates
+from werewolf.strategy.speech_versions import CANDIDATE_ORDER_VERSION
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.observer_dtrs.decision import Region, decide, forced_binary

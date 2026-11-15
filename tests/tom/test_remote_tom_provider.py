@@ -10,10 +10,10 @@ import pytest
 
 from scripts import remote_tom_provider as r
 from scripts.constrained_speech import public_eligibility, SpeechTreatment
-from scripts.speech_planning import PlanningAction as A
+from werewolf.strategy.speech_planning import PlanningAction as A
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from tests.tom.test_constrained_speech import runner_fixture
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from tests.canonical_collection.test_runtime_game_evidence import ROLES
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 
@@ -196,6 +196,8 @@ def test_remote_module_has_no_inference_imports():
         "import sys; import scripts.remote_tom_provider; "
         "assert 'scripts.counterfactual_tom' not in sys.modules; "
         "assert 'scripts.speech_planning' not in sys.modules; "
+        "assert 'werewolf.strategy.counterfactual_tom' not in sys.modules; "
+        "assert 'werewolf.strategy.speech_planning' not in sys.modules; "
         "assert not any(k.startswith('werewolf.tom') for k in sys.modules)"], check=True)
 
 

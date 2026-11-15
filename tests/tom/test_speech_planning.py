@@ -2,19 +2,42 @@
 
 from dataclasses import FrozenInstanceError, fields, replace
 import inspect
+import subprocess
+import sys
 from unittest.mock import Mock
 
 import pytest
 import torch
 
-from scripts import speech_planning as planning
-from scripts.counterfactual_tom import (
+from werewolf.strategy import speech_planning as planning
+from werewolf.strategy.counterfactual_tom import (
     PlanningAction as A, ConsumerProvenance, CounterfactualToMConsumer,
     UnsupportedOpportunityError, tensorize_counterfactual,
 )
-from scripts.suspicion_objectives import wolf_suspicion_mass
+from werewolf.strategy.suspicion_objectives import wolf_suspicion_mass
 from tests.tom.test_counterfactual_consumer import PublicWitness, P, CAPACITY, sealed
 from werewolf.artifact_io import canonical_json_bytes
+
+
+
+
+def test_core_research_imports_without_legacy_planning_scripts():
+    """封锁旧规划路径，验证正式研究模块不再反向依赖脚本实现。"""
+    code = '''
+import importlib.abc
+import sys
+class RejectLegacyPlanning(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname in {'scripts.speech_planning', 'scripts.counterfactual_tom',
+                        'scripts.speech_versions', 'scripts.suspicion_objectives'}:
+            raise AssertionError('core research imported legacy planning: ' + fullname)
+sys.meta_path.insert(0, RejectLegacyPlanning())
+from werewolf.observer_dtrs import (
+    speech_evidence, planning_research, candidate_appraisal, cognition_gate_research,
+    contextual_policy, speech_runtime, f0_slice, native_action_link,
+)
+'''
+    subprocess.run([sys.executable, '-B', '-c', code], check=True)
 
 
 def uniform():

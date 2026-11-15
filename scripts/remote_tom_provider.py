@@ -4,7 +4,7 @@ from typing import Protocol
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.canonical_collection.pre import validate_authoritative_pre_prefix
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from scripts.speech_versions import CANDIDATE_ORDER_VERSION, QUEUE_RULE_VERSION
+from werewolf.strategy.speech_versions import CANDIDATE_ORDER_VERSION, QUEUE_RULE_VERSION
 from scripts.remote_tom_protocol import (
     WorkerIdentity, RemoteToMError, REMOTE_TOM_PROTOCOL_VERSION,
     decode_json_line, encode_json_line, bind_request, validate_response,

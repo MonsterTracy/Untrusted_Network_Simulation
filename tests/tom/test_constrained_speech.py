@@ -9,9 +9,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from scripts import constrained_speech as c
-from scripts.speech_planning import SpeechPlan, PlanningAction as A
+from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from tests.tom.test_verified_speech_commit import prepare, pending, snapshot, actor_for
 from tests.canonical_collection.test_runtime_game_evidence import _runtime, _Agent, ROLES
@@ -177,7 +177,8 @@ def test_private_assignment_and_payload_are_separate():
 
 def test_gameplay_imports_do_not_load_sealed_predictor():
     subprocess.run([sys.executable, '-c',
-        "import sys; import run_random; import scripts.constrained_speech; "
+        "import sys; import werewolf.game_runtime; import scripts.constrained_speech; "
+        "assert 'run_random' not in sys.modules; "
         "assert 'werewolf.tom.final_evaluation' not in sys.modules"], check=True)
 
 

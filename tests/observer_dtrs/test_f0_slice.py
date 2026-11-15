@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from scripts.speech_planning import SpeechPlan, PlanningAction as A
+from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
 from tests.canonical_collection.test_game_bundle import _plan, _claim
 from tests.canonical_collection.test_runtime_game_evidence import ROLES, _Agent
 from tests.runtime.test_runtime_config import new_config

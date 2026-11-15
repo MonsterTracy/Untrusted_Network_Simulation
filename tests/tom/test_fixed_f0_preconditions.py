@@ -1,7 +1,7 @@
 """Phase-2I opt-in boundary regression, scripted local partial PRE only."""
 from unittest.mock import Mock
 import pytest
-from scripts.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
 from scripts.speech_realization import expected_action
 from scripts.verified_speech_commit import PreCommitAudit, capture_precommit_binding, realize_and_commit
 from tests.tom.test_precommit_audit import setup
@@ -44,7 +44,7 @@ def test_opt_in_rejects_shape_valid_but_ineligible_plan_before_actor(tmp_path):
 @pytest.mark.parametrize('action', [A.SELF_DEFEND, A.NO_COMMITMENT])
 def test_fixed_plan_reuses_frozen_PRE_records_intent_then_one_native(phase, action, tmp_path, monkeypatch):
     import torch
-    from scripts import counterfactual_tom as cf
+    from werewolf.strategy import counterfactual_tom as cf
     env, rec, backend, actor, payload, owner = setup(tmp_path, phase, action)
     try:
         reports, prefixes = tuple(rec.observations), tuple(rec.prefixes)

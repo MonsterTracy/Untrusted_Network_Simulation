@@ -33,7 +33,7 @@ import werewolf.phase2_mapper_runtime as mapper_module
 import werewolf.phase2_online_preflight as preflight
 import werewolf.phase2_online_runner as runner
 import werewolf.phase2_online_server as server
-from run_random import eval as production_eval
+from werewolf.game_runtime import eval as production_eval
 
 
 ROOT = Path(__file__).resolve().parents[2]

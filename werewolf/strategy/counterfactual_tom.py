@@ -20,7 +20,7 @@ from werewolf.structured_history import (
 )
 from werewolf.tom.dataset import ExperimentCapacity, PublicTensors, tensorize_public_pre
 from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
-from scripts.speech_versions import QUEUE_RULE_VERSION
+from werewolf.strategy.speech_versions import QUEUE_RULE_VERSION
 
 
 CONSUMER_SCHEMA_VERSION = "counterfactual_tom_consumer_v1"

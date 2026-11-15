@@ -1,7 +1,10 @@
 import unittest
+import random
+import subprocess
+import sys
 from unittest.mock import patch
 
-from run_random import build_runtime
+from werewolf.game_runtime import build_runtime
 
 
 ROLES = [
@@ -100,6 +103,67 @@ class RunRandomProfileTest(unittest.TestCase):
             "agent-api-b": self.agent_backend_b,
         }
 
+    def test_root_source_module_exports_the_same_runtime(self):
+        """保留的根Source位置只导出同一实现，不拥有第二套执行逻辑。"""
+        import run_random
+        from werewolf import game_runtime
+
+        for name in ('eval', 'build_runtime', 'assign_agents', 'PUBLIC_SPEECH_RUNTIME_PHASES'):
+            self.assertIs(getattr(run_random, name), getattr(game_runtime, name))
+        self.assertEqual(game_runtime.eval.__module__, 'werewolf.game_runtime')
+        self.assertFalse(hasattr(run_random, 'main_cli'))
+
+    def test_internal_callers_load_package_runtime_without_root_module(self):
+        """生产采集与Phase-2直接使用正式Runtime，不依赖根文件反向装配。"""
+        code = '''
+import sys
+from werewolf import game_runtime
+from werewolf.canonical_collection import production_runtime
+from werewolf import phase2_online_runner
+assert production_runtime.build_runtime is game_runtime.build_runtime
+assert production_runtime.run_game is game_runtime.eval
+assert phase2_online_runner.run_canonical_game is game_runtime.eval
+assert 'run_random' not in sys.modules
+'''
+        subprocess.run([sys.executable, '-B', '-c', code], check=True)
+
+    def test_source_inventories_cover_the_runtime_implementation(self):
+        """显式Source清单必须绑定迁移后的实现，不能只记录根转发文件。"""
+        from pathlib import Path
+        from werewolf import game_runtime
+        from werewolf.artifact_io import sha256_bytes
+        from werewolf.observer_dtrs.shadow_worker import _implementation
+        from werewolf.phase2_online_preflight import SOURCE_FILES
+
+        name = 'werewolf/game_runtime.py'
+        self.assertIn(name, SOURCE_FILES)
+        self.assertEqual(_implementation()[name], sha256_bytes(Path(game_runtime.__file__).read_bytes()))
+
+    def test_seed_preserves_roles_profiles_and_next_random_draw(self):
+        """固定迁移前观察到的角色、Profile和后续RNG状态，防止改变随机调用顺序。"""
+        expected = (
+            (0, ['Villager', 'Villager', 'Werewolf', 'Werewolf', 'Seer', 'Villager', 'Witch'],
+             ['profile-b', 'profile-b', 'profile-a', 'profile-a', 'profile-b', 'profile-b', 'profile-b'],
+             2577854692418029171),
+            (3, ['Werewolf', 'Villager', 'Villager', 'Witch', 'Seer', 'Villager', 'Werewolf'],
+             ['profile-b', 'profile-a', 'profile-a', 'profile-a', 'profile-a', 'profile-a', 'profile-b'],
+             9979206796010795124),
+            (17, ['Seer', 'Werewolf', 'Werewolf', 'Witch', 'Villager', 'Villager', 'Villager'],
+             ['profile-b', 'profile-a', 'profile-a', 'profile-b', 'profile-b', 'profile-b', 'profile-b'],
+             15858755842042771698),
+        )
+        state = random.getstate()
+        try:
+            for seed, expected_roles, expected_profiles, expected_draw in expected:
+                with self.subTest(seed=seed):
+                    _, _, roles, profiles = build_runtime(
+                        runtime_config(), None, random_seed=seed, backends=self.backends)
+                    self.assertEqual(roles, expected_roles)
+                    self.assertEqual(profiles, expected_profiles)
+                    self.assertEqual(random.getrandbits(64), expected_draw)
+        finally:
+            random.setstate(state)
+
     def test_new_schema_wires_parser_and_profile_backends(self):
         env, agents, roles, profile_names = build_runtime(
             runtime_config(),
@@ -130,7 +194,7 @@ class RunRandomProfileTest(unittest.TestCase):
                 self.assertEqual(agent.model_name, "agent-model-b")
                 self.assertEqual(agent.temperature, 0.7)
 
-    @patch("run_random.load_named_backends")
+    @patch("werewolf.game_runtime.load_named_backends")
     def test_default_runtime_path_loads_named_backends(
         self,
         load_named_backends,

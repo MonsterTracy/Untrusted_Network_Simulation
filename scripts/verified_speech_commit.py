@@ -188,7 +188,7 @@ def realize_and_commit(payload, *, env, actor, recorder, precommit_audit=None):
         audit_binding = _live_audit_binding(payload, env, recorder, precommit_audit)
         precommit_audit._claim(audit_binding)
         # Candidate eligibility is a PRE precondition, not a language outcome.
-        from scripts.speech_planning import generate_candidates
+        from werewolf.strategy.speech_planning import generate_candidates
         _audit_require(type(payload) is dict and payload in tuple(
             plan.public_payload() for plan in generate_candidates(pending.prefix)),
             'audited plan is not a legal candidate at the current PRE')

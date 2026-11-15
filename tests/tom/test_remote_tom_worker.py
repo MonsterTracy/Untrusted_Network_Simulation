@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from scripts import remote_tom_protocol as protocol, remote_tom_worker as worker
-from scripts import speech_planning as planning, counterfactual_tom as cf
+from werewolf.strategy import speech_planning as planning, counterfactual_tom as cf
 from tests.tom.test_remote_tom_provider import IDENTITY, opportunity, provider
 from tests.tom.test_speech_planning import RecordingConsumer
 from scripts.remote_tom_provider import build_request
@@ -132,3 +132,11 @@ def test_bootstrap_failure_exits_without_serving(monkeypatch):
     monkeypatch.setattr(worker, 'serve', serve)
     assert worker.main() == 1
     serve.assert_not_called()
+
+
+def test_bootstrap_rejects_new_source_before_frozen_planner_imports(monkeypatch):
+    """当前主线不借旧Worker身份启动，先拒绝Source才涉及历史模块导入。"""
+    monkeypatch.chdir(worker.Path(worker.__file__).resolve().parents[1])
+    monkeypatch.setattr(worker.subprocess, 'check_output', Mock(return_value='0' * 40))
+    with pytest.raises(RuntimeError, match='fixed detached planner baseline'):
+        worker.bootstrap('/unopened-final-experiment', 'implicit')

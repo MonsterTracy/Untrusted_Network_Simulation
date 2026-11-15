@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import re
 
-from scripts.speech_planning import generate_candidates
+from werewolf.strategy.speech_planning import generate_candidates
 from scripts.verified_speech_commit import realize_and_commit
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.speech_planning import PlanningAction as A
+from werewolf.strategy.speech_planning import PlanningAction as A
 from tests.observer_dtrs.conftest import prefix_for
 from tests.observer_dtrs.test_contextual_policy import fitted
 from tests.tom.test_counterfactual_consumer import PublicWitness, P

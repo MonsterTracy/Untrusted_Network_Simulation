@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from run_random import build_runtime, eval as run_game
+from werewolf.game_runtime import build_runtime, eval as run_game
 from werewolf.canonical_collection.attempt_ledger import AttemptClaim, CollectionPlan
 from werewolf.canonical_collection.call_audit import CanonicalCallAudit, audited_backends
 from werewolf.canonical_collection.collector import (

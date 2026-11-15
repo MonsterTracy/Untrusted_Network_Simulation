@@ -11,7 +11,7 @@ import inspect
 from pathlib import Path
 import os
 
-from run_random import eval as run_canonical_game
+from werewolf.game_runtime import eval as run_canonical_game
 from werewolf.phase2_execution import prepare_phase2_intervention_speech
 from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes,

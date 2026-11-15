@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import run_random
+from werewolf import game_runtime
 
 
 SHARED_PROFILE = {
@@ -48,7 +48,7 @@ def patch_playing_agent(monkeypatch):
     class FakeAgent:
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
-    monkeypatch.setattr(run_random, "GPTAgent", FakeAgent)
+    monkeypatch.setattr(game_runtime, "GPTAgent", FakeAgent)
 
 
 def test_shared_profile_can_control_both_teams(
@@ -61,7 +61,7 @@ def test_shared_profile_can_control_both_teams(
     (
         role_to_profile,
         agents,
-    ) = run_random.assign_agents(
+    ) = game_runtime.assign_agents(
         candidate_profiles=[
             SHARED_PROFILE,
         ],
@@ -99,7 +99,7 @@ def test_default_mode_preserves_team_exclusivity(
             "for role: Villager"
         ),
     ):
-        run_random.assign_agents(
+        game_runtime.assign_agents(
             candidate_profiles=[
                 SHARED_PROFILE,
             ],
@@ -130,7 +130,7 @@ def test_invalid_cross_team_setting_is_rejected(
             "must be boolean"
         ),
     ):
-        run_random.assign_agents(
+        game_runtime.assign_agents(
             candidate_profiles=[
                 SHARED_PROFILE,
             ],

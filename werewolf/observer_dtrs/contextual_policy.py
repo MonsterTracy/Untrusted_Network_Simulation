@@ -7,7 +7,7 @@ mapping are normative hypotheses. No fitting, labels, artifact I/O or env step.
 from dataclasses import dataclass
 from fractions import Fraction
 
-from scripts.speech_planning import PlanningAction, SpeechPlan, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction, SpeechPlan, generate_candidates
 from scripts.speech_realization import PublicRealizationContext
 from werewolf.agents.prompt_template_v0 import PublicClaim
 from werewolf.canonical_collection.pre import AuthoritativePREPrefix

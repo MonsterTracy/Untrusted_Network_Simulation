@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from werewolf.observer_dtrs.cognition_gate_research import (ARMS, PUBLIC_RULE, bind_inputs,
     public_reply_catalog, profile, audit_pre, digest, D3_DIGEST)
-from scripts.speech_planning import generate_candidates
+from werewolf.strategy.speech_planning import generate_candidates
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.canonical_collection.game_bundle import _prefix_from_record
 from werewolf.canonical_collection.pre import validate_authoritative_pre_prefix

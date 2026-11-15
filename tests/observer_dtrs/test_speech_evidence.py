@@ -7,7 +7,7 @@ import random
 import numpy as np
 import pytest
 
-from scripts.speech_planning import PlanningAction as A, generate_candidates
+from werewolf.strategy.speech_planning import PlanningAction as A, generate_candidates
 from tests.observer_dtrs.conftest import prefix_for, speech_events
 from tests.observer_dtrs.test_speech_runtime import (
     EVIDENCE, POLICY, REFERENCE, runtime, source, witness,

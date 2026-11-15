@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from scripts.suspicion_objectives import wolf_suspicion_mass
+from werewolf.strategy.suspicion_objectives import wolf_suspicion_mass
 
 P = tuple(f"player{i}" for i in range(1, 8))
 

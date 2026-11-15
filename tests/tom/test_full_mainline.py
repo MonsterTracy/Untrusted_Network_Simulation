@@ -15,7 +15,7 @@ class CompletingAgent(_Agent):
 
 
 def test_runtime_to_collection_publication_and_paired_oof(tmp_path):
-    from run_random import eval as run_game
+    from werewolf.game_runtime import eval as run_game
     from werewolf.canonical_collection import collect, V1_SPEECH_PARSER_VERSION, V1_SPEECH_PROMPT_VERSION
     from werewolf.canonical_collection.call_audit import CanonicalCallAudit, audited_backends
     from werewolf.canonical_collection.collector import CanonicalGameProduct

@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from tests.canonical_collection.test_runtime_game_evidence import ROLES, _runtime
 from tests.phase2.test_gameplay_campaign import GameplayLedger, no_router, plan
 from tests.runtime.test_runtime_config import new_config

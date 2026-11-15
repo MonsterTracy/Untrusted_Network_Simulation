@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import torch
 
-import scripts.counterfactual_tom as cf
+from werewolf.strategy import counterfactual_tom as cf
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection import (
     construct_authoritative_pre_prefix, freeze_public_event_history,

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from tests.canonical_collection.test_game_bundle import _claim, _plan
 from werewolf.canonical_collection import (
     BackendCallPurpose,

@@ -7,6 +7,7 @@ setup(
     keywords="werewolf, multi-agent, theory-of-mind",
     packages=find_packages(),
     package_data={"werewolf.tom_llm": ["assets/*.txt", "assets/*.jinja"]},
+    # Source库存仍读取根模块；游戏实现由werewolf.game_runtime拥有。
     py_modules=["run_random"],
     entry_points={"console_scripts": ["uns=werewolf.cli:main"]},
     python_requires=">=3.10",

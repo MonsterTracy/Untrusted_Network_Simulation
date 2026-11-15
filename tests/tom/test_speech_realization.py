@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from scripts import speech_realization as r
-from scripts.speech_planning import SpeechPlan, PlanningAction as A
+from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
 from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.speech.speech_perceiver import SpeechPerceiver
 
@@ -160,4 +160,6 @@ def test_actor_module_does_not_import_sealed_tom_or_planner():
     subprocess.run([sys.executable, "-c", "import sys; import scripts.speech_realization; "
         "assert 'scripts.counterfactual_tom' not in sys.modules; "
         "assert 'scripts.speech_planning' not in sys.modules; "
+        "assert 'werewolf.strategy.counterfactual_tom' not in sys.modules; "
+        "assert 'werewolf.strategy.speech_planning' not in sys.modules; "
         "assert 'werewolf.tom.final_evaluation' not in sys.modules"], check=True)

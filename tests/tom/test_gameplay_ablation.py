@@ -14,7 +14,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from scripts import qwen3_gameplay_predictor as process
 from scripts.qwen3_gameplay_predictor import _decode, _wire
 from scripts.tom_gameplay_ablation import eligible_observers, run_ablation, tom_payload

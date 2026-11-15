@@ -29,7 +29,7 @@ from scripts.run_phase2_online_intervention_pilot import (
 from werewolf.phase2_online_preflight import PilotPreflightV1
 from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.phase2_pilot_dataset import build_phase2_online_dataset_from_ledger
-from run_random import eval as run_game
+from werewolf.game_runtime import eval as run_game
 from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
 from werewolf.phase2_outcome import reference_tables_digest
 from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1

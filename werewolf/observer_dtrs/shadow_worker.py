@@ -33,7 +33,7 @@ def _engine(spec, root):
 
 def _implementation():
     root = Path(__file__).resolve().parents[2]
-    names = ('run_random.py', 'werewolf/canonical_collection/runtime.py',
+    names = ('run_random.py', 'werewolf/game_runtime.py', 'werewolf/canonical_collection/runtime.py',
         *('werewolf/observer_dtrs/'+n+'.py' for n in (
             'online_context', 'online_model', 'shadow', 'shadow_artifacts',
             'shadow_receipts', 'shadow_worker', 'shadow_hook')))

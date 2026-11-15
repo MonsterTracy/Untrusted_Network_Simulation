@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from scripts.speech_planning import generate_candidates
+from werewolf.strategy.speech_planning import generate_candidates
 from scripts.speech_realization import expected_action
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from werewolf.artifact_io import canonical_json_bytes

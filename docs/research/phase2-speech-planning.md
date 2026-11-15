@@ -1,5 +1,7 @@
 # Phase 2: pure speech planning and ToM decision primitives
 
+> 本文保留原Source下的研究记录。当前实现由[werewolf.strategy.speech_planning](../../werewolf/strategy/speech_planning.py)维护。下文原Source与候选、评分合同不变。
+
 Base: `2192b7b4ae83d756b071c653889ce2f8ff147f02`, branch
 `ablation/tom-gameplay`. Implementation: `scripts/speech_planning.py`.
 No gameplay, Actor, verifier, LLM prompt, vote control or 3WD integration.
