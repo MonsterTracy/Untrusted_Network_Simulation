@@ -12,6 +12,8 @@ SCHEDULE_VERSION = "classic7_balanced_seven_shift_v2"
 ORDER_VERSION = "classic7_round_game_order_v2"
 BOOTSTRAP_VERSION = "classic7_sha256_rejection_bootstrap_v1"
 FIELD_ENCODING = "canonical_json_utf8_u64be_length_prefix_v1"
+DEVELOPMENT_HOLDOUT_VERSION = "classic7_development_train4500_validation300_v1"
+DEVELOPMENT_HOLDOUT_SEED = 20261115
 
 
 def load_bootstrap_plan(experiment):
@@ -34,6 +36,44 @@ def load_bootstrap_plan(experiment):
 def digest_fields(*values):
     encoded = [canonical_json_bytes(value) for value in values]
     return hashlib.sha256(b"".join(len(v).to_bytes(8, "big") + v for v in encoded)).digest()
+
+
+def development_holdout_split(game_ids, *, development_game_ids):
+    """仅按游戏身份生成固定划分，不读取标签、角色、Fold 或 Test。
+
+    development_game_ids 必须来自既有 Development 读取器的 public_view；
+    它是可信全集，不能用待检查的外部身份列表代替来源核验。
+    排序键为 digest_fields(规则版本, 固定种子, Game ID)，并以 Game ID 破同序。
+    """
+    games = tuple(game_ids)
+    development = tuple(development_game_ids)
+    for ids in (development, games):
+        if any(type(game_id) is not str or not game_id.strip() for game_id in ids):
+            raise ValueError("Development game identities must be nonempty strings")
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate Development game identity")
+    if len(development) != 4800:
+        raise ValueError("holdout requires exactly 4800 verified Development games")
+    if not set(games) <= set(development):
+        raise ValueError("game identity is outside verified Development")
+    if set(games) != set(development):
+        raise ValueError("holdout must cover every verified Development game")
+    ranked = sorted(games, key=lambda game_id: (
+        digest_fields(DEVELOPMENT_HOLDOUT_VERSION, DEVELOPMENT_HOLDOUT_SEED, game_id),
+        game_id,
+    ))
+    training = sorted(ranked[300:])
+    validation = sorted(ranked[:300])
+    return {
+        "rule_version": DEVELOPMENT_HOLDOUT_VERSION,
+        "seed": DEVELOPMENT_HOLDOUT_SEED,
+        "field_encoding": FIELD_ENCODING,
+        "development_game_ids_digest": sha256_bytes(canonical_json_bytes(sorted(development))),
+        "training_game_ids": training,
+        "validation_game_ids": validation,
+        "training_game_ids_digest": sha256_bytes(canonical_json_bytes(training)),
+        "validation_game_ids_digest": sha256_bytes(canonical_json_bytes(validation)),
+    }
 
 
 def training_schedule(schedule_seed, fold, game_ids, cycles, batch_size):

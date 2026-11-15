@@ -150,48 +150,35 @@ def graph_identity(architecture):
     return {**graph, "graph_digest": sha256_bytes(canonical_json_bytes(graph))}
 
 
-class BackboneToM(nn.Module):
-    def __init__(self, architecture, temporal, *, study_seed, fold):
-        super().__init__()
-        if torch.get_default_dtype() != torch.float32:
-            raise ValueError("backbone study requires FP32 construction")
-        self.graph = graph_identity(architecture)
-        self.capacity = ExperimentCapacity(1024)
-        self.temporal = temporal
-        seeds = initialization_seeds(study_seed, fold, architecture)
-        # Both construction domains restore the caller's RNG; no constructor drift
-        # can consume the independent training stream.
-        with torch.random.fork_rng(devices=[]):
-            torch.random.default_generator.manual_seed(seeds["shell"])
-            self.source_embedding = nn.Embedding(8, 256, padding_idx=0)
-            self.target_embedding = nn.Embedding(8, 256, padding_idx=0)
-            self.action_embedding = nn.Embedding(len(V1_ACTIONS) + 1, 256, padding_idx=0)
-            self.event_embedding = nn.Embedding(len(STRUCTURED_TOKEN_TYPES) + 1, 256, padding_idx=0)
-            self.observer_embedding = nn.Embedding(7, 256)
-            self.source_relative_embedding = nn.Embedding(8, 256, padding_idx=7)
-            self.target_relative_embedding = nn.Embedding(8, 256, padding_idx=7)
-            self.relation_projection = nn.Linear(2, 256, bias=False)
-            self.query_attention = nn.MultiheadAttention(256, 8, batch_first=True)
-            self.query_norm = nn.LayerNorm(256)
-            self.output = nn.Linear(256, 7)
-            for embedding in (self.source_embedding, self.target_embedding, self.action_embedding,
-                              self.event_embedding, self.observer_embedding,
-                              self.source_relative_embedding, self.target_relative_embedding):
-                nn.init.normal_(embedding.weight, std=.02)
-                if embedding.padding_idx is not None:
-                    with torch.no_grad():
-                        embedding.weight[embedding.padding_idx].zero_()
-            nn.init.normal_(self.relation_projection.weight, std=.02)
-            nn.init.normal_(self.output.weight, std=.02)
-            nn.init.zeros_(self.output.bias)
-        with torch.random.fork_rng(devices=[]):
-            torch.random.default_generator.manual_seed(seeds["backbone"])
-            self.transformer = build_backbone(architecture)
-        sequence = sum(p.numel() for p in self.transformer.parameters())
-        total = sum(p.numel() for p in self.parameters())
-        if (sequence != self.graph["sequence_parameters"] or total != self.graph["total_parameters"]
-                or not .9 * 3150080 <= sequence <= 1.1 * 3150080):
-            raise ValueError("frozen backbone parameter count/budget mismatch")
+class _ObserverConditionedBackbone(nn.Module):
+    """复用公开输入与观察者读出；具体模型独立绑定图、容量和初始化。"""
+
+    def _initialize_shell(self, width):
+        # 构造与初始化顺序保持历史 256 维模型的 RNG 和参数名不变。
+        self.source_embedding = nn.Embedding(8, width, padding_idx=0)
+        self.target_embedding = nn.Embedding(8, width, padding_idx=0)
+        self.action_embedding = nn.Embedding(len(V1_ACTIONS) + 1, width, padding_idx=0)
+        self.event_embedding = nn.Embedding(len(STRUCTURED_TOKEN_TYPES) + 1, width, padding_idx=0)
+        self.observer_embedding = nn.Embedding(7, width)
+        self.source_relative_embedding = nn.Embedding(8, width, padding_idx=7)
+        self.target_relative_embedding = nn.Embedding(8, width, padding_idx=7)
+        self.relation_projection = nn.Linear(2, width, bias=False)
+        self.query_attention = nn.MultiheadAttention(width, 8, batch_first=True)
+        self.query_norm = nn.LayerNorm(width)
+        self.output = nn.Linear(width, 7)
+        for embedding in (self.source_embedding, self.target_embedding, self.action_embedding,
+                          self.event_embedding, self.observer_embedding,
+                          self.source_relative_embedding, self.target_relative_embedding):
+            nn.init.normal_(embedding.weight, std=.02)
+            if embedding.padding_idx is not None:
+                with torch.no_grad():
+                    embedding.weight[embedding.padding_idx].zero_()
+        nn.init.normal_(self.relation_projection.weight, std=.02)
+        nn.init.normal_(self.output.weight, std=.02)
+        nn.init.zeros_(self.output.bias)
+
+    def _temporal_code(self, day_ids, phase_ids):
+        return self.temporal.code(day_ids, phase_ids)
 
     def forward(self, event_ids, source_ids, action_ids, target_ids, day_ids, phase_ids, attention_mask):
         if self.temporal is None:
@@ -215,7 +202,7 @@ class BackboneToM(nn.Module):
             raise ValueError("real tokens cannot have padding event IDs")
         base = (self.source_embedding(source_ids) + self.target_embedding(target_ids)
                 + self.action_embedding(action_ids) + self.event_embedding(event_ids))
-        base = base + self.temporal.code(day_ids, phase_ids).to(base.dtype)
+        base = base + self._temporal_code(day_ids, phase_ids).to(base.dtype)
         hidden = self.transformer(inputs_embeds=base, attention_mask=attention_mask.long(), use_cache=False).last_hidden_state
         sources = relative_player_indices(source_ids)
         targets = relative_player_indices(target_ids)
@@ -223,11 +210,12 @@ class BackboneToM(nn.Module):
         relative = (hidden[:, None] + self.source_relative_embedding(sources)
                     + self.target_relative_embedding(targets) + self.relation_projection(flags))
         batch, length = shape
+        width = self.observer_embedding.embedding_dim
         queries = self.observer_embedding(torch.arange(7, device=event_ids.device))[None].expand(batch, -1, -1)
-        keys = relative.reshape(batch * 7, length, 256)
-        context, _ = self.query_attention(queries.reshape(batch * 7, 1, 256), keys, keys,
+        keys = relative.reshape(batch * 7, length, width)
+        context, _ = self.query_attention(queries.reshape(batch * 7, 1, width), keys, keys,
             key_padding_mask=(~attention_mask)[:, None].expand(-1, 7, -1).reshape(batch * 7, length), need_weights=False)
-        logits = self.output(self.query_norm(queries + context.reshape(batch, 7, 256)))
+        logits = self.output(self.query_norm(queries + context.reshape(batch, 7, width)))
         diagonal = torch.eye(7, dtype=torch.bool, device=logits.device)
         if not torch.isfinite(logits[:, ~diagonal]).all():
             raise ValueError("non-finite non-self logits")
@@ -235,3 +223,26 @@ class BackboneToM(nn.Module):
         if not torch.isfinite(logp[:, ~diagonal]).all() or not torch.allclose(logp.exp().sum(-1), torch.ones_like(logp[..., 0]), atol=1e-6):
             raise ValueError("invalid Non-Self Suspicion Simplex output")
         return logp
+
+
+class BackboneToM(_ObserverConditionedBackbone):
+    def __init__(self, architecture, temporal, *, study_seed, fold):
+        super().__init__()
+        if torch.get_default_dtype() != torch.float32:
+            raise ValueError("backbone study requires FP32 construction")
+        self.graph = graph_identity(architecture)
+        self.capacity = ExperimentCapacity(1024)
+        self.temporal = temporal
+        seeds = initialization_seeds(study_seed, fold, architecture)
+        # 两个初始化域均恢复调用方 RNG，不消耗独立训练流。
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed(seeds["shell"])
+            self._initialize_shell(256)
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed(seeds["backbone"])
+            self.transformer = build_backbone(architecture)
+        sequence = sum(p.numel() for p in self.transformer.parameters())
+        total = sum(p.numel() for p in self.parameters())
+        if (sequence != self.graph["sequence_parameters"] or total != self.graph["total_parameters"]
+                or not .9 * 3150080 <= sequence <= 1.1 * 3150080):
+            raise ValueError("frozen backbone parameter count/budget mismatch")
