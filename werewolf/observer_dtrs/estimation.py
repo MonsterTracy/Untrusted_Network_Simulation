@@ -4,7 +4,7 @@ Prediction accepts ObserverFeatures only. Raw reports, Q targets and Phase2
 objects are not accepted. TrainingRow.y is an explicit offline target.
 """
 from bisect import bisect_left
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 import json
 import math
@@ -15,6 +15,7 @@ from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.observer_dtrs.features import ObserverFeatures
 
 VERSION = "observer_dtrs_equivalence_estimator_v1"
+FINAL_SELECTION_RULE = "four_inner_scores_per_game_then_game_equal"
 STATES = tuple((p, n) for p in ("discussion", "pk_discussion") for n in (1, 2))
 
 
@@ -210,7 +211,10 @@ def fit_model(rows, *, protocol, model_id, bins, smoothing, source, weighting="g
 def _validate_source(source, protocol):
     required = {"scope", "protocol_digest", "dataset_digest", "split_manifest_digest",
                 "tom_fold", "outer_fold", "inner_fold", "game_sizes", "origins", "implementation_digest"}
-    if (set(source) != required or source["scope"] not in ("controlled_fixture", "formal_training_partition")
+    final = source.get("scope") == "final_development_oof"
+    if final:
+        required |= {"game_folds", "selection", "fit_revision"}
+    if (set(source) != required or source["scope"] not in ("controlled_fixture", "formal_training_partition", "final_development_oof")
             or source["protocol_digest"] != protocol.digest
             or not isinstance(source["game_sizes"], dict)
             or any(not isinstance(g, str) or not g or type(n) is not int or n < 1
@@ -219,7 +223,9 @@ def _validate_source(source, protocol):
             or not isinstance(source["implementation_digest"], str)
             or re.fullmatch(r"[0-9a-f]{64}", source["implementation_digest"]) is None):
         raise ValueError("fit requires explicit valid source identity")
-    if source["scope"] == "formal_training_partition":
+    if final:
+        _validate_final_source(source, protocol)
+    elif source["scope"] == "formal_training_partition":
         if (source["dataset_digest"] != protocol.record["dataset_digest"]
                 or not isinstance(source["split_manifest_digest"], str)
                 or re.fullmatch(r"[0-9a-f]{64}", source["split_manifest_digest"]) is None
@@ -230,6 +236,62 @@ def _validate_source(source, protocol):
             raise ValueError("formal fit partition identity mismatch")
     elif any(source[k] is not None for k in ("dataset_digest", "split_manifest_digest", "tom_fold", "outer_fold", "inner_fold")):
         raise ValueError("controlled fixtures must not claim formal dataset/fold identities")
+
+
+def _validate_final_source(source, protocol):
+    """全量候选具有独立来源，不冒用历史单折CV训练分区。"""
+    selection, folds, origins = source["selection"], source["game_folds"], source["origins"]
+    if (source["dataset_digest"] != protocol.record["dataset_digest"]
+            or any(source[k] is not None for k in ("tom_fold", "outer_fold", "inner_fold"))
+            or len(source["game_sizes"]) != 1500
+            or sum(source["game_sizes"].values()) != 22685
+            or not isinstance(folds, dict) or set(folds) != set(source["game_sizes"])
+            or any(type(f) is not int for f in folds.values())
+            or Counter(folds.values()) != {k: 300 for k in range(5)}
+            or set(origins) != {"publication", "oof"}
+            or not isinstance(origins["publication"], dict)
+            or not isinstance(origins["oof"], list) or len(origins["oof"]) != 5):
+        raise ValueError("final OOF population/source mismatch")
+    publication = origins["publication"]
+    oof_digests = []
+    for f, oof in enumerate(origins["oof"]):
+        if (not isinstance(oof, dict) or type(oof.get("fold_index")) is not int
+                or oof["fold_index"] != f
+                or oof.get("architecture") != "qwen3"
+                or oof.get("temporal_condition") != "explicit_day_phase"
+                or oof.get("publication_digest") != publication.get("manifest_digest")
+                or oof.get("fold_manifest_digest") != publication.get("fold_manifest_digest")):
+            raise ValueError("final model requires five publication-bound OOF sources")
+        oof_digests.extend(oof.get(k) for k in (
+            "evaluation_digest", "evaluation_seal_digest", "preparation_digest", "training_execution_digest",
+            "training_seal_digest", "terminal_digest", "checkpoint_digest", "prediction_artifact_digest",
+            "prediction_payload_sha256"))
+    if (not isinstance(selection, dict) or set(selection) != {
+            "rule", "run_path", "contract_digest", "complete_digest", "selection_digests",
+            "aggregated_scores_digest", "selected_parameters"}
+            or selection["rule"] != FINAL_SELECTION_RULE
+            or not isinstance(selection["run_path"], str) or not selection["run_path"]
+            or not isinstance(selection["selection_digests"], dict)
+            or set(selection["selection_digests"]) != {f"{k}-{j}" for k in range(5) for j in range(5)}
+            or not isinstance(selection["selected_parameters"], dict)
+            or set(selection["selected_parameters"]) != {"OBS-EQ0", "OBS-EQ1"}):
+        raise ValueError("invalid final inner-selection provenance")
+    digests = [source["split_manifest_digest"], selection["contract_digest"], selection["complete_digest"],
+               selection["aggregated_scores_digest"], *selection["selection_digests"].values(),
+               publication.get("manifest_digest"), publication.get("fold_manifest_digest"), *oof_digests]
+    if (any(not isinstance(d, str) or re.fullmatch(r"[0-9a-f]{64}", d) is None for d in digests)
+            or not isinstance(source["fit_revision"], str)
+            or re.fullmatch(r"[0-9a-f]{40}", source["fit_revision"]) is None):
+        raise ValueError("invalid final model source digest/revision")
+    if len(set(selection["selection_digests"].values())) != 25:
+        raise ValueError("duplicate final Selection source")
+    for name, parameters in selection["selected_parameters"].items():
+        if (not isinstance(parameters, dict) or set(parameters) != {"bins", "smoothing"}
+                or type(parameters["bins"]) is not int
+                or parameters["bins"] not in ((1,) if name == "OBS-EQ0" else protocol.record["histogram"]["requested_bin_counts"])
+                or isinstance(parameters["smoothing"], bool)
+                or parameters["smoothing"] not in protocol.record["smoothing"]["lambda_grid_game_equivalent_mass"]):
+            raise ValueError("invalid final selected parameters")
 
 
 def validate_model(model, protocol):
@@ -255,6 +317,10 @@ def validate_model(model, protocol):
             or parameters["lambda"] not in p["smoothing"]["lambda_grid_game_equivalent_mass"]):
         raise ValueError("invalid estimator parameters")
     _validate_source(m["source"], protocol)
+    if m["source"]["scope"] == "final_development_oof":
+        selected = m["source"]["selection"]["selected_parameters"][m["model_id"]]
+        if parameters != {"requested_bins": selected["bins"], "lambda": selected["smoothing"], "weighting": "game_equal"}:
+            raise ValueError("final model parameters differ from its inner selection")
     if (not m["source"]["game_sizes"] or not isinstance(m["training_fingerprint"], str)
             or re.fullmatch(r"[0-9a-f]{64}", m["training_fingerprint"]) is None):
         raise ValueError("invalid estimator training identity")

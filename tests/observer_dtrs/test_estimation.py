@@ -285,3 +285,255 @@ def test_controlled_acceptance_cli_runs_without_any_formal_data(tmp_path):
     assert report['scope'] == 'controlled_fixture_not_performance_validation'
     assert report['predictions'] == {'controlled-a': .875, 'controlled-b': .125}
     assert report['scores']['game_equal']['brier'] == .015625
+
+
+@pytest.fixture
+def final_selections(protocol):
+    """75个人工游戏只用于评分归集，不读取或拟合正式数据。"""
+    from werewolf.observer_dtrs.validation_data import controlled_fixture
+    from werewolf.observer_dtrs.splits import partition_games
+    data = controlled_fixture(protocol)
+    selections = []
+    for k in range(5):
+        for j in range(5):
+            train, _ = partition_games(data.split, tom_fold=k, outer_fold=j)
+            entries = []
+            for name in ("OBS-EQ1", "OBS-EQ0"):
+                for b in ((1, 3, 5) if name == "OBS-EQ1" else (1,)):
+                    for l in (.25, 1, 4):
+                        base = .1 if (name, b, l) == ("OBS-EQ1", 3, 1) else .3
+                        entries.append({"model": name, "parameters": {"bins": b, "smoothing": l},
+                            "games": {g: base + j / 100 + int(g.rsplit('-', 1)[1]) / 10000 for g in train}})
+            # 历史LR及局部最佳参数故意与本轮全局选择相冲突。
+            entries.append({"model": "OBS-LR-r", "parameters": {"tau": 1}, "games": {g: 0 for g in train}})
+            selections.append(({"tom_fold": k, "outer_fold": j, "weighting": "game_equal"},
+                {"candidate_game_brier": entries, "selected": {"OBS-EQ1": {"bins": 5, "smoothing": 4}},
+                 "candidate_artifact_digests": ["a" * 64]}))
+    return data, selections
+
+
+def test_final_inner_scores_average_four_per_game_and_ignore_record_order(protocol, final_selections):
+    from werewolf.observer_dtrs.estimation_offline import aggregate_inner_scores
+    data, selections = final_selections
+    table = aggregate_inner_scores(selections, split_record=data.split, game_folds=data.folds, protocol=protocol)
+    game = sorted(data.folds)[0]
+    values = [r["candidate_game_brier"][0]["games"][game]
+              for _, r in selections if game in r["candidate_game_brier"][0]["games"]]
+    assert len(values) == 4
+    assert table["OBS-EQ1"][1, .25][game] == math.fsum(values) / 4
+    assert set(table) == {"OBS-EQ0", "OBS-EQ1"}
+    assert len(table["OBS-EQ0"]) == 3 and len(table["OBS-EQ1"]) == 9
+    assert select_parameters(table["OBS-EQ1"], protocol=protocol, model_id="OBS-EQ1") == (3, 1)
+    assert select_parameters(table["OBS-EQ0"], protocol=protocol, model_id="OBS-EQ0") == (1, 4)
+    changed = deepcopy(list(reversed(selections)))
+    for _, record in changed:
+        record["candidate_game_brier"].reverse()
+        for entry in record["candidate_game_brier"]:
+            entry["games"] = dict(reversed(list(entry["games"].items())))
+    assert aggregate_inner_scores(changed, split_record=data.split, game_folds=dict(reversed(list(data.folds.items()))),
+                                   protocol=protocol) == table
+
+
+@pytest.mark.parametrize("bad", ("missing_block", "duplicate_block", "record_equal", "missing_candidate",
+    "duplicate_candidate", "missing_game", "extra_game", "wrong_source", "invalid_parameter",
+    "nan", "inf", "negative", "above_one", "boolean", "text"))
+def test_final_inner_score_rejections(protocol, final_selections, bad):
+    from werewolf.observer_dtrs.estimation_offline import aggregate_inner_scores
+    data, selections = final_selections
+    identity, record = selections[0]
+    entries = record["candidate_game_brier"]
+    games = entries[0]["games"]
+    if bad == "missing_block": selections.pop()
+    elif bad == "duplicate_block": selections.append(deepcopy(selections[0]))
+    elif bad == "record_equal": identity["weighting"] = "record_equal"
+    elif bad == "missing_candidate": entries.pop(0)
+    elif bad == "duplicate_candidate": entries.append(deepcopy(entries[0]))
+    elif bad == "missing_game": games.pop(next(iter(games)))
+    elif bad == "extra_game": games["outside"] = .2
+    elif bad == "wrong_source": identity["tom_fold"] = 1
+    elif bad == "invalid_parameter": entries[0]["parameters"]["bins"] = True
+    else:
+        games[next(iter(games))] = {"nan": float("nan"), "inf": float("inf"), "negative": -.1,
+                                  "above_one": 1.1, "boolean": True, "text": "0.2"}[bad]
+    with pytest.raises(ValueError):
+        aggregate_inner_scores(selections, split_record=data.split, game_folds=data.folds, protocol=protocol)
+
+
+def test_final_inner_scores_reject_five_appearances(protocol, final_selections):
+    from werewolf.observer_dtrs.estimation_offline import aggregate_inner_scores
+    data, selections = final_selections
+    game = sorted(data.folds)[0]
+    data.split["folds"][0]["outer_assignment"][game] = None
+    for identity, record in selections:
+        if identity["tom_fold"] == 0:
+            for entry in record["candidate_game_brier"]:
+                entry["games"][game] = .2
+    with pytest.raises(ValueError, match="exactly four"):
+        aggregate_inner_scores(selections, split_record=data.split, game_folds=data.folds, protocol=protocol)
+
+
+def _selection_run(tmp_path, protocol, data, selections, *, bad=None):
+    """仅发布小型人工引用链；不需要内层模型、外层成绩或Bootstrap。"""
+    from werewolf.observer_dtrs.validation_artifacts import digest, publish_unit
+    from werewolf.observer_dtrs.splits import partition_games
+    manifest = {"manifest_digest": protocol.record["dataset_digest"], "origins": {"fixture": "synthetic"},
+        "games": [{"game_id": g, "fold_index": data.folds[g], "row_count": n} for g, n in data.sizes.items()]}
+    c = {"scope": "formal_development_validation", "protocol_digest": protocol.digest,
+         "dataset_digest": manifest["manifest_digest"], "origins": manifest["origins"],
+         "game_sizes": data.sizes, "game_folds": data.folds, "split_record": data.split, "split_digest": "b" * 64}
+    if bad == "fixture_scope": c["scope"] = "controlled_fixture"
+    contract = publish_unit(tmp_path / "contract", "validation_contract", {"run_identity": digest(c)}, c)
+    blocks = {}
+    for identity, record in selections:
+        k, j = identity["tom_fold"], identity["outer_fold"]
+        common = {"contract_digest": contract.manifest_digest, "tom_fold": k, "outer_fold": j}
+        base = tmp_path / "blocks" / f"{k}-{j}"
+        sid = {**common, "weighting": "record_equal" if bad == "weighting" else "game_equal",
+               "candidate_artifact_digests": record["candidate_artifact_digests"]}
+        selection = publish_unit(base / "game_equal" / "selection", "validation_selection", sid, record)
+        train, test = partition_games(data.split, tom_fold=k, outer_fold=j)
+        block = publish_unit(base / "complete", "validation_block_complete", common,
+            {"status": "PAIRED_BLOCK_COMPLETE", "train_games": train, "test_games": test,
+             "references": {"game_equal": {"selection": selection.manifest_digest}}})
+        blocks[f"{k}-{j}"] = block.manifest_digest
+    complete = publish_unit(tmp_path / "complete", "validation_complete",
+        {"contract_digest": contract.manifest_digest, "block_digests": blocks},
+        {"status": "ALL_BLOCKS_COMPLETE", "block_digests": blocks, "summary": {"not_used_for_selection": True}})
+    return manifest, complete.manifest_digest
+
+
+def test_final_selection_reads_pinned_chain_and_retains_original_ties(tmp_path, protocol, final_selections):
+    from werewolf.observer_dtrs.estimation_offline import select_final_parameters
+    data, selections = final_selections
+    for _, record in selections:
+        for entry in record["candidate_game_brier"]:
+            entry["games"] = {g: .2 for g in entry["games"]}
+            if entry["model"] == "OBS-EQ1" and entry["parameters"] == {"bins": 3, "smoothing": .25}:
+                entry["games"] = {g: .2 - 5e-9 for g in entry["games"]}
+    manifest, complete = _selection_run(tmp_path, protocol, data, selections)
+    result = select_final_parameters(tmp_path, expected_complete_digest=complete, expected_split_digest="b" * 64,
+                                    dataset_manifest=manifest, split_record=data.split, protocol=protocol)
+    assert result["selected_parameters"] == {name: {"bins": 1, "smoothing": 4} for name in ("OBS-EQ1", "OBS-EQ0")}
+    assert len(result["selection_digests"]) == 25
+    assert result["complete_digest"] == complete
+    assert len(result["aggregated_scores_digest"]) == 64
+    with pytest.raises(ValueError, match="identity"):
+        select_final_parameters(tmp_path, expected_complete_digest="0" * 64, expected_split_digest="b" * 64,
+                                dataset_manifest=manifest, split_record=data.split, protocol=protocol)
+    path = tmp_path / "blocks/0-0/game_equal/selection/record.json"
+    path.write_bytes(b"damaged")
+    with pytest.raises(ArtifactValidationError):
+        select_final_parameters(tmp_path, expected_complete_digest=complete, expected_split_digest="b" * 64,
+                                dataset_manifest=manifest, split_record=data.split, protocol=protocol)
+
+
+@pytest.mark.parametrize("bad", ("fixture_scope", "weighting"))
+def test_final_selection_rejects_wrong_run_scope_or_weighting(tmp_path, protocol, final_selections, bad):
+    from werewolf.observer_dtrs.estimation_offline import select_final_parameters
+    data, selections = final_selections
+    manifest, complete = _selection_run(tmp_path, protocol, data, selections, bad=bad)
+    with pytest.raises(ValueError):
+        select_final_parameters(tmp_path, expected_complete_digest=complete, expected_split_digest="b" * 64,
+                                dataset_manifest=manifest, split_record=data.split, protocol=protocol)
+
+
+def _final_source_fixture(protocol):
+    """1500局来源字段的人工元数据夹具，不含真实Q、标签或拟合产物。"""
+    from werewolf.observer_dtrs.estimation import FINAL_SELECTION_RULE
+    from werewolf.artifact_io import sha256_bytes
+    ids = [f"synthetic-{k}-{j:03}" for k in range(5) for j in range(300)]
+    pins = ("evaluation_digest", "evaluation_seal_digest", "preparation_digest", "training_execution_digest",
+            "training_seal_digest", "terminal_digest", "checkpoint_digest", "prediction_artifact_digest", "prediction_payload_sha256")
+    selection = {"rule": FINAL_SELECTION_RULE, "run_path": "/synthetic",
+        "contract_digest": "c" * 64, "complete_digest": "d" * 64, "aggregated_scores_digest": "e" * 64,
+        "selection_digests": {f"{k}-{j}": sha256_bytes(f"{k}-{j}".encode()) for k in range(5) for j in range(5)},
+        "selected_parameters": {name: {"bins": 1, "smoothing": 4} for name in ("OBS-EQ1", "OBS-EQ0")}}
+    return {"scope": "final_development_oof", "protocol_digest": protocol.digest,
+        "dataset_digest": protocol.record["dataset_digest"], "split_manifest_digest": "b" * 64,
+        "tom_fold": None, "outer_fold": None, "inner_fold": None,
+        "game_sizes": {g: 16 if i < 185 else 15 for i, g in enumerate(ids)},
+        "game_folds": {g: int(g.split('-')[1]) for g in ids},
+        "origins": {"publication": {"manifest_digest": "a" * 64, "fold_manifest_digest": "f" * 64},
+                    "oof": [{"fold_index": k, "architecture": "qwen3", "temporal_condition": "explicit_day_phase",
+                             "publication_digest": "a" * 64, "fold_manifest_digest": "f" * 64,
+                             **{p: str(k) * 64 for p in pins}} for k in range(5)]},
+        "selection": selection, "fit_revision": "0" * 40, "implementation_digest": implementation_digest()}
+
+
+def test_final_source_is_explicit_and_cannot_claim_historical_partitions(protocol):
+    from werewolf.observer_dtrs.estimation import _validate_source
+    source = _final_source_fixture(protocol)
+    _validate_source(source, protocol)
+    assert len(source["game_folds"]) == 1500 and sum(source["game_sizes"].values()) == 22685
+    assert [s["fold_index"] for s in source["origins"]["oof"]] == list(range(5))
+    for change in (lambda s: s.update(tom_fold=0), lambda s: s["game_sizes"].pop(next(iter(s["game_sizes"]))),
+                   lambda s: s["origins"]["oof"].pop(), lambda s: s["origins"]["oof"][0].pop("checkpoint_digest"),
+                   lambda s: s["origins"]["oof"][0].update(publication_digest="1" * 64),
+                   lambda s: s.update(scope="formal_training_partition")):
+        bad = deepcopy(source)
+        change(bad)
+        with pytest.raises(ValueError): _validate_source(bad, protocol)
+    # 既有160/240局正式分区仍沿用原规则，不能被全量来源分支替代。
+    historical = {k: v for k, v in source.items() if k not in {"game_folds", "selection", "fit_revision"}}
+    historical.update(scope="formal_training_partition", tom_fold=0, outer_fold=0)
+    for count, inner in ((240, None), (160, 0)):
+        historical.update(game_sizes={f"g{i}": 1 for i in range(count)}, inner_fold=inner)
+        _validate_source(historical, protocol)
+        historical["game_sizes"]["extra"] = 1
+        with pytest.raises(ValueError): _validate_source(historical, protocol)
+    with pytest.raises(ValueError, match="all rows"):
+        fit_model([row("g", 1)], protocol=protocol, model_id="OBS-EQ1", bins=1, smoothing=4, source=source)
+
+
+def test_final_model_rejects_parameters_or_weighting_not_selected(protocol):
+    original = fit([row("g", 1)], protocol)
+    for parameters in ({"requested_bins": 3, "lambda": 4, "weighting": "game_equal"},
+                       {"requested_bins": 1, "lambda": 1, "weighting": "game_equal"},
+                       {"requested_bins": 1, "lambda": 4, "weighting": "record_equal"}):
+        record = deepcopy(original.record)
+        record.update(source=_final_source_fixture(protocol), parameters=parameters)
+        with pytest.raises(ValueError, match="differ from its inner selection"):
+            validate_model(FittedModel(canonical_json_bytes(record)), protocol)
+
+
+def test_final_fit_adapter_selects_first_and_reuses_existing_kernel(protocol, monkeypatch):
+    from types import SimpleNamespace
+    from werewolf.observer_dtrs import estimation_offline as module
+    source = _final_source_fixture(protocol)
+    games = [{"game_id": g, "row_count": n, "fold_index": source["game_folds"][g]} for g, n in source["game_sizes"].items()]
+    m = {"manifest_digest": source["dataset_digest"], "games": games, "origins": source["origins"]}
+    monkeypatch.setattr(module, "source_manifest", lambda *a: m)
+    monkeypatch.setattr(module, "read_splits", lambda *a, **kw: {})
+    monkeypatch.setattr(module, "open_dataset", lambda *a, **kw: object())
+    calls = []
+    def select(*args, **kwargs):
+        calls.append("select")
+        return source["selection"]
+    monkeypatch.setattr(module, "select_final_parameters", select)
+    game = next(iter(source["game_sizes"]))
+    def labels(view):
+        calls.append("labels")
+        return [SimpleNamespace(legal=SimpleNamespace(sample_id=f"s{j}", context=SimpleNamespace(game_id=game), features=features()),
+                                supervision=SimpleNamespace(event_label_y=j), q_source=SimpleNamespace(fold_index=0)) for j in (0, 1)]
+    monkeypatch.setattr(module, "open_supervision", labels)
+    def kernel(rows, **kwargs):
+        calls.append(kwargs["model_id"])
+        assert rows == tuple(row(game, j, sample=f"s{j}") for j in (0, 1))
+        assert kwargs["weighting"] == "game_equal" and kwargs["bins"] == 1 and kwargs["smoothing"] == 4
+        assert kwargs["source"]["origins"] == source["origins"]
+        assert kwargs["source"]["tom_fold"] is None
+        return kwargs["model_id"]
+    monkeypatch.setattr(module, "fit_model", kernel)
+    result = module.fit_final_models("dataset", split_path="split", expected_split_digest="b" * 64,
+                                     run_path="run", expected_complete_digest="d" * 64, protocol=protocol)
+    assert result == {name: name for name in ("OBS-EQ1", "OBS-EQ0")}
+    assert calls == ["select", "labels", "OBS-EQ1", "OBS-EQ0"]
+    def wrong_source(view):
+        rows = labels(view)
+        rows[0].q_source.fold_index = 1
+        return rows
+    monkeypatch.setattr(module, "open_supervision", wrong_source)
+    with pytest.raises(ValueError, match="OOF source/game mismatch"):
+        module.fit_final_models("dataset", split_path="split", expected_split_digest="b" * 64,
+                                run_path="run", expected_complete_digest="d" * 64, protocol=protocol)
+    assert calls.count("OBS-EQ1") == calls.count("OBS-EQ0") == 1
