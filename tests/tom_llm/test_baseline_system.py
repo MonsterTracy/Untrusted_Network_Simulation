@@ -188,12 +188,14 @@ def test_no_per_request_model_source_cohort_or_artifact_verification(make_run,mo
 def test_http_error_preserves_status_and_never_retries(make_run,code):
     run = make_run()
     requests = []
+    error_body = b'{"error":"mock server failure"}'
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             requests.append(self.rfile.read(int(self.headers['Content-Length'])))
             self.send_response(code)
-            self.send_header('Content-Length','0')
+            self.send_header('Content-Length',str(len(error_body)))
             self.end_headers()
+            self.wfile.write(error_body)
         def log_message(self,*args):
             pass
     server = HTTPServer(('127.0.0.1',0),Handler)
@@ -201,8 +203,10 @@ def test_http_error_preserves_status_and_never_retries(make_run,code):
     thread.start()
     transport = HttpTransport('http://127.0.0.1:'+str(server.server_port))
     try:
-        with pytest.raises(OutcomeUnknown):
+        with pytest.raises(OutcomeUnknown) as failure:
             run_model(run,transport)
+        assert failure.value.__cause__.response_body==error_body
+        assert failure.value.__cause__.http_status==code
         journal = Journal(run)
         assert journal.current=='unknown' and len(requests)==1
         assert json.loads(journal.path.read_bytes().splitlines()[-1])['payload']['error']=='HTTP status '+str(code)

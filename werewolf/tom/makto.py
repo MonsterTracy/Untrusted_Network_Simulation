@@ -2,10 +2,15 @@
 
 import argparse
 from collections import Counter
+from copy import deepcopy
 import json
 import math
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+import time
 from urllib.request import urlopen
 
 import torch
@@ -17,6 +22,10 @@ from werewolf.artifact_io import (
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
 from werewolf.canonical_collection.speech import V1SpeechAction, V1_SPEECH_ONTOLOGY_VERSION
 from werewolf.speech.speech_perceiver import SpeechPerceiver
+from werewolf.speech.private_belief_perceiver import (
+    PRIVATE_BELIEF_MAX_TOKENS, PlayingAgentBeliefReporter, private_belief_response_format,
+)
+from werewolf.speech.validation import close_hard_knowledge, normalize_player, validate_player_suspicion
 from werewolf.structured_history import (
     STRUCTURED_TOKEN_PLANNER_VERSION, StructuredTokenDescriptor, StructuredTokenPlan,
     plan_public_history,
@@ -39,6 +48,15 @@ CONFLICTS = {
     ("train", 36, 33): "reason称2号seer，role_prediction将2号标为witch",
 }
 ROLES = {"werewolf", "simple_villager", "seer", "witch"}
+ROLE_BELIEF_PROMPT = "makto_pre_speech_role_belief"
+# 真实调用前固定的小规模质量试验，均来自既有内部 Training；不用于性能评价。
+ROLE_BELIEF_TRIAL_REQUESTS = (
+    (22, 15, "player3"), (22, 15, "player2"), (22, 15, "player4"),
+    (22, 27, "player3"), (22, 27, "player2"), (22, 27, "player4"),
+    (36, 44, "player3"), (36, 44, "player1"), (36, 48, "player1"),
+    (29, 44, "player7"), (29, 44, "player6"), (29, 46, "player6"),
+)
+ROLE_BELIEF_TRIAL_DIGEST = "5d33f9eaea0057469169b9374fae33e392b5d46a9e1b836090f2918123332f4b"
 
 
 def source_paths():
@@ -98,8 +116,8 @@ def convert_label(content, *, quarantined=False):
             "quarantined": quarantined}
 
 
-def extract_game(path, payload, annotations):
-    """公开事件与监督分别构造；投票阶段开始时冻结输入，不看当轮选票。"""
+def extract_game(path, payload, annotations, *, speech_pre=False):
+    """共享公开时间线；默认保持原投票代理任务，发言模式不读取投票标签。"""
     split, game_number = path.split("/")[1], int(path.split("/")[-2].split("_")[1])
     game_id = f"makto/{split}/seer_witch/game_{game_number}"
     raw = json.loads(payload)
@@ -121,6 +139,23 @@ def extract_game(path, payload, annotations):
         nonlocal day, phase
         day, phase = next_day, next_phase
         emit("phase_change", day=day, phase=phase)
+
+    def snapshot(index, boundary_id):
+        events = deepcopy(public)
+        digest = sha256_bytes(canonical_json_bytes({"game_id": game_id,
+            "boundary_id": boundary_id, "public_events": events}))
+        plan = None
+        if not problems:
+            plan = plan_public_history(freeze_public_event_history(events), actions,
+                                       boundary_digest=digest)
+            if speech_pre and plan.token_count > 1024:
+                raise ValueError("complete public input exceeds model capacity; truncation forbidden")
+        return {"game_id": game_id, "split": split, "boundary_id": boundary_id,
+                "source_index": index, "day": day, "phase": phase,
+                "prefix_digest": digest, "public_events": events,
+                "input_problems": deepcopy(problems),
+                "alive": [j in alive for j in range(1, 8)] if not problems else None,
+                "plan": plan.to_record() if plan else None}
 
     for index, event in enumerate(raw):
         kind, c = event["event"], event.get("content")
@@ -148,6 +183,11 @@ def extract_game(path, payload, annotations):
             latest_speech_round = c["day"]
             speaker = f"player{c['player']}"
             emit("turn_start", speaker=speaker)
+            if speech_pre:
+                if not problems and c["player"] not in alive:
+                    raise ValueError("a dead player cannot have a speech PRE")
+                boundaries.append({**snapshot(index, f"{game_id}/speech-pre-{index}"),
+                                   "source_sha256": sha256_bytes(payload)})
             event_id = emit("public_speech", speaker=speaker, raw_text=c["context"])
             key = path.rsplit("/", 1)[0] + f"/{index}"
             annotation = annotations[key]
@@ -158,21 +198,10 @@ def extract_game(path, payload, annotations):
         elif kind == "vote_start":
             change(day, "pk_vote" if phase == "pk_discussion" else "vote")
             boundary_id = f"{game_id}/vote-start-{index}"
-            snapshot = list(public)
-            digest = sha256_bytes(canonical_json_bytes({"game_id": game_id,
-                "boundary_id": boundary_id, "public_events": snapshot}))
-            plan = None
-            if not problems:
-                plan = plan_public_history(freeze_public_event_history(snapshot), actions,
-                                           boundary_digest=digest)
-            current_boundary = {"game_id": game_id, "split": split,
-                "boundary_id": boundary_id, "source_index": index,
-                "day": day, "phase": phase, "prefix_digest": digest,
-                "public_events": snapshot, "input_problems": list(problems),
-                "alive": [j in alive for j in range(1, 8)] if not problems else None,
-                "plan": plan.to_record() if plan else None}
-            boundaries.append(current_boundary)
-        elif kind == "voted":
+            if not speech_pre:
+                current_boundary = snapshot(index, boundary_id)
+                boundaries.append(current_boundary)
+        elif kind == "voted" and not speech_pre:
             if current_boundary is None or c["day"] != latest_speech_round:
                 raise ValueError("vote has no matching current public boundary")
             converted = convert_label(c, quarantined=(split, game_number, index) in CONFLICTS)
@@ -208,6 +237,390 @@ def extract_game(path, payload, annotations):
     return {"game_id": game_id, "split": split, "source_path": path,
             "source_sha256": sha256_bytes(payload), "public_events": public,
             "speech_actions": {key: [a.to_record() for a in value] for key, value in actions.items()}}, boundaries, labels
+
+
+def speech_pre_snapshots(path, payload, annotations):
+    """只在当前发言写入前截取；保留缺失公共公告的边界及其排除原因。"""
+    _, boundaries, _ = extract_game(path, payload, annotations, speech_pre=True)
+    return boundaries
+
+
+def role_belief_view(payload, boundary, observer_id):
+    """原始事件先投影成单人合法视图；生成器永远不接收原始全局记录。"""
+    observer = normalize_player(observer_id)
+    seat = PLAYER_IDS.index(observer)
+    if boundary["input_problems"] or boundary["alive"] is None:
+        raise ValueError("speech PRE lacks complete public history")
+    if not boundary["alive"][seat]:
+        raise ValueError("belief observer must be alive")
+    if boundary["source_sha256"] != sha256_bytes(payload):
+        raise ValueError("speech PRE source digest mismatch")
+    raw = json.loads(payload)
+    cutoff = boundary["source_index"]
+    current = raw[cutoff]
+    last = boundary["public_events"][-1]
+    if (current["event"] != "speech" or last["event_type"] != "turn_start"
+            or normalize_player(current["content"]["player"]) != last["speaker"]):
+        raise ValueError("speech PRE source mismatch")
+    # 只读取本人身份卡；其他角色只由调用方用于外围 Primary 人口选择。
+    own_roles = [e["content"]["role"] for e in raw[:cutoff]
+                 if e["event"] == "roles" and e["content"]["player"] == seat + 1]
+    if len(own_roles) != 1 or own_roles[0] not in ROLES - {"werewolf"}:
+        raise ValueError("belief observer must have one non-Werewolf role card")
+    role = own_roles[0]
+    facts, omitted = [], []
+    known_wolves, known_non_wolves = set(), {observer}
+    medicines = {"healed": "available", "poison": "available"} if role == "witch" else {}
+    night, events = None, []
+
+    def completed_night(number):
+        # 官方 process_script/utils.py 的 night_event/night_action 按角色路由这些事件。
+        # 只采用已结束夜晚、显式夜次和唯一动作；缺失不等同于显式 null。
+        if role == "simple_villager":
+            return
+        relevant = ("inquired",) if role == "seer" else ("healed", "poison", "werewolf_kill")
+        selected = {}
+        for kind in relevant:
+            rows = [(i, c) for i, k, c in events if k == kind]
+            if (len(rows) != 1 or not isinstance(rows[0][1], dict)
+                    or type(rows[0][1].get("night")) is not int or rows[0][1]["night"] != number):
+                omitted.append({"night": number, "event": kind, "reason": "missing_or_ambiguous"})
+                continue
+            i, c = rows[0]
+            field = "target_player" if kind == "werewolf_kill" else "player"
+            if field not in c:
+                omitted.append({"night": number, "event": kind, "reason": "missing_target"})
+                continue
+            target = c[field]
+            if target is not None and (type(target) is not int or target not in range(1, 8)):
+                omitted.append({"night": number, "event": kind, "reason": "invalid_target"})
+                continue
+            if kind == "inquired" and (target is None or type(c.get("is_werewolf")) is not bool):
+                omitted.append({"night": number, "event": kind, "reason": "missing_check_result"})
+                continue
+            selected[kind] = {"source_index": i, "night": number, "event": kind,
+                              "target": None if target is None else normalize_player(target)}
+            if kind == "inquired":
+                selected[kind]["is_werewolf"] = c["is_werewolf"]
+                (known_wolves if c["is_werewolf"] else known_non_wolves).add(normalize_player(target))
+        if role == "seer":
+            facts.extend(selected.values())
+            return
+        for kind in medicines:
+            if kind not in selected:
+                if medicines[kind] != "used":
+                    medicines[kind] = "unknown"
+            elif selected[kind]["target"] is not None:
+                medicines[kind] = "used"
+            if kind in selected:
+                facts.append(selected[kind])
+        # 官方女巫输入只在存在本人技能记录时提供当夜刀口；银水不是好人硬知识。
+        if any(k in selected for k in medicines) and "werewolf_kill" in selected:
+            facts.append({**selected["werewolf_kill"], "event": "privately_observed_attack_target"})
+
+    for i, event in enumerate(raw[:cutoff]):
+        kind, c = event["event"], event.get("content")
+        if kind == "cycle_round":
+            if c["status"] == "night":
+                night, events = c["round"], []
+            elif c["status"] == "day":
+                if night == c["round"]:
+                    completed_night(night)
+                elif role != "simple_villager":
+                    omitted.append({"night": c["round"], "reason": "unconfirmed_private_timing"})
+                    medicines = {k: "used" if v == "used" else "unknown" for k, v in medicines.items()}
+                night, events = None, []
+        elif night is not None and kind in {"inquired", "healed", "poison", "werewolf_kill"}:
+            events.append((i, kind, c))
+    wolves, non_wolves = close_hard_knowledge(sorted(known_wolves), sorted(known_non_wolves))
+    return {"game_id": boundary["game_id"], "boundary_id": boundary["boundary_id"],
+            "observer_id": observer, "self_role": role, "day": boundary["day"], "phase": boundary["phase"],
+            "current_public_actor": last["speaker"],
+            "alive_players": [p for p, alive in zip(PLAYER_IDS, boundary["alive"]) if alive],
+            "public_events": deepcopy(boundary["public_events"]),
+            "public_history_digest": boundary["prefix_digest"], "private_facts": facts,
+            "witch_medicines": medicines, "omitted_private_information": omitted,
+            "known_werewolves": wolves, "known_non_werewolves": non_wolves}
+
+
+def build_role_belief_request(view):
+    """每个三元组重新构造消息；无 Agent、会话、私人记忆或模型调用。"""
+    observer = view["observer_id"]
+    private = {k: deepcopy(view[k]) for k in (
+        "observer_id", "self_role", "day", "phase", "current_public_actor", "alive_players", "witch_medicines")}
+    # 模型只看到玩家事实；位置、缺失原因等审计字段继续留在内部 view。
+    private["private_facts"] = [{k: deepcopy(fact[k]) for k in (
+        "event", "night", "target", "is_werewolf") if k in fact} for fact in view["private_facts"]]
+    public = [{k: deepcopy(event[k]) for k in (
+        "event_type", "day", "phase", "speaker", "raw_text", "dead_players", "votes", "exiled_players")
+        if k in event} for event in view["public_events"]]
+    for event in public:
+        if "votes" in event:
+            event["votes"] = [{k: vote[k] for k in ("voter", "target")} for vote in event["votes"]]
+    prompt = PlayingAgentBeliefReporter.render_prompt(
+        observer_id=observer, public_events=public,
+        public_history_digest=view["public_history_digest"],
+        known_werewolves=view["known_werewolves"], known_non_werewolves=view["known_non_werewolves"],
+        prompt_version=ROLE_BELIEF_PROMPT,
+        include_audit_metadata=False,
+        report_context="这是独立重建请求；没有此前对话或私人记忆，回答不会用于公开发言或回写游戏。")
+    legal = PlayingAgentBeliefReporter.legal_candidates(
+        observer_id=observer, known_werewolves=view["known_werewolves"],
+        known_non_werewolves=view["known_non_werewolves"])
+    messages = [{"role": "system", "content": (
+        "你是这局七人狼人杀中的当前观察者。阵容为两狼、三村民、一预言家、一女巫。"
+        "请以第一人称代入本人身份，报告此刻的主观狼人怀疑，不是识别真实全局身份或制定发言策略。"
+        "公开发言中的‘我’属于该条发言者，不代表当前观察者；其中的角色声明可能是谎言。"
+        "缺失或时点不确定的私人信息保持未知；null 仅表示该条记录明确没有目标。"
+        "不推测缺失技能或刀口，女巫救过的玩家不因此成为确定好人。")},
+        {"role": "user", "content": "你本人合法可见的状态：\n" + json.dumps(private, ensure_ascii=False, sort_keys=True)
+         + "\n\n" + prompt}]
+    return {"game_id": view["game_id"], "boundary_id": view["boundary_id"], "observer_id": observer,
+            "prompt_version": ROLE_BELIEF_PROMPT,
+            "messages": messages, "temperature": 0.0, "max_tokens": PRIVATE_BELIEF_MAX_TOKENS,
+            "response_format": private_belief_response_format(supports_json_schema=True,
+                legal_candidates=legal, required_candidates=view["known_werewolves"])}
+
+
+def parse_role_belief_response(raw_response, view):
+    """严格沿用私人集合协议；失败保持未监督，绝不转成成功均匀标签。"""
+    support, error = None, None
+    try:
+        support = validate_player_suspicion(PlayingAgentBeliefReporter.parse_response(raw_response),
+            view["known_werewolves"], view["known_non_werewolves"], observer_id=view["observer_id"])
+    except (ValueError, TypeError) as exc:
+        error = str(exc)
+    q, observed = belief_target(PLAYER_IDS.index(view["observer_id"]),
+                                tuple(support) if error is None else (), "success" if error is None else "error")
+    return {"game_id": view["game_id"], "boundary_id": view["boundary_id"],
+            "observer_id": view["observer_id"], "status": "success" if observed else "error",
+            "suspected_werewolves": support if observed else None,
+            "q": q.tolist(), "observed": observed, "error": error}
+
+
+def role_trial_inputs(data, expected_digest):
+    """只读取固定三个 Training 游戏；原投票标签、Test 与 Baseline 均不打开。"""
+    envelope = open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief", expected_schema_version=VERSION)
+    if envelope.manifest_digest != expected_digest or envelope.manifest["revision"] != REVISION:
+        raise ValueError("MaKTO trial data identity mismatch")
+    annotations = {}
+    for line in read_artifact_file(envelope, "annotations.jsonl").splitlines():
+        row = json.loads(line)
+        annotations[row.pop("key")] = row
+    games, inputs = {}, []
+    for game, index, observer in ROLE_BELIEF_TRIAL_REQUESTS:
+        if game not in games:
+            path = f"raw/train/7_player_game/seer_witch/game_{game}/event_zh.json"
+            payload = read_artifact_file(envelope, path)
+            games[game] = payload, {b["source_index"]: b for b in speech_pre_snapshots(path, payload, annotations)}
+        payload, boundaries = games[game]
+        view = role_belief_view(payload, boundaries[index], observer)
+        inputs.append({"view": view, "request": build_role_belief_request(view)})
+    if sha256_bytes(canonical_json_bytes([i["request"] for i in inputs])) != ROLE_BELIEF_TRIAL_DIGEST:
+        raise ValueError("approved twelve requests changed")
+    return inputs
+
+
+def check_role_trial_inputs(inputs, run):
+    """实际环境的 CPU Tokenizer/模板与 xgrammar 校验；不加载模型、不调用服务。"""
+    from importlib.metadata import version
+    from jinja2 import Environment, StrictUndefined
+    from werewolf.tom_llm.model_spec import load_cpu_tokenizer, template_bytes
+
+    # CPU 准备沿用服务已登记缓存位置，并显式隐藏 GPU；不会初始化模型。
+    os.environ.update(run.record["runtime"]["environment"])
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    from vllm.sampling_params import SamplingParams, StructuredOutputsParams
+    from vllm.v1.structured_output.backend_xgrammar import validate_xgrammar_grammar
+
+    versions = {name: version(name) for name in ("vllm", "xgrammar", "transformers")}
+    if versions["vllm"] != "0.27.0":
+        raise ValueError("existing vLLM 0.27.0 environment required")
+    if Path(sys.executable).resolve() != Path(run.record["runtime"]["environment_prefix"], "bin/python").resolve():
+        raise ValueError("use the registered service environment Python")
+    row = run.spec.record()
+    tokenizer = load_cpu_tokenizer(run.spec, run.record["tokenizer_assets"])
+    env = Environment(undefined=StrictUndefined, autoescape=False)
+    def refuse(message):
+        raise ValueError(message)
+    env.globals["raise_exception"] = refuse
+    template = env.from_string(template_bytes(run.spec).decode())
+    counts, ids_digests, checked_schemas = [], [], set()
+    for item in inputs:
+        request = item["request"]
+        kwargs = {"add_generation_prompt": True, **row["chat_template"]["kwargs"]}
+        text = template.render(messages=request["messages"], bos_token=row["tokenizer"]["bos_token"],
+                               eos_token=row["tokenizer"]["eos_token"], **kwargs)
+        native = tokenizer.apply_chat_template(request["messages"], tokenize=False, **kwargs)
+        ids = tokenizer.apply_chat_template(request["messages"], tokenize=True, return_dict=False, **kwargs)
+        if text != native or ids != tokenizer.encode(text, add_special_tokens=False):
+            raise ValueError("MaKTO native template/token IDs mismatch")
+        if not 0 < len(ids) <= min(7680, row["context_length"] - PRIVATE_BELIEF_MAX_TOKENS):
+            raise ValueError("complete trial prompt exceeds token budget; no truncation")
+        counts.append(len(ids)); ids_digests.append(sha256_bytes(canonical_json_bytes(ids)))
+        schema = request["response_format"]["json_schema"]["schema"]
+        schema_digest = sha256_bytes(canonical_json_bytes(schema))
+        if schema_digest not in checked_schemas:
+            validate_xgrammar_grammar(SamplingParams(temperature=0, max_tokens=PRIVATE_BELIEF_MAX_TOKENS,
+                structured_outputs=StructuredOutputsParams(json=deepcopy(schema))))
+            checked_schemas.add(schema_digest)
+    return {"versions": versions, "input_token_counts": counts, "input_ids_digests": ids_digests,
+            "maximum_input_tokens": max(counts), "schema_digests": sorted(checked_schemas)}
+
+
+def role_trial_reply(raw, view, model, input_tokens):
+    """保留完整信封；拒答、截断、身份或 Token 数不符均不能成为监督。"""
+    from werewolf.tom_llm.common import strict_json
+    try:
+        body = strict_json(raw)
+        if body["model"] != model or len(body["choices"]) != 1:
+            raise ValueError("teacher model/choices mismatch")
+        choice = body["choices"][0]
+        if choice["finish_reason"] != "stop" or choice["message"].get("refusal") is not None:
+            raise ValueError("teacher refusal or incomplete generation")
+        usage = body["usage"]
+        if (type(usage["prompt_tokens"]) is not int or usage["prompt_tokens"] != input_tokens
+                or type(usage["completion_tokens"]) is not int or not 0 <= usage["completion_tokens"] <= 96
+                or type(usage["total_tokens"]) is not int
+                or usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]):
+            raise ValueError("actual teacher token usage differs from preparation")
+        content = choice["message"]["content"]
+        result = parse_role_belief_response(content, view)
+        try:
+            PlayingAgentBeliefReporter.parse_response(content)
+        except (ValueError, TypeError):
+            compliant = None
+        else:
+            compliant = result["observed"]
+        return {**result, "hard_knowledge_compliant": compliant}
+    except (ValueError, TypeError, KeyError, IndexError) as error:
+        return {**parse_role_belief_response(None, view), "error": str(error), "hard_knowledge_compliant": None}
+
+
+def role_trial_summary(inputs, results):
+    """只汇总质量试验与同人跨 PRE 变化，不计算 KL 或模型性能。"""
+    rows = []
+    for ordinal, item in enumerate(inputs):
+        view = item["view"]
+        rows.append({"ordinal": ordinal, "game_id": view["game_id"], "boundary_id": view["boundary_id"],
+            "observer_id": view["observer_id"], "role": view["self_role"],
+            **results.get(ordinal, {"status": "not_attempted", "observed": False, "suspected_werewolves": None})})
+    valid = [row for row in rows if row["observed"]]
+    previous, changes = {}, []
+    for row in valid:
+        key = row["game_id"], row["observer_id"]
+        if key in previous:
+            before = previous[key]
+            changes.append({"game_id": key[0], "observer_id": key[1], "from": before["boundary_id"],
+                "to": row["boundary_id"], "before": before["suspected_werewolves"],
+                "after": row["suspected_werewolves"],
+                "added": sorted(set(row["suspected_werewolves"]) - set(before["suspected_werewolves"])),
+                "removed": sorted(set(before["suspected_werewolves"]) - set(row["suspected_werewolves"]))})
+        previous[key] = row
+    return {"request_count": len(rows), "valid_nonempty": sum(bool(r["suspected_werewolves"]) for r in valid),
+            "valid_empty": sum(not r["suspected_werewolves"] for r in valid),
+            "failed": sum(not r["observed"] and r["status"] != "not_attempted" for r in rows),
+            "not_attempted": sum(r["status"] == "not_attempted" for r in rows),
+            "hard_knowledge_compliant": len(valid),
+            "hard_knowledge_violations": sum(r.get("hard_knowledge_compliant") is False for r in rows),
+            "results": rows, "pre_changes": changes}
+
+
+def role_trial(data, output, service_run, expected_digest, *, execute_live=False):
+    """固定12条的一次性入口；共用既有服务和 HTTP，不创建 Baseline Run 或 Seal。"""
+    import fcntl
+    from werewolf.tom_llm.common import strict_json
+    from werewolf.tom_llm.experiment import open_run
+    from werewolf.tom_llm.live_runner import HttpTransport, run_lock
+    from werewolf.tom_llm.service_manager import Service
+    from werewolf.tom_llm.model_spec import ROOT
+    from werewolf.tom_llm.deployment import profile
+    from werewolf.tom_llm.provider_semantics import NotExecuted, OutcomeUnknown
+
+    run = open_run(service_run, with_tasks=False)
+    if run.key != "qwen3" or run.record["mode"] != "formal" or run.spec.record()["revision"] != "b968826d9c46dd6066d109eabc6255188de91218":
+        raise ValueError("registered Qwen3-8B service resource contract required")
+    runtime = run.record["runtime"]
+    if runtime != profile(run.spec, root=run.root, model_directory=runtime["argv_options"]["model"],
+                          environment_prefix=runtime["environment_prefix"], gpu_uuid=runtime["gpu_uuid"]):
+        raise ValueError("registered service runtime settings changed")
+    if runtime["argv_options"]["structured-outputs-config"] != {"backend": "xgrammar"}:
+        raise ValueError("existing xgrammar service required")
+    inputs = role_trial_inputs(data, expected_digest)
+    output = Path(output).absolute()
+    if any((parent / "manifest.json").exists() for parent in output.parents):
+        raise ValueError("trial output cannot be inside an existing artifact")
+    source = {"revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+              "files": {name: sha256_bytes((ROOT / name).read_bytes()) for name in (
+                  "werewolf/tom/makto.py", "werewolf/speech/private_belief_perceiver.py",
+                  "werewolf/tom_llm/live_runner.py", "werewolf/tom_llm/model_spec.py",
+                  "werewolf/tom_llm/service_manager.py")}}
+    binding = {"dataset_digest": expected_digest, "service_run": str(run.root),
+               "service_run_digest": run.artifact.manifest_digest, "source": source,
+               "model": run.spec.record()["model"], "revision": run.spec.record()["revision"],
+               "model_spec_digest": run.spec.digest, "request_sequence_digest": ROLE_BELIEF_TRIAL_DIGEST}
+
+    def append(stream, record):
+        stream.write(canonical_jsonl_bytes([record])); stream.flush(); os.fsync(stream.fileno())
+
+    if not execute_live:
+        checks = check_role_trial_inputs(inputs, run)
+        with output.open("xb") as stream:
+            append(stream, {"event": "prepared", **binding, "checks": checks, "inputs": inputs})
+            from werewolf.artifact_io.canonical import _fsync_directory
+            _fsync_directory(output.parent)
+        return {"status": "PREPARED_NOT_EXECUTED", "output": str(output), **checks}
+    if sys.platform != "linux":
+        raise ValueError("real trial requires explicit --execute-live on Ubuntu")
+    results = {}
+    with output.open("r+b") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        records = [strict_json(line) for line in stream.read().splitlines()]
+        if len(records) != 1 or records[0].get("event") != "prepared":
+            raise ValueError("trial already attempted or incomplete; no automatic replay/resend")
+        prepared = records[0]
+        if any(prepared.get(k) != value for k, value in binding.items()) or prepared["inputs"] != inputs:
+            raise ValueError("trial preparation/source/request binding changed")
+        stream.seek(0, 2)
+        with run_lock(run.root):
+            manager = Service(run)
+            already_running = manager.status()["state"] == "running"
+            manager.start(execute=True)
+            transport = HttpTransport("http://127.0.0.1:" + str(runtime["argv_options"]["port"]), alive_check=manager.guard)
+            try:
+                row = run.spec.record()
+                for ordinal, item in enumerate(inputs):
+                    request, view = item["request"], item["view"]
+                    wire = {k: deepcopy(request[k]) for k in ("messages", "temperature", "max_tokens", "response_format")}
+                    wire.update(model=row["model"], **{k: row["decoding"][k] for k in ("top_p", "n", "seed")},
+                        extra_body={"chat_template_kwargs": row["chat_template"]["kwargs"],
+                                    "top_k": row["decoding"]["top_k"], "min_p": row["decoding"]["min_p"]})
+                    task_id = sha256_bytes(canonical_json_bytes(wire))
+                    append(stream, {"event": "dispatch", "ordinal": ordinal, "request_digest": task_id})
+                    start = time.monotonic()
+                    try:
+                        raw = transport.send(wire, task_id)
+                    except (NotExecuted, OutcomeUnknown) as error:
+                        result = {**parse_role_belief_response(None, view),
+                                  "status": "unknown" if isinstance(error, OutcomeUnknown) else "not_executed", "error": str(error)}
+                        body = getattr(error, "response_body", None)
+                        append(stream, {"event": "transport_error", "ordinal": ordinal,
+                            "http_status": getattr(error, "http_status", None),
+                            "raw_response": body.decode("utf-8", errors="replace") if body is not None else None,
+                            "raw_response_hex": body.hex() if body is not None else None, **result})
+                        results[ordinal] = result
+                        break
+                    append(stream, {"event": "received", "ordinal": ordinal, "raw_response": raw,
+                                    "elapsed_seconds": time.monotonic() - start})
+                    result = role_trial_reply(raw, view, row["model"], prepared["checks"]["input_token_counts"][ordinal])
+                    results[ordinal] = result
+                    append(stream, {"event": "result", "ordinal": ordinal, **result})
+            finally:
+                if not already_running:
+                    manager.stop(execute=True)
+        summary = role_trial_summary(inputs, results)
+        append(stream, {"event": "summary", **summary})
+    return summary
 
 
 def prepare(sources, annotations):
@@ -522,12 +935,27 @@ def main(argv=None):
     parser.add_argument("--annotations", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", action="store_true")
+    parser.add_argument("--role-trial", action="store_true")
+    parser.add_argument("--service-run", type=Path)
+    parser.add_argument("--execute-live", action="store_true")
     parser.add_argument("--data", type=Path)
     parser.add_argument("--split-record", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--temporal", type=Path)
     parser.add_argument("--expected-data-digest")
     args = parser.parse_args(argv)
+    if args.role_trial:
+        if (args.baseline or args.annotations or args.split_record or args.checkpoint or args.temporal
+                or not args.data or not args.service_run or not args.expected_data_digest):
+            parser.error("role trial requires --data/--service-run/--expected-data-digest only")
+        result = role_trial(args.data, args.output, args.service_run, args.expected_data_digest,
+                            execute_live=args.execute_live)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("failed", 0) or result.get("not_attempted", 0):
+            raise SystemExit(2)
+        return
+    if args.service_run or args.execute_live:
+        parser.error("--service-run/--execute-live require --role-trial")
     if args.baseline:
         if args.annotations is not None or args.data is None or args.split_record is None:
             parser.error("baseline requires --data/--split-record and forbids --annotations")

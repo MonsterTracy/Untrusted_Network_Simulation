@@ -397,9 +397,31 @@ class PlayingAgentBeliefReporter:
     ) -> str:
         """Render the frozen private self-report instruction."""
 
-        observer = normalize_player(observer_id)
         digest = getattr(pre_prefix, "public_event_digest", None)
-        action_count = len(pre_prefix.public_event_history.events)
+        return PlayingAgentBeliefReporter.render_prompt(
+            observer_id=observer_id,
+            public_events=pre_prefix.public_event_history.to_records(),
+            public_history_digest=digest,
+            known_werewolves=known_werewolves,
+            known_non_werewolves=known_non_werewolves,
+        )
+
+    @staticmethod
+    def render_prompt(
+        *,
+        observer_id: int | str,
+        public_events: list[dict[str, Any]],
+        public_history_digest: str,
+        known_werewolves: list[str],
+        known_non_werewolves: list[str],
+        prompt_version: str = LABEL_PROMPT_VERSION,
+        report_context: str = "其他玩家不会看到你的回答，回答也不会写入你的游戏记忆。若你是当前发言者，同一份报告会作为随后 day cognition 的只读输入。",
+        include_audit_metadata: bool = True,
+    ) -> str:
+        """共享第一人称集合规则；外部数据无需伪造在线 AuthoritativePREPrefix。"""
+        observer = normalize_player(observer_id)
+        digest = public_history_digest
+        action_count = len(public_events)
         if not isinstance(digest, str) or not digest:
             raise ValueError("public snapshot requires a history digest")
         if isinstance(action_count, bool) or not isinstance(action_count, int):
@@ -429,12 +451,16 @@ class PlayingAgentBeliefReporter:
         forbidden_text = ", ".join(forbidden)
         legal_candidates_text = ", ".join(legal_candidates)
         public_history = json.dumps(
-            pre_prefix.public_event_history.to_records(),
+            public_events,
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        audit_metadata = (
+            f"\nprompt_version: {prompt_version}\npublic_action_count: {action_count}\npublic_history_digest: {digest}"
+            if include_audit_metadata else ""
+        )
         return f"""这是一个私有的训练标注请求，不是游戏中的公开发言。
-其他玩家不会看到你的回答，回答也不会写入你的游戏记忆。若你是当前发言者，同一份报告会作为随后 day cognition 的只读输入。
+{report_context}
 
 请只根据你截至本次公开发言之前合法拥有的公开历史和自己的私人信息，报告你当前内部真实怀疑哪些具体玩家是狼人。不要为了阵营策略欺骗这个私有 reporter。不得使用 god view、actual roles、其他玩家私人信息、当前尚未生成的发言或未来信息。
 
@@ -460,10 +486,7 @@ Before answering, silently verify this checklist:
 
 Do not output probabilities, confidence, scores, rankings, reasons, the checklist, reasoning, or chain-of-thought. Do not output any extra field.
 
-observer: {observer}
-prompt_version: {LABEL_PROMPT_VERSION}
-public_action_count: {action_count}
-public_history_digest: {digest}
+observer: {observer}{audit_metadata}
 
 Return only this JSON structure:
 {{"suspected_werewolves":[...]}}"""
@@ -500,8 +523,18 @@ Return only this JSON structure:
 
         if not isinstance(raw_response, str):
             raise TypeError("reporter response must be text")
+
+        def unique_fields(pairs):
+            """重复对象键不允许由 JSON 解码器静默覆盖。"""
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("reporter response contains duplicate JSON fields")
+                result[key] = value
+            return result
+
         try:
-            parsed = json.loads(raw_response)
+            parsed = json.loads(raw_response, object_pairs_hook=unique_fields)
         except json.JSONDecodeError as exc:
             raise ValueError("reporter response must be a pure JSON object") from exc
         if not isinstance(parsed, dict):

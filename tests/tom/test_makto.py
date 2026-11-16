@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +48,412 @@ def _extract(events=None):
     path = makto.source_paths()[0]
     payload = canonical_json_bytes(_events() if events is None else events)
     return makto.extract_game(path, payload, _annotations({path: payload}))
+
+
+def _role_fixture(events=None):
+    """仅模拟已经完成的夜晚；角色卡与公开发言严格分离。"""
+    if events is None:
+        events = _events()
+        events[9:9] = [
+            {"event": "inquired", "content": {"night": 1, "player": 1, "is_werewolf": True}},
+            {"event": "werewolf_kill", "content": {"night": 1, "target_player": 7}},
+            {"event": "healed", "content": {"night": 1, "player": 7}},
+            {"event": "poison", "content": {"night": 1, "player": None}},
+        ]
+    path = makto.source_paths()[0]
+    payload = canonical_json_bytes(events)
+    annotations = _annotations({path: payload})
+    for row in annotations.values():
+        row["actions"] = []
+    boundaries = makto.speech_pre_snapshots(path, payload, annotations)
+    return events, payload, boundaries
+
+
+def _role_request(events, observer):
+    _, payload, boundaries = _role_fixture(events)
+    view = makto.role_belief_view(payload, boundaries[0], observer)
+    return view, makto.build_role_belief_request(view)
+
+
+def test_role_views_are_independent_of_other_private_information_and_global_truth():
+    events, _, _ = _role_fixture()
+    seer, seer_request = _role_request(events, 3)
+    witch, witch_request = _role_request(events, 4)
+    villager, villager_request = _role_request(events, 5)
+    assert seer["known_werewolves"] == ["player1"]
+    assert seer["private_facts"] == [{"source_index": 9, "night": 1, "event": "inquired",
+                                      "target": "player1", "is_werewolf": True}]
+    assert witch["known_non_werewolves"] == ["player4"]  # 银水7不是确定好人。
+    assert [f["event"] for f in witch["private_facts"]] == ["healed", "poison", "privately_observed_attack_target"]
+    assert villager["private_facts"] == []
+    altered = deepcopy(events)
+    altered[9]["content"].update(player=6, is_werewolf=False)
+    assert _role_request(altered, 4)[1] == witch_request
+    assert _role_request(altered, 5)[1] == villager_request
+    altered = deepcopy(events)
+    altered[10]["content"]["target_player"] = 6
+    altered[11]["content"]["player"] = 6
+    assert _role_request(altered, 3)[1] == seer_request
+    altered[0]["content"]["role"], altered[4]["content"]["role"] = "simple_villager", "werewolf"
+    assert _role_request(altered, 3)[1] == seer_request
+    seer_request["messages"][0]["content"] = "被其他调用方修改"
+    assert _role_request(events, 3)[1] != seer_request
+    assert _role_request(events, 4)[1] == witch_request
+    assert all(m["role"] in {"system", "user"} for m in witch_request["messages"])
+
+
+def test_speech_pre_excludes_current_speech_gold_and_future_private_events():
+    events, payload, boundaries = _role_fixture()
+    boundary = boundaries[0]
+    assert boundary["public_events"][-1]["event_type"] == "turn_start"
+    assert not any(e["event_type"] == "public_speech" for e in boundary["public_events"])
+    original = makto.build_role_belief_request(makto.role_belief_view(payload, boundary, 3))
+    altered = deepcopy(events)
+    altered[boundary["source_index"]]["content"]["context"] = "尚未说出的当前发言"
+    altered.append({"event": "inquired", "content": {"night": 2, "player": 2, "is_werewolf": True}})
+    for event in altered:
+        if event["event"] == "voted":
+            event["content"] = {"role_prediction": "不能读取的标签"}
+    assert _role_request(altered, 3)[1] == original
+    body = json.dumps(original, ensure_ascii=False)
+    assert "role_prediction" not in body and "不能进入" not in body
+    assert "我是预言家，1号查杀。" not in body
+    assert original["prompt_version"] == makto.ROLE_BELIEF_PROMPT
+    assert original["response_format"]["json_schema"]["schema"]["properties"]["suspected_werewolves"]["minItems"] == 1
+
+
+def test_later_pre_contains_only_completed_public_speech_and_snapshots_do_not_alias():
+    events, _, _ = _role_fixture()
+    speech_index = next(i for i, e in enumerate(events) if e["event"] == "speech")
+    events.insert(speech_index + 1, {"event": "speech", "content": {
+        "player": 3, "day": "1-1", "context": "尚未发生的第二次发言"}})
+    _, payload, boundaries = _role_fixture(events)
+    assert len(boundaries) == 2
+    later = makto.role_belief_view(payload, boundaries[1], 5)
+    body = json.dumps(makto.build_role_belief_request(later), ensure_ascii=False)
+    assert "我是预言家，1号查杀。" in body
+    assert "尚未发生的第二次发言" not in body
+    later["public_events"][0]["day"] = 999
+    assert boundaries[0]["public_events"][0]["day"] == 0
+    assert boundaries[1]["public_events"][0]["day"] == 0
+    other_payload = canonical_json_bytes(events + [{"event": "game_end", "content": None}])
+    with pytest.raises(ValueError, match="source digest mismatch"):
+        makto.role_belief_view(other_payload, boundaries[0], 5)
+
+
+def test_shared_renderer_preserves_original_online_prompt_bytes():
+    _, _, boundaries = _role_fixture()
+    boundary = boundaries[0]
+    prefix = SimpleNamespace(public_event_history=makto.freeze_public_event_history(boundary["public_events"]),
+                             public_event_digest=boundary["prefix_digest"])
+    prompt = makto.PlayingAgentBeliefReporter.build_prompt(observer_id="player3", pre_prefix=prefix,
+        known_werewolves=["player1"], known_non_werewolves=["player3"])
+    # 对应 HEAD 02687f2 中的原函数实际输出；抽取纯渲染不改变在线任务身份。
+    assert sha256_bytes(prompt.encode()) == "fe9878196affcd65ee2d20beca331d63d1f16d6c9d21ec81c0f9744ee14a48f7"
+
+
+def test_role_prompt_sends_only_player_visible_facts_and_keeps_internal_audit():
+    events, _, _ = _role_fixture()
+    view, request = _role_request(events, 4)
+    altered = deepcopy(view)
+    altered["omitted_private_information"] = [{"reason": "内部缺失审计，不是玩家知识"}]
+    altered["public_history_digest"] = "changed-internal-digest"
+    for fact in altered["private_facts"]:
+        fact.update(source_index=999, audit_note="内部审计记录")
+    for event in altered["public_events"]:
+        event.update(event_id="changed-internal-id", event_index=999, audit_note="内部审计记录")
+    assert makto.build_role_belief_request(altered) == request
+    assert view["private_facts"][0]["source_index"] == 11
+    assert "omitted_private_information" in view
+    body = json.dumps(request["messages"], ensure_ascii=False)
+    for field in ("source_index", "omitted_private_information", "event_id", "event_index",
+                  "public_history_digest", "public_action_count", "prompt_version", "audit_note"):
+        assert field not in body
+    private = json.loads(request["messages"][1]["content"].split("\n", 1)[1].split("\n\n", 1)[0])
+    assert private["private_facts"] == [
+        {"event": "healed", "night": 1, "target": "player7"},
+        {"event": "poison", "night": 1, "target": None},
+        {"event": "privately_observed_attack_target", "night": 1, "target": "player7"},
+    ]
+    assert private["witch_medicines"] == view["witch_medicines"]
+    # 公共投票也是玩家事实，但其嵌套审计字段不能随 JSON 一并发送。
+    view["public_events"].insert(-1, {"event_type": "vote_result", "votes": [
+        {"voter": "player1", "target": "player2", "source_index": 999}]})
+    body = json.dumps(makto.build_role_belief_request(view)["messages"], ensure_ascii=False)
+    assert "source_index" not in body and "vote_result" in body
+
+
+@pytest.mark.parametrize("change", ["missing", "null", "wrong_night", "daytime"])
+def test_seer_missing_or_unconfirmed_private_result_is_never_inferred(change):
+    events, _, _ = _role_fixture()
+    if change == "missing":
+        del events[9]
+    elif change == "null":
+        events[9]["content"]["player"] = None
+    elif change == "wrong_night":
+        events[9]["content"]["night"] = 2
+    else:
+        event = events.pop(9)
+        speech_index = next(i for i, e in enumerate(events) if e["event"] == "speech")
+        events.insert(speech_index, event)
+    view, _ = _role_request(events, 3)
+    assert view["private_facts"] == [] and view["known_werewolves"] == []
+    assert view["known_non_werewolves"] == ["player3"]
+
+
+def test_witch_null_missing_and_completed_night_skill_state_are_distinct():
+    events, _, _ = _role_fixture()
+    view, _ = _role_request(events, 4)
+    assert view["witch_medicines"] == {"healed": "used", "poison": "available"}
+    del events[12]  # 缺少毒药记录，不自动当作本夜压毒。
+    view, _ = _role_request(events, 4)
+    assert view["witch_medicines"] == {"healed": "used", "poison": "unknown"}
+    events = events[:-1] + [
+        {"event": "cycle_round", "content": {"round": 2, "status": "night"}},
+        {"event": "werewolf_kill", "content": {"night": 2, "target_player": 5}},
+        {"event": "poison", "content": {"night": 2, "player": 1}},
+        {"event": "cycle_round", "content": {"round": 2, "status": "day", "context": "今天是平安夜"}},
+        {"event": "speech", "content": {"day": "2-1", "player": 3, "context": "新一天"}},
+    ]
+    _, payload, boundaries = _role_fixture(events)
+    later = makto.role_belief_view(payload, boundaries[-1], 4)
+    assert later["witch_medicines"] == {"healed": "used", "poison": "used"}
+    assert later["private_facts"][-1]["target"] == "player5"
+    assert view["private_facts"] != later["private_facts"]
+    # 两条本人技能记录都缺失时，即使原始数据有狼刀，也不能给女巫补造刀口。
+    events, _, _ = _role_fixture()
+    del events[11:13]
+    view, _ = _role_request(events, 4)
+    assert not view["private_facts"]
+    assert set(view["witch_medicines"].values()) == {"unknown"}
+
+
+def test_primary_observers_and_missing_public_history_remain_strict():
+    events, payload, boundaries = _role_fixture()
+    with pytest.raises(ValueError, match="non-Werewolf"):
+        makto.role_belief_view(payload, boundaries[0], 1)
+    events[13]["content"]["context"] = "死亡玩家：5号玩家"
+    _, payload, boundaries = _role_fixture(events)
+    with pytest.raises(ValueError, match="alive"):
+        makto.role_belief_view(payload, boundaries[0], 5)
+    del events[13]["content"]["context"]
+    _, payload, boundaries = _role_fixture(events)
+    assert boundaries[0]["plan"] is None
+    with pytest.raises(ValueError, match="complete public history"):
+        makto.role_belief_view(payload, boundaries[0], 3)
+
+
+@pytest.mark.parametrize("raw", [None, "not JSON", '[]', '{"suspected_werewolves":["player5","player5"]}',
+    '{"suspected_werewolves":["player5"]}', '{"suspected_werewolves":["player3"]}', '{"suspected_werewolves":["player8"]}',
+    '{"suspected_werewolves":[],"extra":1}', '{"suspected_werewolves":[],"suspected_werewolves":["player1"]}'])
+def test_failed_role_generation_never_becomes_successful_uniform(raw):
+    events, _, _ = _role_fixture()
+    view, _ = _role_request(events, 5)
+    # 注入一项受控的好人硬知识，单独测试集合校验，不借助角色真值。
+    view["known_non_werewolves"].append("player3")
+    result = makto.parse_role_belief_response(raw, view)
+    assert result["status"] == "error" and not result["observed"]
+    assert result["suspected_werewolves"] is None and result["q"] == [0] * 7
+
+
+def test_role_successful_empty_full_and_hard_knowledge_use_existing_targets():
+    events, _, _ = _role_fixture()
+    villager, _ = _role_request(events, 5)
+    empty = makto.parse_role_belief_response('{"suspected_werewolves":[]}', villager)
+    assert empty["observed"] and empty["suspected_werewolves"] == []
+    assert empty["q"][4] == 0 and sum(empty["q"]) == pytest.approx(1)
+    full = [p for p in makto.PLAYER_IDS if p != "player5"]
+    result = makto.parse_role_belief_response(json.dumps({"suspected_werewolves": full}), villager)
+    assert result["q"] == empty["q"]
+    seer, _ = _role_request(events, 3)
+    assert not makto.parse_role_belief_response('{"suspected_werewolves":[]}', seer)["observed"]
+    assert makto.parse_role_belief_response('{"suspected_werewolves":["player1"]}', seer)["q"] == [1, 0, 0, 0, 0, 0, 0]
+
+
+def _teacher_reply(content, *, finish="stop", model="Qwen/Qwen3-8B", refusal=None, tokens=100):
+    return json.dumps({"model": model, "choices": [{"finish_reason": finish,
+        "message": {"role": "assistant", "content": content, "refusal": refusal}}],
+        "usage": {"prompt_tokens": tokens, "completion_tokens": 10, "total_tokens": tokens + 10}})
+
+
+@pytest.mark.parametrize("change", ["length", "refusal", "model", "tokens", "JSON", "hard_knowledge"])
+def test_trial_reply_checks_envelope_and_never_labels_failed_generations(change):
+    events, _, _ = _role_fixture()
+    view, _ = _role_request(events, 3)
+    kwargs = {}
+    content = '{"suspected_werewolves":["player1"]}'
+    if change == "length":
+        kwargs["finish"] = "length"
+    elif change == "refusal":
+        kwargs["refusal"] = "refused"
+    elif change == "model":
+        kwargs["model"] = "wrong-model"
+    elif change == "tokens":
+        kwargs["tokens"] = 101
+    elif change == "JSON":
+        content = "invalid JSON"
+    else:
+        content = '{"suspected_werewolves":[]}'
+    result = makto.role_trial_reply(_teacher_reply(content, **kwargs), view, "Qwen/Qwen3-8B", 100)
+    assert not result["observed"] and result["q"] == [0] * 7
+    assert result["hard_knowledge_compliant"] is (False if change == "hard_knowledge" else None)
+
+
+@pytest.fixture
+def trial_wiring(tmp_path, monkeypatch):
+    """只替换物理资源；执行真实的请求、日志、解析和一次性保护代码。"""
+    from werewolf.tom_llm import deployment, experiment, live_runner, service_manager
+    from werewolf.tom_llm.model_spec import ModelSpec
+    events, _, _ = _role_fixture()
+    inputs = []
+    for i in range(12):
+        view, _ = _role_request(events, (5, 3, 4)[i % 3])
+        view["boundary_id"] += f"-fixture-{i // 3}"
+        inputs.append({"view": view, "request": makto.build_role_belief_request(view)})
+    root = tmp_path / "service"
+    (root / "contract").mkdir(parents=True)
+    run = SimpleNamespace(root=root, key="qwen3", spec=ModelSpec("qwen3"),
+        artifact=SimpleNamespace(manifest_digest="a" * 64),
+        record={"mode": "formal", "runtime": {"environment_prefix": "/mock/environment", "gpu_uuid": "GPU-MOCK",
+            "argv_options": {"model": "/mock/model", "port": 18581, "structured-outputs-config": {"backend": "xgrammar"}}}})
+    calls = []
+    class Manager:
+        def __init__(self, given):
+            assert given is run
+        def status(self):
+            return {"state": "not_started"}
+        def start(self, *, execute):
+            assert execute
+            calls.append("start")
+        def stop(self, *, execute):
+            assert execute
+            calls.append("stop")
+        def guard(self, *args):
+            return {"owned": "mock"}
+    class Transport:
+        failure = None
+        def __init__(self, endpoint, *, alive_check):
+            assert endpoint == "http://127.0.0.1:18581" and alive_check()["owned"] == "mock"
+            self.count = 0
+        def send(self, wire, identity):
+            assert output.exists()  # dispatch 在调用前已经持久化。
+            last = json.loads(output.read_bytes().splitlines()[-1])
+            assert last["event"] == "dispatch" and last["request_digest"] == identity
+            assert wire["max_tokens"] == 96 and wire["temperature"] == 0
+            assert wire["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
+            assert "game_id" not in wire and all(m["role"] in {"system", "user"} for m in wire["messages"])
+            calls.append("send")
+            index = self.count
+            self.count += 1
+            if self.failure is not None and index == 1:
+                raise self.failure
+            content = "invalid JSON" if index == 2 else json.dumps({
+                "suspected_werewolves": inputs[index]["view"]["known_werewolves"]})
+            return _teacher_reply(content)
+    monkeypatch.setattr(experiment, "open_run", lambda *a, **kw: run)
+    monkeypatch.setattr(deployment, "profile", lambda *a, **kw: run.record["runtime"])
+    monkeypatch.setattr(service_manager, "Service", Manager)
+    monkeypatch.setattr(live_runner, "HttpTransport", Transport)
+    monkeypatch.setattr(makto, "role_trial_inputs", lambda *a: deepcopy(inputs))
+    monkeypatch.setattr(makto, "check_role_trial_inputs", lambda *a: {
+        "versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * 12})
+    monkeypatch.setattr(makto.sys, "platform", "linux")
+    output = tmp_path / "trial.jsonl"
+    return output, run, inputs, calls, Transport
+
+
+def test_trial_prepare_then_twelve_independent_calls_save_raw_and_invalid_results(trial_wiring):
+    output, run, inputs, calls, _ = trial_wiring
+    prepared = makto.role_trial("mock_data", output, run.root, "mock_digest")
+    assert prepared["status"] == "PREPARED_NOT_EXECUTED" and not calls
+    result = makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+    assert result["request_count"] == 12 and result["failed"] == 1 and result["not_attempted"] == 0
+    assert result["valid_nonempty"] == 4 and result["valid_empty"] == 7
+    assert result["hard_knowledge_compliant"] == 11
+    assert calls == ["start", *(["send"] * 12), "stop"]
+    records = [json.loads(line) for line in output.read_bytes().splitlines()]
+    assert sum(r["event"] == "received" and "raw_response" in r for r in records) == 12
+    assert sum(r["event"] == "result" for r in records) == 12
+    assert result["results"][2]["q"] == [0] * 7
+    assert result["pre_changes"]
+    before = output.read_bytes()
+    with pytest.raises(ValueError, match="no automatic replay"):
+        makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+    assert output.read_bytes() == before and calls.count("send") == 12
+
+
+def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring):
+    from werewolf.tom_llm.provider_semantics import OutcomeUnknown
+    output, run, _, calls, transport = trial_wiring
+    makto.role_trial("mock_data", output, run.root, "mock_digest")
+    error = OutcomeUnknown("ownership lost after response")
+    error.response_body = _teacher_reply('{"suspected_werewolves":["player1"]}').encode()
+    error.http_status = 200
+    transport.failure = error
+    result = makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+    assert result["failed"] == 1 and result["not_attempted"] == 10
+    assert result["results"][1]["status"] == "unknown" and not result["results"][1]["observed"]
+    assert calls.count("send") == 2 and calls[-1] == "stop"
+    record = next(json.loads(line) for line in output.read_bytes().splitlines()
+                  if json.loads(line)["event"] == "transport_error")
+    assert bytes.fromhex(record["raw_response_hex"]) == error.response_body
+    with pytest.raises(ValueError, match="no automatic replay"):
+        makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+    assert calls.count("send") == 2
+
+
+def test_missing_real_tokenizer_or_schema_assets_cannot_publish_prepared_trial(trial_wiring, monkeypatch):
+    output, run, _, calls, _ = trial_wiring
+    def missing(*args):
+        raise FileNotFoundError("real tokenizer or xgrammar unavailable")
+    monkeypatch.setattr(makto, "check_role_trial_inputs", missing)
+    with pytest.raises(FileNotFoundError):
+        makto.role_trial("mock_data", output, run.root, "mock_digest")
+    assert not output.exists() and calls == []
+
+
+@pytest.mark.parametrize("failure", [None, "template", "budget", "schema"])
+def test_trial_cpu_checks_actual_message_path_with_controlled_tokenizer_and_schema(monkeypatch, failure):
+    import importlib.metadata
+    import sys
+    from jinja2 import Environment
+    from werewolf.tom_llm import model_spec
+    events, _, _ = _role_fixture()
+    view, request = _role_request(events, 3)
+    spec = model_spec.ModelSpec("qwen3")
+    row = spec.record()
+    template = Environment().from_string(model_spec.template_bytes(spec).decode())
+    class Tokenizer:
+        def apply_chat_template(self, messages, *, tokenize, **kwargs):
+            assert messages == request["messages"] and kwargs["enable_thinking"] is False
+            text = template.render(messages=messages, bos_token=None, eos_token=row["tokenizer"]["eos_token"], **kwargs)
+            if tokenize:
+                return self.encode(text)
+            return text + ("wrong template" if failure == "template" else "")
+        def encode(self, text, **kwargs):
+            return [1] * (8000 if failure == "budget" else len(text))
+    schemas = []
+    def validate(params):
+        schemas.append(params.structured_outputs.json)
+        if failure == "schema":
+            raise ValueError("unsupported actual schema")
+    monkeypatch.setitem(sys.modules, "vllm.sampling_params", SimpleNamespace(
+        SamplingParams=lambda **kwargs: SimpleNamespace(**kwargs),
+        StructuredOutputsParams=lambda **kwargs: SimpleNamespace(**kwargs)))
+    monkeypatch.setitem(sys.modules, "vllm.v1.structured_output.backend_xgrammar", SimpleNamespace(validate_xgrammar_grammar=validate))
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.27.0" if name == "vllm" else "MOCK")
+    monkeypatch.setattr(model_spec, "load_cpu_tokenizer", lambda *args: Tokenizer())
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    run = SimpleNamespace(spec=spec, record={"tokenizer_assets": "mock-small-assets", "runtime": {
+        "environment": {}, "environment_prefix": str(Path(sys.executable).parent.parent)}})
+    inputs = [{"view": view, "request": request}] * 12
+    if failure:
+        with pytest.raises(ValueError, match={"template": "template/token", "budget": "token budget", "schema": "actual schema"}[failure]):
+            makto.check_role_trial_inputs(inputs, run)
+    else:
+        result = makto.check_role_trial_inputs(inputs, run)
+        assert len(result["input_token_counts"]) == 12 and len(result["input_ids_digests"]) == 12
+        assert len(schemas) == 1 and schemas[0] == request["response_format"]["json_schema"]["schema"]
 
 
 def test_label_conversion_uses_candidates_not_actual_identity_or_reason():

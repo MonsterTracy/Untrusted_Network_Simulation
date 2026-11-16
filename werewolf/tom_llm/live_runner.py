@@ -56,6 +56,7 @@ class HttpTransport:
             body = {k:v for k,v in request.items() if k!='extra_body'}
             require(not set(body)&set(request['extra_body']),'wire extra-body collision')
             body.update(request['extra_body'])
+            reply,raw = None,None
             try:
                 c.request('POST','/v1/chat/completions',body=canonical_json_bytes(body),
                           headers={'Content-Type':'application/json','X-Request-Id':task_id})
@@ -68,10 +69,15 @@ class HttpTransport:
                 if reply.status!=200:
                     raise OutcomeUnknown('HTTP status '+str(reply.status))
                 return raw.decode('utf-8')
-            except OutcomeUnknown:
-                raise
             except Exception as error:
-                raise OutcomeUnknown('request may have reached model; no automatic resend: '+str(error)) from error
+                unknown = error if isinstance(error,OutcomeUnknown) else OutcomeUnknown(
+                    'request may have reached model; no automatic resend: '+str(error))
+                # 归属检查或 HTTP 状态失败时，响应仅供审计，不能作为有效预测。
+                unknown.response_body = raw
+                unknown.http_status = reply.status if reply is not None else None
+                if unknown is error:
+                    raise
+                raise unknown from error
         finally:
             c.close()
             if pinned is not None:
