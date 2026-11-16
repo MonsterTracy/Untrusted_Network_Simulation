@@ -1,13 +1,84 @@
-# Phase-1 module responsibilities
+# Project module ownership and Phase-1 responsibilities
 
-This document covers the Phase-1 implementation and paired final lifecycle,
-not every module in the current project. See the [README](../README.md) for the
-current development entry and implemented research-module navigation, including
-TomBaseline, Observer-DTRS and later research extensions.
+The current ownership map below was updated on 2026-11-16 after Strategy and
+Game Runtime consolidation. It locates existing implementations; it does not
+establish that every research connection or experiment has been validated.
+See the [research overview](research-overview.md) for evidence and study status,
+and the [README](../README.md) for existing installation and execution commands.
+
+## Current ownership
+
+| Responsibility | Existing implementation and scope |
+| --- | --- |
+| Game Runtime | [game_runtime.py](../werewolf/game_runtime.py), [envs](../werewolf/envs/), [agents](../werewolf/agents/), [backends](../werewolf/backends/) own Classic7 assembly, legal observations and authoritative execution. Root [run_random.py](../run_random.py) retains thin exports. |
+| Canonical Collection | [canonical_collection](../werewolf/canonical_collection/), [Publication](../werewolf/development_publication.py), [V2 Publication](../werewolf/development_publication_v2.py) and [artifact_io](../werewolf/artifact_io/) own generated data, provenance and immutable evidence. |
+| Observer-ToM | [tom](../werewolf/tom/) owns observer suspicion prediction; [tom_llm](../werewolf/tom_llm/) owns the corresponding general-model Baseline comparison. |
+| Observer-DTRS | [observer_dtrs](../werewolf/observer_dtrs/) owns conditional event estimation, cognitive risks and three-way judgments. Its evidence does not itself define language-action utility. |
+| Strategy | [strategy](../werewolf/strategy/) owns reusable candidate and planning research implementations. The retained MCTS prototype is not the current paper's strategy method. |
+| Phase-2 | Existing top-level `werewolf/phase2_*.py` modules own action contracts, Mapper, language verification, canonical commit and opt-in experiments; see the [Phase-2 navigation](research/phase2-current-status.md). No package migration has occurred. |
+| Evaluation | [ToM reporting](../werewolf/tom/reporting.py), [Baseline analysis](../werewolf/tom_llm/baseline_analysis.py), [Terminal statistics](../werewolf/phase2_terminal_estimator.py) and [Gameplay results](../werewolf/phase2_gameplay.py) retain their distinct populations and endpoints. |
+| scripts | [scripts](../scripts/) supplies operators, analyses and some callable research libraries. Shared Phase-2 implementations remain in place under their Source contracts; see the [Phase-2 navigation](research/phase2-current-status.md). |
+
+## Operator and research entrypoints
+
+The 2026-11-16 tracked inventory contains 59 Python files and one Shell script
+under `scripts/`: 50 Python files have executable entry guards; nine are package
+or library files. This is a classification of source, not a count of validated
+experiments. The single installed console entry is `uns=werewolf.cli:main`;
+`python -m werewolf.cli` uses the same command implementation.
+
+| Responsibility | Representative implementation and usage boundary |
+| --- | --- |
+| Collection and service operation | [collect_games.py](../scripts/collect_games.py) freezes inputs and coordinates the existing `uns collect` path. [Read-only inspection](../scripts/inspect_canonical_collection_readonly.py) examines collection metadata. [start_vllm.sh](../scripts/start_vllm.sh) activates the registered serving environment and execs the deployment YAML; its server paths are not portable installation defaults. See [data operations](research/data-acquisition-preprocessing.md) and [deployment](server-execution.md#local-qwen-service). |
+| ToM training and inference lifecycle | CLI Development/OOF and [Final Fit](qwen3-final-fit.md) commands own scientific execution. [Capsule compilation](../scripts/build_final_tom_capsule.py), [CPU qualification](../scripts/qualify_final_tom_capsule.py) and [Resident serving](../scripts/serve_final_tom_capsule.py) have separate responsibilities and explicit identities; the service script is an Owner-launched process, not a user-facing Gameplay Runner. |
+| DTRS offline tools | [Dataset management](../scripts/manage_observer_dtrs_dataset.py), [D2 protocol/split management](../scripts/manage_observer_dtrs_d2.py), [nested validation](../scripts/run_observer_dtrs_validation.py) and diagnostic/inspection tools consume the documented offline populations. See [D2](research/observer-dtrs-v1-d2a-protocol.md) and [D3](research/observer-dtrs-v1-d3a-protocol.md). |
+| Phase-2 operations | [Mapper study](../scripts/run_phase2_mapper_study.py), [Mapper final fit](../scripts/run_phase2_mapper_final_fit.py), [language Smoke](../scripts/run_phase2_language_smoke.py), [Online campaign](../scripts/phase2_online_campaign.py) and [Gameplay campaign](../scripts/phase2_gameplay_campaign.py) retain source/configuration and artifact requirements. The [Phase-2 navigation](research/phase2-current-status.md) distinguishes Pilot and Gameplay endpoints. |
+| Historical statistics | [OOF metrics](../scripts/paper_tom_metrics.py), [Backbone contrasts](../scripts/paper_backbone_contrasts.py), [Experiment A analysis](../scripts/experiment_a_mapper_contrasts.py), [Terminal ITT](../scripts/phase2_terminal_itt_analysis.py), [Probe ITT](../scripts/phase2_probe_itt_analysis.py) and [Gameplay analysis](../scripts/analyze_tom_gameplay_ablation.py) read distinct evidence and do not imply interchangeable populations or outcomes. |
+| Controlled research demonstrations | [Synthetic comparison](../scripts/compare_observer_dtrs_synthetic.py), [S1a comparison](../scripts/compare_observer_dtrs_s1a.py), [candidate appraisal](../scripts/compare_observer_dtrs_appraisal.py) and controlled check tools use artificial inputs. See the [research scope](research/observer-dtrs-contextual-speech-prototype.md); these are not formal strategy-effect evidence. |
+| Result display | [Matrix tables](../scripts/show_tom_game_matrices.py) and [single-game visualization](../scripts/visualize_tom_single_game.py) consume existing exports. See the [table guide](tom-game-matrices-cli.md) and [visualization guide](tom-single-game-visualization.md); role information is offline display evidence, not model input. |
+| Historical transport adapter | [remote_tom_worker.py](../scripts/remote_tom_worker.py) checks a fixed detached planner Source and its adapter bytes before loading. The [Remote-ToM protocol](research/phase4bi-remote-tom-protocol.md) describes this historical deployment design, not a current-HEAD quick start. |
+
+The nine non-CLI Python files have actual import roles:
+
+| Files | Role and consumers |
+| --- | --- |
+| [__init__.py](../scripts/__init__.py) | Installable operator-package boundary; importing it starts no runtime. |
+| [constrained_speech.py](../scripts/constrained_speech.py), [speech_realization.py](../scripts/speech_realization.py), [verified_speech_commit.py](../scripts/verified_speech_commit.py) | Callable eligibility, realization/verification and commit research logic used by opt-in Runtime and DTRS research paths. These are not standalone command entrypoints. |
+| [phase2_language_realization.py](../scripts/phase2_language_realization.py), [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Existing Language implementation and thin package exports respectively; current Source inventories protect their paths/bytes. |
+| [remote_tom_protocol.py](../scripts/remote_tom_protocol.py), [remote_tom_provider.py](../scripts/remote_tom_provider.py) | Shared wire validation and injected Gameplay-side provider; neither is a model-service launcher. |
+| [tom_gameplay_ablation.py](../scripts/tom_gameplay_ablation.py) | Callable experiment integration used by the existing paired collection/smoke operators; preserves their original scientific contract. |
+
+## Installation and checkout scope
+
+See the [README installation table](../README.md#install-and-execute) for base and
+optional dependencies. `setup.py` declares Python >=3.10; CI selects 3.12, while
+the existing serving and Baseline environment specifications describe particular
+Linux/Python/CUDA combinations, not universal client-environment compatibility.
+The vLLM environment remains separate from the scientific client.
+
+These instructions target an editable source checkout. Configurations, protocols
+and source inventories are read from repository paths; installation does not
+provide model weights, Publications, sealed predictions or external services.
+Formal tools require their actual pinned inputs and execution Source. Historical
+documents retain their own dates and do not authorize a new run on current HEAD.
+
+`find_packages()` currently includes `scripts` and some `tests` packages as well
+as `werewolf`, including Strategy. The three artificial comparison scripts above
+reuse `tests.observer_dtrs.test_speech_runtime` fixtures and are explicitly
+repository/development tools. Excluding tests from packaging without addressing
+those consumers would change their behavior; no such packaging change is made.
+Root `run_random` remains declared in `py_modules` for its thin exports and
+Source inventories. No standalone wheel support is established by this map.
+
+## Phase-1 responsibilities
+
+This table retains the Phase-1 implementation and paired final lifecycle scope;
+the Runtime location reflects the completed ownership move. It is not a complete
+inventory of later research, nor a replacement for historical Source identities.
 
 | Modules | Phase-1 responsibility |
 | --- | --- |
-| run_random.py | Runtime assembly, profile assignment and required canonical recorder loop; no CLI |
+| werewolf/game_runtime.py; root run_random.py | Package-owned Runtime assembly, profile assignment and required canonical recorder loop; root file is a thin export, not another loop or CLI |
 | werewolf/envs | Classic7 mechanics and authoritative public events |
 | werewolf/agents | Playing-agent cognition, constrained gameplay transport, role-legal observation prompts |
 | werewolf/backends + runtime_config.py | One named OpenAI-compatible transport/configuration contract |

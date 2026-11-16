@@ -4,6 +4,33 @@
 
 原审阅基于 `57fd2d716eff8ac83477a17298e160c04b7e98b5` 及当时尚未提交的 Router-v1；“本工作区没有合并它们”仅描述该历史快照，不代表当前主线。下列历史整理记录保留原有语境；本次仅修正导航，不改变 Terminal、Probe、Router 的科研合同或升级正式实验完成状态。
 
+## 2026-11-16 职责与结构导航补充
+
+本节依据后续30文件结构审阅补充定位，代码基准为`1c201972cd790f68a0a61069f5304184c217d4ca`；上文及后续2026-11-10快照的日期、Source与科研合同保持原意。当前工作区另有未提交的Capsule/Gameplay接入成果，不把它们统称为该固定Commit的已发布能力。本次仅改文档，未运行实验或访问服务器。
+
+| 职责组 | 现有模块定位 | 职责与终点 |
+| --- | --- | --- |
+| Action与Decision Opportunity | [actions](../../werewolf/phase2_actions.py)、[decision_opportunity](../../werewolf/phase2_decision_opportunity.py)、[treatment](../../werewolf/phase2_treatment.py)、[intervention](../../werewolf/phase2_intervention.py) | 当前合法PRE、候选证据、预定行动分配及提交前状态核对；不是通用策略寻优器。 |
+| Language、Verifier与Canonical Commit | [language](../../werewolf/phase2_language.py)、[verified_speech](../../werewolf/phase2_verified_speech.py)、[execution](../../werewolf/phase2_execution.py)、[canonical_commit](../../werewolf/phase2_canonical_commit.py) | Actor实现预定行动，独立Perceiver/Verifier检查表达，再绑定原Recorder事务；不另造游戏循环。 |
+| Mapper离线与运行时 | [offline](../../werewolf/phase2_offline.py)、[q_representation](../../werewolf/phase2_q_representation.py)、[mapper](../../werewolf/phase2_mapper.py)、[selection](../../werewolf/phase2_mapper_selection.py)、[final](../../werewolf/phase2_mapper_final.py)、[runtime](../../werewolf/phase2_mapper_runtime.py) | 离线人口/特征、Study和选参、冻结M3加载及score推断；score不是行动成功率。 |
+| Terminal、Probe与固定Router | [online_plan](../../werewolf/phase2_online_plan.py)、[online_runner](../../werewolf/phase2_online_runner.py)、[gameplay](../../werewolf/phase2_gameplay.py) | 既有随机分配、PROBE→REDIRECT和Immediate Redirect策略；不代表完整DTRS最优规划或MCTS集成。 |
+| 运行装配与预检 | [online_server](../../werewolf/phase2_online_server.py)、[gameplay_server](../../werewolf/phase2_gameplay_server.py)、[online_preflight](../../werewolf/phase2_online_preflight.py) | 复用Canonical Runtime、模型和语言后端，核对具体执行来源与能力；预检和源码存在不等于正式实验通过。 |
+| Ledger、记录与评价 | [online_ledger](../../werewolf/phase2_online_ledger.py)、[online_records](../../werewolf/phase2_online_records.py)、[pilot_records](../../werewolf/phase2_pilot_records.py)、[pilot_dataset](../../werewolf/phase2_pilot_dataset.py)、[outcome](../../werewolf/phase2_outcome.py)、[terminal_estimator](../../werewolf/phase2_terminal_estimator.py)、[estimator_io](../../werewolf/phase2_terminal_estimator_io.py) | Pilot保留日终后果与ITT人口，GameplayLedger保留完整GAME_RESULT。两种终点和恢复合同不同，不能因接口相似而合并。 |
+
+[Action Audit](../../werewolf/phase2_action_audit.py)证明结构化意图有效性，[Language Audit](../../werewolf/phase2_language_audit.py)记录语言尝试与验证，[Backend Audit](../../werewolf/phase2_backend_audit.py)绑定实际调用及既有预算；三者不是重复的成功标记。
+
+Strategy和Game Runtime归属整理已完成；MCTS保留为人工响应树受控原型，不作为当前论文主线策略规划方法。统一Final-D2的拟合、发布、回读与尚未执行的Final-Q Development迁移评价，见[科研总览](../research-overview.md#4-各研究阶段的当前状态)。这些状态不授予新的Phase-2策略效果或完整游戏胜率结论。
+
+目前保留顶层30个模块，尚未迁入新子包。后续按实际消费者分批整理以下所有权问题，不默认新增Runner、兼容包装或资格流程：
+
+- [语言执行实现](../../scripts/phase2_language_realization.py)不是CLI，仍由`phase2_verified_speech`反向导入，宜归正式包统一持有。
+- [Campaign脚本](../../scripts/phase2_online_campaign.py)中的共享输入、来源绑定逻辑被Server反向调用；脚本应保留操作入口，共享业务按现有Server/Preflight职责整理。
+- [Terminal ITT脚本](../../scripts/phase2_terminal_itt_analysis.py)的共享Reader被`phase2_terminal_estimator_io`调用；需区分可复用读取实现与历史分析/恢复合同。
+
+Mapper、Smoke和Terminal Estimator已有源码路径/字节绑定。普通文件迁移不能被当作旧资产自动兼容，也不能改写旧Manifest来适配目录；具体兼容问题与上述结构整理分别判断。
+
+以下原章节保留2026-11-10快照；其中“当前”“本轮”和后续研究安排均指原审阅时点，现行职责与结构整理范围见上面的补充。
+
 ## 当前路径
 
 ```text

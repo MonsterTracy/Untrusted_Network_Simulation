@@ -1,6 +1,6 @@
 # 全项目科研架构与模块导航
 
-本文连接现有科研模块、数据流和文档，不新增开发规范、执行协议或实验门禁。状态依据截至 2026-11-11 的本地审阅、既有归档与最新用户交接确认，不是服务器实时状态。各实验仍以其原始 Source、冻结合同和封存证据为准。
+本文连接现有科研模块、数据流和文档，不新增开发规范、执行协议或实验门禁。2026-11-11 的审阅为历史基线；2026-11-16 根据后续已完成的结构整理和执行记录补充导航，代码基准为 `1c201972cd790f68a0a61069f5304184c217d4ca`。本次仅整理文档，未重新访问服务器或执行实验；各实验仍以其原始 Source、冻结合同和封存证据为准，不能把后续状态归于历史快照。
 
 ## 1. 项目目标与科研问题
 
@@ -37,24 +37,28 @@ Publication 中的观察报告在下游用于训练监督、离线标签或评�
 
 | 模块 | 科研职责 | 主要源码位置 | 核心输入 | 核心输出 | 当前科研状态 | 合同／证据入口 |
 |---|---|---|---|---|---|---|
-| 游戏环境和 Canonical Collection | 执行 Classic7，记录因果合法的公共历史和采集来源 | [envs](../werewolf/envs/)、[canonical_collection](../werewolf/canonical_collection/) | Collection Plan、Agent、Backend、游戏规则 | PRE、观察报告、Bundle、Ledger、失败证据 | 可信数据基础设施已实现；具体采集完成以原产物为准 | [采集合同](collection_contract.md)、[数据生命周期](research/data-acquisition-preprocessing.md) |
+| Game Runtime | 装配 Classic7、Agent与Backend，执行唯一权威游戏循环 | [game_runtime.py](../werewolf/game_runtime.py)、[envs](../werewolf/envs/)、[agents](../werewolf/agents/)、[backends](../werewolf/backends/) | 游戏配置、合法角色观察及显式研究hook | 权威动作、公共事件和游戏终点 | Runtime归属整理已完成；根run_random仅保留薄导出 | [模块职责](repository_structure.md)、[采集合同](collection_contract.md) |
+| Canonical Collection | 记录因果合法的公共历史、采集来源并发布可信证据 | [canonical_collection](../werewolf/canonical_collection/)、[artifact_io](../werewolf/artifact_io/) | Collection Plan、Runtime及Recorder证据 | PRE、观察报告、Bundle、Ledger、失败证据 | 可信数据基础设施已实现；具体采集完成以原产物为准 | [采集合同](collection_contract.md)、[数据生命周期](research/data-acquisition-preprocessing.md) |
 | Development Publication | 验证并发布 Development 人口与整局划分，隔离受限角色信息 | [Publication V1](../werewolf/development_publication.py)、[V2](../werewolf/development_publication_v2.py)、[Split](../werewolf/canonical_split.py) | 已验证 Collection、预定划分规则 | 公共 Publication、Fold、受限 Role Sidecar | V1/V2 合同并存；不是两个任意互换的数据入口 | [数据生命周期](research/data-acquisition-preprocessing.md) |
 | Observer-ToM | 建模 observer-specific 非自身怀疑质量 | [werewolf/tom](../werewolf/tom/) | 公共 PRE、观察者、合法训练监督与人口掩码 | OOF Q、Checkpoint、封存 Final Fit 预测器、认知评价 | OOF、Final Fit、独立评价生命周期已实现，各自保留来源 | [ToM 合同](tom_contract.md)、[Qwen3 Final Fit](qwen3-final-fit.md) |
 | TomBaseline | 在共同公共观察任务上比较通用模型与专用 ToM | [werewolf/tom_llm](../werewolf/tom_llm/) | 公共 Task、Selection / Cohort、模型、冻结 Reference | 模型预测、Run / Seal、配对分析 | V1/V2 三模型正式实验及单模型分析均获用户确认完成；联合配对分析尚无完成证据 | [现行操作说明](operations/tom-llm-unified.md)；历史实验仍用原 Source 合同 |
-| Observer-DTRS | 条件事件估计、显式损失与静态三支风险比较，以及 D4 工程证据链 | [werewolf/observer_dtrs](../werewolf/observer_dtrs/) | PRE、Q、离线事件标签、显式 LossSpec | 条件概率、风险、POS/BND/NEG、部署与审计证据 | D2 有历史 DEV 正式归档；D3 正式历史研究获用户确认；D4 工程与独立 CAL/TEST 状态分开 | [D1 事件](research/observer-dtrs-v1-d1a.md)、[D2 结果归档](research/observer-dtrs-v1-d2-results.md)、[D3 方法草案](research/observer-dtrs-v1-d3a-protocol.md)、[D3 受控实现](research/observer-dtrs-v1-d3b.md)、[D4 工程](research/observer-dtrs-v1-d4c2b2-resident-service.md) |
+| Observer-DTRS | 条件事件估计、显式损失与静态三支风险比较，以及 D4 工程证据链 | [werewolf/observer_dtrs](../werewolf/observer_dtrs/) | PRE、Q、离线事件标签、显式 LossSpec | 条件概率、风险、POS/BND/NEG、部署与审计证据 | 历史D2/D3与新Final-D2候选分开；候选已发布，Final-Q适用性待迁移评价；D4工程与独立CAL/TEST分开 | [D1 事件](research/observer-dtrs-v1-d1a.md)、[D2 结果归档](research/observer-dtrs-v1-d2-results.md)、[D3 方法草案](research/observer-dtrs-v1-d3a-protocol.md)、[D3 受控实现](research/observer-dtrs-v1-d3b.md)、[D4 工程](research/observer-dtrs-v1-d4c2b2-resident-service.md) |
 | Phase-2 Mapper | 从 Q 和合法竞争状态构造 R2，估计社会状态 score | [phase2_offline.py](../werewolf/phase2_offline.py)、[phase2_mapper_runtime.py](../werewolf/phase2_mapper_runtime.py) | 离线 OOF Q / 标签；运行时 Final Q 与合法状态 | Mapper、p_tilde score panel | 离线 Study、Final Fit 与运行时路径已实现；不授予行动效果解释 | [离线数据合同](research/phase2-offline-data-contract.md)、[当前导航](research/phase2-current-status.md) |
 | Terminal / Probe / Router | 研究终止行动后果、固定序贯策略及游戏级策略比较 | [phase2_online_runner.py](../werewolf/phase2_online_runner.py)、[phase2_gameplay.py](../werewolf/phase2_gameplay.py) | 冻结预测器、Mapper、合法机会、实验 Plan 与 Ledger | Assignment、日终后果、ITT、完整游戏结果 | Terminal 有正式 ITT 归档；Probe ITT 获用户确认、优势未确证；Router 是固定策略工程实现，尚无正式完整游戏胜率结果证据 | [Terminal 协议](research/phase2-terminal-estimator-protocol-v1.md)、[Probe 协议](research/phase2-probe-policy-protocol-v1.md)、[Router 合同](research/phase2-router-v1-contract.md) |
 | Language / Speech | 采集期 V1 语义感知；下游预定行动的语言实现、独立解析和验证 | [speech](../werewolf/speech/)、[phase2_verified_speech.py](../werewolf/phase2_verified_speech.py) | 合法观察、原始公开发言或冻结行动 Plan | V1 注释或经验证的行动发言、审计 | 两种职责均已实现，合同独立；语言层不替代实际投票 | [采集合同](collection_contract.md)、[Action 合同](research/phase2-action-contract-v1.md) |
-| Planning Research | 探索候选规划、情境损失和认知依据如何影响策略意图 | [planning_research.py](../werewolf/observer_dtrs/planning_research.py)、[speech_planning.py](../werewolf/strategy/speech_planning.py) | 合法 PRE / 视角、Q、显式研究假设 | 候选、受控评分、策略意图和原型比较 | 研究进行中；历史消融与原型不等于当前 Router | [动态规划研究](research/observer-dtrs-dynamic-planning-phase1.md)、[情境发言原型](research/observer-dtrs-contextual-speech-prototype.md) |
+| Strategy与规划研究 | 可复用候选、反事实续接、受控评分与行动选择研究；DTRS情境研究是其消费者 | [werewolf/strategy](../werewolf/strategy/)、[planning_research.py](../werewolf/observer_dtrs/planning_research.py) | 合法 PRE / 视角、Q、显式研究假设 | 候选、受控评分、策略意图和原型比较 | Strategy归属整理已完成；MCTS保留为受控原型，不作为当前论文的策略规划方法 | [动态规划研究](research/observer-dtrs-dynamic-planning-phase1.md)、[情境发言原型](research/observer-dtrs-contextual-speech-prototype.md) |
 | Evaluation / Reporting | 按各任务固定人口和终点进行评分、统计及可视化 | [tom/reporting.py](../werewolf/tom/reporting.py)、[baseline_analysis.py](../werewolf/tom_llm/baseline_analysis.py)、[统计脚本](../scripts/) | 对应任务的封存预测、标签、Assignment 或游戏结果 | 认知指标、配对统计、ITT、游戏结果报告 | 实现存在不代表每份正式报告已生成 | [ToM 合同](tom_contract.md)、[Baseline 操作](operations/tom-llm-unified.md)、[Phase-2 导航](research/phase2-current-status.md) |
+| scripts入口 | 实际操作、实验执行与分析命令 | [scripts](../scripts/) | 显式参数、配置和对应科研资产 | 运行或分析产物 | 入口与包内实现并存；部分共享业务仍位于脚本，待分批整理，不据目录名声称已全部解耦 | [Phase-2职责补充](research/phase2-current-status.md#2026-11-16-职责与结构导航补充) |
 
 ## 4. 各研究阶段的当前状态
 
 **代码已经实现**只说明功能存在；**正式实验已完成**需要用户确认、正式 Seal 或实验报告等明确来源；**研究仍在进行**表示方法或实验尚在完善；**历史研究**保留原始方法与执行记录，不代表现行操作协议。下文分别标明“用户已确认”与“正式归档”，不把交接确认当作本轮已在仓库核验实际 Artifact。
 
 - **TomBaseline**：用户已确认 Qwen3、Yi、Mistral 在 V1 概率任务及 V2 集合任务上的正式实验与单模型分析均有完成记录。V2 执行 Source 为 `bacc35135fffa527f60b532ee12e3ca2859398fc`，V1 执行 Source 待同步。本轮未独立复核其 Run Seal 或 Analysis Artifact。三模型联合配对分析尚无完成证据，待 Baseline 对话同步；当前开发 HEAD 与轻量执行合同不替换历史实验身份。
-- **Observer-ToM**：OOF、Final Fit 与独立 Final Evaluation 是不同生命周期。已有实现与历史模型来源不自动证明当前 Checkout 或服务器实例通过真实模型验证。
+- **Observer-ToM**：OOF、Final Fit 与独立 Final Evaluation 是不同生命周期。既有Final-ToM Capsule的单PRE CPU数值对照和Gameplay/Phase-2受控Q接口已有通过记录，继续绑定原Qualification及Scope，不等于完整在线策略资格。已有实现与历史模型来源不自动证明当前Checkout或服务器实例通过新的真实模型验证。
 - **Observer-DTRS**：D1 研究“观察者有效嫌疑支持命中存活狼队”的事件；D2 具有历史 DEV 正式结果归档，并保留原报告的来源核验范围。用户交接确认 D3 的六损失、45 组规范性成本、风险及 POS/BND/NEG 三域判断已有正式历史研究；对应正式 Artifact／完整结果报告的定位待同步，不能把仓库已有方法草案或受控验收说明直接当作该正式成果的核验证据。D4 已有 Capsule / Broker / Resident / Shadow 工程实现，独立 CAL/TEST 是否完成仍待确认。
+- **2026-11-16统一Final-D2候选**：依据此前实际执行记录，旧1500局、22,685条合法OOF-Q样本上的EQ1/EQ0已完成拟合、Artifact发布及精确回读；拟合Source为本文上述`1c20197`代码基准。新产物位于`/data/yuxiao/Untrusted_Network_Simulation/dtrs/final-d2/eq1`与`/data/yuxiao/Untrusted_Network_Simulation/dtrs/final-d2/eq0`，不替换历史25个外层模型。对Final-Q的统计适用性仍待迁移评价，新4800局Development迁移评价尚未执行；该人口不能被称为未经相关研究使用的独立Test。本次文档整理未重新核验这些服务器Artifact，也未放开在线来源限制。
+- **结构与策略状态补充**：Strategy、Game Runtime和MCTS模块归属整理已完成。MCTS仅是人工有限响应树上的受控UCT原型，研究者已决定不采用它作为当前论文主线策略规划方法；后续策略方法另行研究，不据模块存在宣称已接通ToM–DTRS–策略–完整游戏胜率链。
 - **Terminal / Probe**：Terminal 的 120 次分配、正式日终参考损失 ITT 有[协议](research/phase2-terminal-estimator-protocol-v1.md)及[Support Review](research/phase2-terminal-estimator-support-review-v1.md)中的归档来源；estimator fit 完成沿用[当前导航](research/phase2-current-status.md)中的用户交接。用户已确认 Probe 的 200 次分配正式策略 ITT 已完成，但优势尚未确证。本轮未独立复核两者正式产物。
 - **Router-v1**：固定 PROBE_THEN_REDIRECT / IMMEDIATE_REDIRECT 策略的 hook 与游戏级实验基础设施已实现，尚无正式完整游戏胜率结果证据；当前没有完整、已验证的动态最优三支规划器。
 - **历史方案与原型**：早期三支方法、旧 Baseline 执行／资格流程和规划消融保留追溯价值。草案、synthetic / CPU 验收和代码集成均不能单独证明真实模型效果或胜率提升。
@@ -72,7 +76,7 @@ Publication 中的观察报告在下游用于训练监督、离线标签或评�
 
 ## 6. 权威文档导航
 
-- **科学定义与 Phase-1 范围**：[CONTEXT](../CONTEXT.md)、[Phase-1 架构](architecture.md)、[Phase-1 模块职责](repository_structure.md)。后两者不是完整的后续模块清单；CONTEXT 中关于 gameplay 不属范围的表述按 Phase-1 语境理解，不用来否定后续 opt-in 研究。
+- **科学定义与模块归属**：[CONTEXT](../CONTEXT.md)、[Phase-1 架构](architecture.md)、[当前模块职责与Phase-1分工](repository_structure.md)。Phase-1架构不是完整的后续模块清单；CONTEXT中关于gameplay不属范围的表述按Phase-1语境理解，不用来否定后续opt-in研究。
 - **数据与认知建模**：[采集合同](collection_contract.md)、[ToM 合同](tom_contract.md)、[Qwen3 Final Fit](qwen3-final-fit.md)。后续 Backbone 和 paired 研究仍遵守各自冻结合同，不能把某一图或训练参数推广到全部模型。
 - **当前 Baseline 操作**：[统一操作说明](operations/tom-llm-unified.md)；该说明区分当前执行合同与历史实验，不授予旧 Run 新身份。
 - **Phase-2 当前实现与策略**：[当前导航](research/phase2-current-status.md)、[Router-v1 合同](research/phase2-router-v1-contract.md)。Terminal、Probe 及各模块的专用协议见模块表。
