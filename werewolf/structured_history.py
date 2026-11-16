@@ -1,8 +1,9 @@
-"""Pure semantic planning over an Authoritative PRE Prefix."""
+"""公开历史的纯语义Token规划；原发言PRE与外部边界共享字段编码。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from collections.abc import Mapping
 from typing import Any
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
@@ -11,6 +12,8 @@ from werewolf.canonical_collection.pre import (
     validate_authoritative_pre_prefix,
 )
 from werewolf.canonical_collection.speech import V1AnnotationStatus
+from werewolf.canonical_collection.public_history import validate_public_event_history
+from werewolf.canonical_collection.speech import V1SpeechAction
 
 
 STRUCTURED_TOKEN_PLANNER_VERSION = "classic7_structured_token_planner_v1"
@@ -88,10 +91,27 @@ def plan_structured_history(
     if not isinstance(prefix, AuthoritativePREPrefix):
         raise TypeError("planner input must be an AuthoritativePREPrefix")
     validate_authoritative_pre_prefix(prefix)
-    annotations_by_event = {
-        annotation.event_id: annotation
+    actions_by_event = {
+        annotation.event_id: annotation.actions if annotation.status is V1AnnotationStatus.OK else ()
         for annotation in prefix.v1_annotations
     }
+    return plan_public_history(prefix.public_event_history, actions_by_event,
+                               boundary_digest=prefix.prefix_digest)
+
+
+def plan_public_history(history, actions_by_event: Mapping, *, boundary_digest: str):
+    """复用同一Token规划器，支持不伪造发言PRE的外部投票前公开边界。"""
+    validate_public_event_history(history)
+    speeches = {event.event_id for event in history.events if event.event_type == "public_speech"}
+    if set(actions_by_event) != speeches:
+        raise ValueError("public speech action coverage mismatch")
+    if any(not isinstance(action, V1SpeechAction)
+           for actions in actions_by_event.values() for action in actions):
+        raise TypeError("public speech actions must use V1SpeechAction")
+    for event in history.events:
+        if event.event_type == "public_speech" and any(
+                action.subject != event.speaker for action in actions_by_event[event.event_id]):
+            raise ValueError("public speech action subject differs from speaker")
     tokens: list[StructuredTokenDescriptor] = []
 
     def append(
@@ -121,7 +141,7 @@ def plan_structured_history(
             )
         )
 
-    for event in prefix.public_event_history.events:
+    for event in history.events:
         day = event.temporal_state.day
         phase = event.temporal_state.phase.value
         source = (
@@ -138,23 +158,12 @@ def plan_structured_history(
             source=source,
         )
         if event.event_type == "public_speech":
-            annotation = annotations_by_event[event.event_id]
-            if annotation.status is V1AnnotationStatus.OK:
-                for semantic_index, speech_action in enumerate(
-                    annotation.actions,
-                    start=1,
-                ):
-                    append(
-                        "speech_action",
-                        event.event_id,
-                        event.event_index,
-                        day,
-                        phase,
-                        semantic_index=semantic_index,
-                        source=speech_action.subject,
-                        action=speech_action.action,
-                        target=speech_action.object,
-                    )
+            for semantic_index, speech_action in enumerate(actions_by_event[event.event_id], start=1):
+                append(
+                    "speech_action", event.event_id, event.event_index, day, phase,
+                    semantic_index=semantic_index, source=speech_action.subject,
+                    action=speech_action.action, target=speech_action.object,
+                )
         elif event.event_type == "vote_result":
             for semantic_index, vote in enumerate(event.votes, start=1):
                 append(
@@ -199,7 +208,7 @@ def plan_structured_history(
     frozen_tokens = tuple(tokens)
     provisional = StructuredTokenPlan(
         planner_version=STRUCTURED_TOKEN_PLANNER_VERSION,
-        prefix_digest=prefix.prefix_digest,
+        prefix_digest=boundary_digest,
         tokens=frozen_tokens,
         token_count=len(frozen_tokens),
         plan_digest="",
@@ -216,4 +225,5 @@ __all__ = [
     "StructuredTokenDescriptor",
     "StructuredTokenPlan",
     "plan_structured_history",
+    "plan_public_history",
 ]

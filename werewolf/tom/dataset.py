@@ -75,6 +75,11 @@ def belief_target(observer: int, support: tuple[str, ...], status: str | None):
 def tensorize_public_pre(prefix, capacity: ExperimentCapacity):
     """Full validated PRE to public tensors, without observation/target access."""
     plan = plan_structured_history(prefix)
+    return plan, tensorize_structured_plan(plan, capacity)
+
+
+def tensorize_structured_plan(plan, capacity: ExperimentCapacity):
+    """同一字段编码服务于发言PRE与外部投票前样本，不读取监督标签。"""
     if plan.token_count > capacity.max_seq_len:
         raise ValueError("complete PRE prefix exceeds experiment capacity")
     arrays = {name: torch.zeros(capacity.max_seq_len, dtype=torch.long) for name in (
@@ -87,7 +92,7 @@ def tensorize_public_pre(prefix, capacity: ExperimentCapacity):
         arrays["day_ids"][i] = token.day
         arrays["phase_ids"][i] = PUBLIC_PHASES.index(token.phase)
     attention = torch.arange(capacity.max_seq_len) < plan.token_count
-    return plan, PublicTensors(**arrays, attention_mask=attention)
+    return PublicTensors(**arrays, attention_mask=attention)
 
 
 class CanonicalToMDataset:
