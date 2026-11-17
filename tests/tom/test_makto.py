@@ -75,6 +75,155 @@ def _role_request(events, observer):
     return view, makto.build_role_belief_request(view)
 
 
+def _retrospective_request(events, observer):
+    path = makto.source_paths()[0]
+    payload = canonical_json_bytes(events)
+    public, boundaries, labels = makto.extract_game(path, payload, _annotations({path: payload}), speech_pre=True)
+    assert not labels
+    view = makto.role_belief_view(payload, boundaries[0], observer)
+    return view, makto.build_role_belief_request(view, public_game=public), public
+
+
+def _retrospective_histories(request):
+    text = request["messages"][1]["content"]
+    before = text.split("Canonical pre-speech public_events:\n", 1)[1].split("\n\nEnvironment-derived", 1)[0]
+    after = text.split("<post_pre_public_events>\n", 1)[1].split("\n</post_pre_public_events>", 1)[0]
+    return json.loads(before), json.loads(after)
+
+
+def test_retrospective_separates_current_and_future_public_evidence_and_reuses_set_contract():
+    events, _, _ = _role_fixture()
+    view, request, game = _retrospective_request(events, 5)
+    before, after = _retrospective_histories(request)
+    assert before[-1]["event_type"] == "turn_start"
+    assert not any(e["event_type"] == "public_speech" for e in before)
+    assert after[0]["raw_text"] == "我是预言家，1号查杀。"
+    assert after[0]["speech_actions"] == [["player3", "point_as_seer", "player3"],
+                                          ["player3", "check_as_werewolf", "player1"]]
+    assert any(e["event_type"] == "vote_result" for e in after)
+    assert len(before) + len(after) == len(game["public_events"])
+    assert "事后信念标注者" in request["messages"][0]["content"]
+    assert "不是专家真实心理标签" in request["messages"][0]["content"]
+    assert "之后" in request["messages"][0]["content"] and "倒灌" in request["messages"][0]["content"]
+    instant = makto.build_role_belief_request(view)
+    assert request["response_format"] == instant["response_format"]
+    assert request["temperature"] == 0 and request["max_tokens"] == 96
+    assert makto.parse_role_belief_response('{"suspected_werewolves":[]}', view)["observed"]
+    assert not makto.parse_role_belief_response('{"suspected_werewolves":["player1","player1"]}', view)["observed"]
+    assert not makto.parse_role_belief_response("invalid JSON", view)["observed"]
+
+
+@pytest.mark.parametrize("observer", [3, 4, 5])
+def test_retrospective_never_reads_other_roles_private_facts_truth_or_expert_labels(observer):
+    events, _, _ = _role_fixture()
+    view, original, _ = _retrospective_request(events, observer)
+    altered = deepcopy(events)
+    if observer != 3:
+        altered[9]["content"].update(player=6, is_werewolf=False)
+    if observer != 4:
+        altered[10]["content"]["target_player"] = 6
+        altered[11]["content"]["player"] = 6
+        altered[12]["content"]["player"] = 1
+    # 保持观察者本人角色与游戏阵容不变，交换其他玩家的真实身份。
+    altered[0]["content"]["role"], altered[6]["content"]["role"] = (
+        altered[6]["content"]["role"], altered[0]["content"]["role"])
+    for event in altered:
+        if event["event"] in {"voted", "speech_summary", "game_end"}:
+            event["content"] = {"role_prediction": "私密标签哨兵", "winner": "终局哨兵"}
+    changed_view, changed, _ = _retrospective_request(altered, observer)
+    assert changed_view == view and changed == original
+    body = json.dumps(original["messages"], ensure_ascii=False)
+    assert all(field not in body for field in (
+        "role_prediction", "identity_label", "source_index", "omitted_private_information", "event_index", "winner"))
+    assert "不能进入" not in body
+
+
+@pytest.mark.parametrize("observer", [3, 4, 5])
+def test_retrospective_future_private_facts_stay_out_but_public_changes_are_visible(observer):
+    events, _, _ = _role_fixture()
+    events = events[:-1] + [
+        {"event": "cycle_round", "content": {"round": 2, "status": "night"}},
+        {"event": "inquired", "content": {"night": 2, "player": 2, "is_werewolf": True}},
+        {"event": "werewolf_kill", "content": {"night": 2, "target_player": 7}},
+        {"event": "healed", "content": {"night": 2, "player": None}},
+        {"event": "poison", "content": {"night": 2, "player": 1}},
+        {"event": "cycle_round", "content": {"round": 2, "status": "day", "context": "今天是平安夜"}},
+        {"event": "speech", "content": {"day": "2-1", "player": 3, "context": "这是后来公开的发言。"}},
+    ]
+    view, request, _ = _retrospective_request(events, observer)
+    altered = deepcopy(events)
+    for event in altered:
+        c = event.get("content")
+        if isinstance(c, dict) and c.get("night") == 2:
+            if "player" in c:
+                c["player"] = 6
+            if "target_player" in c:
+                c["target_player"] = 5
+            if "is_werewolf" in c:
+                c["is_werewolf"] = False
+    other_view, other_request, _ = _retrospective_request(altered, observer)
+    assert other_view == view and other_request == request
+    altered[-1]["content"]["context"] = "只有未来公开记录应发生变化。"
+    other_view, other_request, _ = _retrospective_request(altered, observer)
+    assert other_view == view
+    before, after = _retrospective_histories(request)
+    changed_before, changed_after = _retrospective_histories(other_request)
+    assert before == changed_before and after != changed_after
+    assert "只有未来公开记录应发生变化。" in json.dumps(changed_after, ensure_ascii=False)
+    assert makto.build_role_belief_request(other_view) == makto.build_role_belief_request(view)
+
+
+def test_retrospective_role_switch_uses_new_messages_and_original_private_cutoff():
+    events, _, _ = _role_fixture()
+    outputs = [_retrospective_request(events, p) for p in (3, 4, 5)]
+    private = [json.loads(request["messages"][1]["content"].split(
+        "目标 PRE 前观察者本人合法可见的状态：\n", 1)[1].split("\n\n", 1)[0]) for _, request, _ in outputs]
+    assert [fact["event"] for fact in private[0]["private_facts"]] == ["inquired"]
+    assert [fact["event"] for fact in private[1]["private_facts"]] == [
+        "healed", "poison", "privately_observed_attack_target"]
+    assert private[2]["private_facts"] == []
+    assert private[1]["witch_medicines"] == {"healed": "used", "poison": "available"}
+    assert all(all(m["role"] in {"system", "user"} for m in request["messages"]) for _, request, _ in outputs)
+    outputs[0][1]["messages"][1]["content"] = "其他观察者污染"
+    assert _retrospective_request(events, 4)[1] == outputs[1][1]
+
+
+def test_retrospective_rejects_mismatched_public_game_or_pre():
+    events, _, _ = _role_fixture()
+    view, _, public = _retrospective_request(events, 5)
+    with pytest.raises(ValueError, match="match target PRE"):
+        makto.build_role_belief_request(view, public_game={**public, "game_id": "other_game"})
+    changed = deepcopy(public)
+    changed["public_events"][0]["phase"] = "wrong"
+    with pytest.raises(ValueError, match="match target PRE"):
+        makto.build_role_belief_request(view, public_game=changed)
+
+
+def test_fixed_training_twelve_keep_identity_private_view_and_immediate_prompt_digest():
+    data = Path(__file__).resolve().parents[2] / "data/tom_sft/makto"
+    if not (data / "manifest.json").is_file():
+        pytest.skip("本地 MaKTO 工作产物未提供")
+    digest = makto.open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief",
+                                          expected_schema_version=makto.VERSION).manifest_digest
+    instant = makto.role_trial_inputs(data, digest)
+    retrospective = makto.role_trial_inputs(data, digest, retrospective=True)
+    assert len(instant) == len(retrospective) == 12
+    assert sha256_bytes(canonical_json_bytes([i["request"] for i in instant])) == makto.ROLE_BELIEF_TRIAL_DIGEST
+    expected_counts = [(0, 7)] * 3 + [(6, 1)] * 3 + [(7, 5)] * 2 + [(9, 3), (7, 4), (7, 4), (8, 3)]
+    for (game, index, observer), left, right, counts in zip(
+            makto.ROLE_BELIEF_TRIAL_REQUESTS, instant, retrospective, expected_counts):
+        assert left["view"] == right["view"]
+        request = right["request"]
+        assert request["game_id"] == f"makto/train/seer_witch/game_{game}"
+        assert request["boundary_id"].endswith(f"/speech-pre-{index}") and request["observer_id"] == observer
+        assert request["prompt_version"] == makto.RETROSPECTIVE_BELIEF_PROMPT
+        assert request["response_format"] == left["request"]["response_format"]
+        before, after = _retrospective_histories(request)
+        assert tuple(sum(e["event_type"] == "public_speech" for e in part) for part in (before, after)) == counts
+        assert after[0]["event_type"] == "public_speech"
+        assert all("speech_actions" in e for e in before + after if e["event_type"] == "public_speech")
+
+
 def test_role_views_are_independent_of_other_private_information_and_global_truth():
     events, _, _ = _role_fixture()
     seer, seer_request = _role_request(events, 3)
@@ -299,24 +448,27 @@ def test_trial_reply_checks_envelope_and_never_labels_failed_generations(change)
     assert result["hard_knowledge_compliant"] is (False if change == "hard_knowledge" else None)
 
 
-@pytest.fixture
-def trial_wiring(tmp_path, monkeypatch):
+@pytest.fixture(params=(False, True), ids=("immediate", "retrospective"))
+def trial_wiring(tmp_path, monkeypatch, request):
     """只替换物理资源；执行真实的请求、日志、解析和一次性保护代码。"""
     from werewolf.tom_llm import deployment, experiment, live_runner, physical, service_manager
+    retrospective = request.param
     events, _, _ = _role_fixture()
+    _, _, public_game = _retrospective_request(events, 5)
     inputs = []
     for i in range(12):
         view, _ = _role_request(events, (5, 3, 4)[i % 3])
         view["boundary_id"] += f"-fixture-{i // 3}"
-        inputs.append({"view": view, "request": makto.build_role_belief_request(view)})
+        inputs.append({"view": view, "request": makto.build_role_belief_request(
+            view, public_game=public_game if retrospective else None)})
     resources = {"model_directory": str(tmp_path / "model"), "tokenizer_assets": str(tmp_path / "tokenizer"),
-                 "environment_prefix": str(tmp_path / "environment")}
+                 "environment_prefix": str(tmp_path / "environment"), "retrospective": retrospective}
     runtime = {"environment_prefix": resources["environment_prefix"], "gpu_uuid": "GPU-MOCK",
                "argv_options": {"port": 18581, "structured-outputs-config": {"backend": "xgrammar"}}}
     calls = []
     class Manager:
         def __init__(self, *, root, spec, runtime, model_evidence, owner):
-            assert root == output.parent and spec.key == "qwen3"
+            assert root == (output.with_suffix("") if retrospective else output.parent) and spec.key == "qwen3"
             assert model_evidence == {"directory": resources["model_directory"], "verification": "MOCK"}
             assert set(owner) == {"request_digest"}
         def status(self):
@@ -351,7 +503,7 @@ def trial_wiring(tmp_path, monkeypatch):
             return _teacher_reply(content)
     monkeypatch.setattr(experiment, "open_run", lambda *a, **kw: pytest.fail("MaKTO must not open a TomBaseline Run"))
     def profile(spec, **kwargs):
-        assert spec.key == "qwen3" and kwargs["root"] == output.parent
+        assert spec.key == "qwen3" and kwargs["root"] == (output.with_suffix("") if retrospective else output.parent)
         if kwargs["gpu_uuid"] != "GPU-MOCK":
             raise ValueError("explicit GPU UUID required")
         return runtime
@@ -359,11 +511,14 @@ def trial_wiring(tmp_path, monkeypatch):
     monkeypatch.setattr(physical, "verify_model", lambda spec, path: {"directory": path, "verification": "MOCK"})
     monkeypatch.setattr(service_manager, "Service", Manager)
     monkeypatch.setattr(live_runner, "HttpTransport", Transport)
-    monkeypatch.setattr(makto, "role_trial_inputs", lambda *a: deepcopy(inputs))
+    def trial_inputs(*args, **kwargs):
+        assert kwargs == {"retrospective": retrospective}
+        return deepcopy(inputs)
+    monkeypatch.setattr(makto, "role_trial_inputs", trial_inputs)
     monkeypatch.setattr(makto, "check_role_trial_inputs", lambda *a: {
         "versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * 12})
     monkeypatch.setattr(makto.sys, "platform", "linux")
-    output = tmp_path / "trial.jsonl"
+    output = tmp_path / ("makto_retrospective_trial.jsonl" if retrospective else "trial.jsonl")
     return output, resources, inputs, calls, Transport
 
 
@@ -377,6 +532,8 @@ def test_trial_prepare_then_twelve_independent_calls_save_raw_and_invalid_result
     assert result["hard_knowledge_compliant"] == 11
     assert calls == ["start", *(["send"] * 12), "stop"]
     records = [json.loads(line) for line in output.read_bytes().splitlines()]
+    assert records[0]["labeling_method"] == inputs[0]["request"]["prompt_version"]
+    assert records[0]["request_sequence_digest"] == sha256_bytes(canonical_json_bytes([i["request"] for i in inputs]))
     assert sum(r["event"] == "received" and "raw_response" in r for r in records) == 12
     assert sum(r["event"] == "result" for r in records) == 12
     assert result["results"][2]["q"] == [0] * 7
@@ -407,6 +564,33 @@ def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring
     assert calls.count("send") == 2
 
 
+@pytest.mark.parametrize("trial_wiring", [True], indirect=True)
+def test_retrospective_never_overwrites_existing_immediate_results_or_service_records(trial_wiring):
+    output, resources, _, calls, _ = trial_wiring
+    original = output.parent / "makto_role_trial.jsonl"
+    control = output.parent / "runtime/service-control/current.json"
+    control.parent.mkdir(parents=True)
+    original.write_bytes(b"existing immediate scientific results\n")
+    control.write_bytes(b"existing immediate service owner\n")
+    before = original.read_bytes(), control.read_bytes()
+    makto.role_trial("mock_data", output, "mock_digest", **resources)
+    makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
+    assert (original.read_bytes(), control.read_bytes()) == before
+    assert calls.count("send") == 12
+
+
+def test_trial_different_labeling_method_cannot_reuse_preparation(trial_wiring):
+    output, resources, _, calls, _ = trial_wiring
+    makto.role_trial("mock_data", output, "mock_digest", **resources)
+    record = json.loads(output.read_bytes())
+    record["labeling_method"] = "different_belief_method"
+    output.write_bytes(canonical_json_bytes(record) + b"\n")
+    before = output.read_bytes()
+    with pytest.raises(ValueError, match="binding changed"):
+        makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
+    assert output.read_bytes() == before and calls == []
+
+
 def test_missing_real_tokenizer_or_schema_assets_cannot_publish_prepared_trial(trial_wiring, monkeypatch):
     output, resources, _, calls, _ = trial_wiring
     def missing(*args):
@@ -435,7 +619,8 @@ def test_trial_resource_binding_changes_cannot_reuse_preparation(trial_wiring):
     assert not calls
 
 
-def test_trial_cli_uses_registered_teacher_paths_without_service_run(monkeypatch, tmp_path):
+@pytest.mark.parametrize("retrospective", [False, True])
+def test_trial_cli_uses_registered_teacher_paths_without_service_run(monkeypatch, tmp_path, retrospective):
     calls = []
     def trial(*args, **kwargs):
         calls.append((args, kwargs))
@@ -443,13 +628,18 @@ def test_trial_cli_uses_registered_teacher_paths_without_service_run(monkeypatch
     monkeypatch.setattr(makto, "role_trial", trial)
     args = ["--role-trial", "--data", str(tmp_path / "data"), "--output", str(tmp_path / "trial.jsonl"),
             "--expected-data-digest", "mock-digest"]
+    if retrospective:
+        args.append("--retrospective")
     makto.main(args)
     assert calls[0][0] == (tmp_path / "data", tmp_path / "trial.jsonl", "mock-digest")
     assert calls[0][1] == {"model_directory": makto.TEACHER_MODEL_DIRECTORY,
         "tokenizer_assets": makto.TEACHER_TOKENIZER_ASSETS, "environment_prefix": makto.TEACHER_ENVIRONMENT_PREFIX,
-        "gpu_uuid": None, "execute_live": False}
+        "gpu_uuid": None, "execute_live": False, "retrospective": retrospective}
     with pytest.raises(SystemExit):
         makto.main([*args, "--service-run", str(tmp_path / "obsolete-run")])
+    assert len(calls) == 1
+    with pytest.raises(SystemExit):
+        makto.main([a for a in args if a != "--role-trial"] + ["--retrospective"])
     assert len(calls) == 1
 
 

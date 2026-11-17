@@ -49,6 +49,7 @@ CONFLICTS = {
 }
 ROLES = {"werewolf", "simple_villager", "seer", "witch"}
 ROLE_BELIEF_PROMPT = "makto_pre_speech_role_belief"
+RETROSPECTIVE_BELIEF_PROMPT = "makto_pre_speech_retrospective_belief"
 # 真实调用前固定的小规模质量试验，均来自既有内部 Training；不用于性能评价。
 ROLE_BELIEF_TRIAL_REQUESTS = (
     (22, 15, "player3"), (22, 15, "player2"), (22, 15, "player4"),
@@ -346,20 +347,34 @@ def role_belief_view(payload, boundary, observer_id):
             "known_werewolves": wolves, "known_non_werewolves": non_wolves}
 
 
-def build_role_belief_request(view):
-    """每个三元组重新构造消息；无 Agent、会话、私人记忆或模型调用。"""
+def build_role_belief_request(view, *, public_game=None):
+    """逐三元组构造消息；回溯只额外接收已投影的公开游戏，不接收原始全局记录。"""
     observer = view["observer_id"]
     private = {k: deepcopy(view[k]) for k in (
         "observer_id", "self_role", "day", "phase", "current_public_actor", "alive_players", "witch_medicines")}
     # 模型只看到玩家事实；位置、缺失原因等审计字段继续留在内部 view。
     private["private_facts"] = [{k: deepcopy(fact[k]) for k in (
         "event", "night", "target", "is_werewolf") if k in fact} for fact in view["private_facts"]]
-    public = [{k: deepcopy(event[k]) for k in (
-        "event_type", "day", "phase", "speaker", "raw_text", "dead_players", "votes", "exiled_players")
-        if k in event} for event in view["public_events"]]
-    for event in public:
-        if "votes" in event:
-            event["votes"] = [{k: vote[k] for k in ("voter", "target")} for vote in event["votes"]]
+
+    def public_records(events):
+        records = []
+        for event in events:
+            record = {k: deepcopy(event[k]) for k in (
+                "event_type", "day", "phase", "speaker", "raw_text", "dead_players", "votes", "exiled_players")
+                if k in event}
+            if "votes" in record:
+                record["votes"] = [{k: vote[k] for k in ("voter", "target")} for vote in record["votes"]]
+            if public_game is not None and event["event_type"] == "public_speech":
+                record["speech_actions"] = deepcopy(public_game["speech_actions"][event["event_id"]])
+            records.append(record)
+        return records
+
+    if public_game is not None:
+        cutoff = len(view["public_events"])
+        if (public_game["game_id"] != view["game_id"]
+                or public_game["public_events"][:cutoff] != view["public_events"]):
+            raise ValueError("retrospective public timeline does not match target PRE")
+    public = public_records(view["public_events"])
     prompt = PlayingAgentBeliefReporter.render_prompt(
         observer_id=observer, public_events=public,
         public_history_digest=view["public_history_digest"],
@@ -378,8 +393,37 @@ def build_role_belief_request(view):
         "不推测缺失技能或刀口，女巫救过的玩家不因此成为确定好人。")},
         {"role": "user", "content": "你本人合法可见的状态：\n" + json.dumps(private, ensure_ascii=False, sort_keys=True)
          + "\n\n" + prompt}]
+    if public_game is not None:
+        messages = [{"role": "system", "content": (
+            "你是事后信念标注者，不是当前游戏玩家，也不是全知身份裁判。"
+            "请借助整局公开记录，重建指定观察者在指定发言 PRE 时刻的主观狼人怀疑集合。"
+            "阵容为两狼、三村民、一预言家、一女巫。目标是该玩家当时的内部怀疑，不是真实狼人身份或公开发言策略。"
+            "必须区分目标 PRE 前已知证据与之后才公开的回溯证据。后者只可辅助解释其当时的表述和判断，"
+            "不能把后来暴露的身份、行为或结局倒灌为该玩家当时已知的事实，不能用后来的立场直接替代当时的怀疑。"
+            "公开发言和 V1 动作仅表示公开表述，角色声明可能是谎言，原话与动作有冲突时以原话为准。"
+            "V1 动作不是专家真实心理标签。公开发言中的‘我’属于该发言者。"
+            "只有目标 PRE 前属于观察者本人的私人事实可作硬知识；缺失或时点不确定的信息保持未知，"
+            "null 仅表示明确没有目标，女巫救过的玩家不因此成为确定好人。"
+            "不推测其他玩家的私人信息，不利用真实全局角色、最终胜负或赛后身份总结。"
+            "每条请求独立，不继承前一观察者的对话或私人状态。")},
+            {"role": "user", "content": (
+                f"标注目标：{view['boundary_id']}；观察者 {observer}。"
+                f"目标位于 {view['current_public_actor']} 本次发言之前；该发言属于 PRE 之后。\n"
+                "目标 PRE 前观察者本人合法可见的状态：\n"
+                + json.dumps(private, ensure_ascii=False, sort_keys=True)
+                + "\n\n以下引用目标玩家的即时报告合同，其中‘你/当前’均指该玩家在目标 PRE。"
+                "合同内 Canonical pre-speech public_events 是 PRE 前公开记录；"
+                "speech_actions 为对应公开原话的既有 V1 结构化注释，顺序为 [Source, Action, Target]，不是私人判断。\n"
+                "<target_player_report_contract>\n" + prompt + "</target_player_report_contract>\n\n"
+                "以下仅供事后标注者回溯：目标 PRE 之后的公开记录，从目标发言开始，按原顺序排列。"
+                "它们不属于观察者在目标 PRE 的已知信息；不要将这些发言的立场或后来揭示的事实直接回填到 PRE。\n"
+                "<post_pre_public_events>\n"
+                + json.dumps(public_records(public_game["public_events"][cutoff:]), ensure_ascii=False, separators=(",", ":"))
+                + "\n</post_pre_public_events>\n\n"
+                "仅输出目标 PRE 的 suspected_werewolves JSON，遵守合同的集合和硬知识约束。"
+                "没有足够依据时允许空集合（除非已有 MUST INCLUDE）；不强行找满两名狼人，不输出理由或额外字段。") }]
     return {"game_id": view["game_id"], "boundary_id": view["boundary_id"], "observer_id": observer,
-            "prompt_version": ROLE_BELIEF_PROMPT,
+            "prompt_version": RETROSPECTIVE_BELIEF_PROMPT if public_game is not None else ROLE_BELIEF_PROMPT,
             "messages": messages, "temperature": 0.0, "max_tokens": PRIVATE_BELIEF_MAX_TOKENS,
             "response_format": private_belief_response_format(supports_json_schema=True,
                 legal_candidates=legal, required_candidates=view["known_werewolves"])}
@@ -401,7 +445,7 @@ def parse_role_belief_response(raw_response, view):
             "q": q.tolist(), "observed": observed, "error": error}
 
 
-def role_trial_inputs(data, expected_digest):
+def role_trial_inputs(data, expected_digest, *, retrospective=False):
     """只读取固定三个 Training 游戏；原投票标签、Test 与 Baseline 均不打开。"""
     envelope = open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief", expected_schema_version=VERSION)
     if envelope.manifest_digest != expected_digest or envelope.manifest["revision"] != REVISION:
@@ -410,16 +454,20 @@ def role_trial_inputs(data, expected_digest):
     for line in read_artifact_file(envelope, "annotations.jsonl").splitlines():
         row = json.loads(line)
         annotations[row.pop("key")] = row
-    games, inputs = {}, []
+    games, inputs, instant_requests = {}, [], []
     for game, index, observer in ROLE_BELIEF_TRIAL_REQUESTS:
         if game not in games:
             path = f"raw/train/7_player_game/seer_witch/game_{game}/event_zh.json"
             payload = read_artifact_file(envelope, path)
-            games[game] = payload, {b["source_index"]: b for b in speech_pre_snapshots(path, payload, annotations)}
-        payload, boundaries = games[game]
+            public_game, boundaries, _ = extract_game(path, payload, annotations, speech_pre=True)
+            games[game] = payload, public_game, {b["source_index"]: b for b in boundaries}
+        payload, public_game, boundaries = games[game]
         view = role_belief_view(payload, boundaries[index], observer)
-        inputs.append({"view": view, "request": build_role_belief_request(view)})
-    if sha256_bytes(canonical_json_bytes([i["request"] for i in inputs])) != ROLE_BELIEF_TRIAL_DIGEST:
+        request = build_role_belief_request(view)
+        instant_requests.append(request)
+        inputs.append({"view": view, "request": build_role_belief_request(view, public_game=public_game)
+                       if retrospective else request})
+    if sha256_bytes(canonical_json_bytes(instant_requests)) != ROLE_BELIEF_TRIAL_DIGEST:
         raise ValueError("approved twelve requests changed")
     return inputs
 
@@ -534,7 +582,7 @@ def role_trial_summary(inputs, results):
 
 def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_DIRECTORY,
                tokenizer_assets=TEACHER_TOKENIZER_ASSETS, environment_prefix=TEACHER_ENVIRONMENT_PREFIX,
-               gpu_uuid=None, execute_live=False):
+               gpu_uuid=None, execute_live=False, retrospective=False):
     """固定12条的一次性入口；共用既有服务和 HTTP，不创建 Baseline Run 或 Seal。"""
     import fcntl
     from werewolf.tom_llm.common import strict_json
@@ -552,7 +600,7 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
     resources = {"model_directory": str(safe_path(model_directory)),
                  "tokenizer_assets": str(safe_path(tokenizer_assets)),
                  "environment_prefix": str(safe_path(environment_prefix))}
-    inputs = role_trial_inputs(data, expected_digest)
+    inputs = role_trial_inputs(data, expected_digest, retrospective=retrospective)
     output = safe_path(output)
     if any((parent / "manifest.json").exists() for parent in output.parents):
         raise ValueError("trial output cannot be inside an existing artifact")
@@ -561,9 +609,12 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
                   "werewolf/tom/makto.py", "werewolf/speech/private_belief_perceiver.py",
                   "werewolf/tom_llm/live_runner.py", "werewolf/tom_llm/model_spec.py",
                   "werewolf/tom_llm/service_manager.py", "werewolf/tom_llm/deployment.py")}}
+    # 回溯用途拥有独立控制记录，不能接管即时试验已登记的服务身份；仍使用同一个 Service。
+    work_directory = output.with_suffix("") if retrospective else output.parent
     binding = {"dataset_digest": expected_digest, "teacher_resources": resources, "source": source,
                "model": spec.record()["model"], "revision": spec.record()["revision"],
-               "model_spec_digest": spec.digest, "request_sequence_digest": ROLE_BELIEF_TRIAL_DIGEST}
+               "model_spec_digest": spec.digest, "labeling_method": inputs[0]["request"]["prompt_version"],
+               "request_sequence_digest": sha256_bytes(canonical_json_bytes([i["request"] for i in inputs]))}
 
     def append(stream, record):
         stream.write(canonical_jsonl_bytes([record])); stream.flush(); os.fsync(stream.fileno())
@@ -571,16 +622,18 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
     if not execute_live:
         evidence = verify_model(spec, resources["model_directory"])
         checks = check_role_trial_inputs(inputs, spec, resources["tokenizer_assets"],
-                                        resources["environment_prefix"], output.parent)
+                                        resources["environment_prefix"], work_directory)
         with output.open("xb") as stream:
             append(stream, {"event": "prepared", **binding, "model_evidence": evidence,
                             "checks": checks, "inputs": inputs})
             from werewolf.artifact_io.canonical import _fsync_directory
             _fsync_directory(output.parent)
-        return {"status": "PREPARED_NOT_EXECUTED", "output": str(output), **checks}
+        return {"status": "PREPARED_NOT_EXECUTED", "output": str(output),
+                "labeling_method": binding["labeling_method"],
+                "request_sequence_digest": binding["request_sequence_digest"], **checks}
     if sys.platform != "linux":
         raise ValueError("real trial requires explicit --execute-live on Ubuntu")
-    runtime = profile(spec, root=output.parent, model_directory=resources["model_directory"],
+    runtime = profile(spec, root=work_directory, model_directory=resources["model_directory"],
                       environment_prefix=resources["environment_prefix"], gpu_uuid=gpu_uuid, cache_base=EXPERIMENT_BASE)
     results = {}
     with output.open("r+b") as stream:
@@ -593,7 +646,7 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
             raise ValueError("trial preparation/source/request binding changed")
         stream.seek(0, 2)
         owner = {"request_digest": sha256_bytes(canonical_json_bytes({"prepared": prepared, "runtime": runtime}))}
-        manager = Service(root=output.parent, spec=spec, runtime=runtime,
+        manager = Service(root=work_directory, spec=spec, runtime=runtime,
                           model_evidence=prepared["model_evidence"], owner=owner)
         already_running = manager.status()["state"] == "running"
         manager.start(execute=True)
@@ -948,6 +1001,7 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--role-trial", action="store_true")
+    parser.add_argument("--retrospective", action="store_true", help="在同一12条试验入口使用完整公开对局回溯标注")
     parser.add_argument("--model-directory", type=Path)
     parser.add_argument("--tokenizer-assets", type=Path)
     parser.add_argument("--environment-prefix", type=Path)
@@ -967,13 +1021,14 @@ def main(argv=None):
                             model_directory=args.model_directory or TEACHER_MODEL_DIRECTORY,
                             tokenizer_assets=args.tokenizer_assets or TEACHER_TOKENIZER_ASSETS,
                             environment_prefix=args.environment_prefix or TEACHER_ENVIRONMENT_PREFIX,
-                            gpu_uuid=args.gpu_uuid, execute_live=args.execute_live)
+                            gpu_uuid=args.gpu_uuid, execute_live=args.execute_live, retrospective=args.retrospective)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("failed", 0) or result.get("not_attempted", 0):
             raise SystemExit(2)
         return
-    if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid, args.execute_live)):
-        parser.error("teacher resource arguments/--execute-live require --role-trial")
+    if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid,
+            args.execute_live, args.retrospective)):
+        parser.error("teacher resource arguments/--execute-live/--retrospective require --role-trial")
     if args.baseline:
         if args.annotations is not None or args.data is None or args.split_record is None:
             parser.error("baseline requires --data/--split-record and forbids --annotations")
