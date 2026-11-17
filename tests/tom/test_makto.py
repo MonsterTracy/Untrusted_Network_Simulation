@@ -224,6 +224,92 @@ def test_fixed_training_twelve_keep_identity_private_view_and_immediate_prompt_d
         assert all("speech_actions" in e for e in before + after if e["event_type"] == "public_speech")
 
 
+def test_full_train_uses_706_legal_views_without_reading_test_or_proxy_answers(monkeypatch):
+    data = Path(__file__).resolve().parents[2] / "data/tom_sft/makto"
+    if not (data / "manifest.json").is_file():
+        pytest.skip("本地 MaKTO 工作产物未提供")
+    digest = makto.open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief",
+                                         expected_schema_version=makto.VERSION).manifest_digest
+    original_read = makto.read_artifact_file
+    reads = []
+    def read(envelope, path):
+        assert path == "annotations.jsonl" or path.startswith("raw/train/")
+        reads.append(path)
+        return original_read(envelope, path)
+    monkeypatch.setattr(makto, "read_artifact_file", read)
+    monkeypatch.setattr(makto, "convert_label", lambda *a, **kw: pytest.fail("must not read vote Gold"))
+    inputs = makto.role_trial_inputs(data, digest, split="train")
+    assert len(inputs) == 706 and len(set(reads) - {"annotations.jsonl"}) == 20
+    keys = [tuple(i["view"][k] for k in ("game_id", "boundary_id", "observer_id")) for i in inputs]
+    assert len(set(keys)) == 706 and len({k[:2] for k in keys}) == 145
+    assert all(k[0].startswith("makto/train/") for k in keys)
+    assert {role: sum(i["view"]["self_role"] == role for i in inputs)
+            for role in ("simple_villager", "seer", "witch")} == {"simple_villager": 425, "seer": 141, "witch": 140}
+    for item in inputs:
+        view, request = item["view"], item["request"]
+        assert view["observer_id"] in view["alive_players"]
+        assert view["public_events"][-1]["event_type"] == "turn_start"
+        assert request["prompt_version"] == makto.ROLE_BELIEF_PROMPT
+        assert len(request["messages"]) == 2 and "q" not in view
+    trials = makto.role_trial_inputs(data, digest)
+    by_key = dict(zip(keys, inputs))
+    for trial in trials:
+        key = tuple(trial["view"][k] for k in ("game_id", "boundary_id", "observer_id"))
+        assert by_key[key] == trial
+
+
+def test_full_test_selection_uses_only_synthetic_test_sources_and_excludes_incomplete_pres(monkeypatch):
+    # 不打开官方 Test；用合成公开记录验证分区选择与37个缺失公告 PRE 的排除机制。
+    sources = {}
+    for game in makto.SPLITS["test"]:
+        events = _events()[:10]
+        missing = game in (6, 7, 8)
+        if missing:
+            del events[9]["content"]["context"]
+        count = {6: 13, 7: 10, 8: 14}.get(game, 7)
+        events += [{"event": "speech", "content": {"player": 3, "day": "1-1", "context": "合成公开发言"}}
+                   for _ in range(count)]
+        sources[f"raw/test/7_player_game/seer_witch/game_{game}/event_zh.json"] = canonical_json_bytes(events)
+    annotations = _annotations(sources)
+    sources["annotations.jsonl"] = b"\n".join(
+        canonical_json_bytes({"key": k, **v}) for k, v in annotations.items())
+    monkeypatch.setattr(makto, "open_artifact_envelope", lambda *a, **kw: SimpleNamespace(
+        manifest_digest="synthetic", manifest={"revision": makto.REVISION}))
+    reads = []
+    def read(envelope, path):
+        assert path in sources
+        reads.append(path)
+        return sources[path]
+    monkeypatch.setattr(makto, "read_artifact_file", read)
+    inputs = makto.role_trial_inputs("synthetic", "synthetic", split="test")
+    assert len(inputs) == 175 and len(reads) == 9
+    assert {i["view"]["game_id"].rsplit("/", 1)[-1] for i in inputs} == {f"game_{g}" for g in range(9, 14)}
+    assert all(i["view"]["game_id"].startswith("makto/test/") for i in inputs)
+
+
+def test_full_split_rejects_incomplete_population(monkeypatch):
+    data = Path(__file__).resolve().parents[2] / "data/tom_sft/makto"
+    if not (data / "manifest.json").is_file():
+        pytest.skip("本地 MaKTO 工作产物未提供")
+    digest = makto.open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief",
+                                         expected_schema_version=makto.VERSION).manifest_digest
+    original = makto.extract_game
+    def extract(path, *args, **kwargs):
+        game, boundaries, labels = original(path, *args, **kwargs)
+        if "/game_21/" in path:
+            boundaries = boundaries[1:]
+        return game, boundaries, labels
+    monkeypatch.setattr(makto, "extract_game", extract)
+    with pytest.raises(ValueError, match="train role population mismatch"):
+        makto.role_trial_inputs(data, digest, split="train")
+
+
+@pytest.mark.parametrize("kwargs", [{"split": "other"}, {"split": "train", "retrospective": True}])
+def test_full_split_rejects_invalid_scope_before_opening_data(kwargs):
+    with pytest.raises(ValueError, match="role split|original immediate"):
+        makto.role_trial_inputs("must-not-open", "unused", **kwargs)
+
+
 def test_role_views_are_independent_of_other_private_information_and_global_truth():
     events, _, _ = _role_fixture()
     seer, seer_request = _role_request(events, 3)
@@ -452,7 +538,8 @@ def test_trial_reply_checks_envelope_and_never_labels_failed_generations(change)
 def trial_wiring(tmp_path, monkeypatch, request):
     """只替换物理资源；执行真实的请求、日志、解析和一次性保护代码。"""
     from werewolf.tom_llm import deployment, experiment, live_runner, physical, service_manager
-    retrospective = request.param
+    split = "train" if request.param == "train" else None
+    retrospective = request.param is True
     events, _, _ = _role_fixture()
     _, _, public_game = _retrospective_request(events, 5)
     inputs = []
@@ -461,14 +548,21 @@ def trial_wiring(tmp_path, monkeypatch, request):
         view["boundary_id"] += f"-fixture-{i // 3}"
         inputs.append({"view": view, "request": makto.build_role_belief_request(
             view, public_game=public_game if retrospective else None)})
+    if split:
+        data = Path(__file__).resolve().parents[2] / "data/tom_sft/makto"
+        if not (data / "manifest.json").is_file():
+            pytest.skip("本地 MaKTO 工作产物未提供")
+        digest = makto.open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief",
+                                             expected_schema_version=makto.VERSION).manifest_digest
+        inputs = makto.role_trial_inputs(data, digest, split=split)
     resources = {"model_directory": str(tmp_path / "model"), "tokenizer_assets": str(tmp_path / "tokenizer"),
-                 "environment_prefix": str(tmp_path / "environment"), "retrospective": retrospective}
+                 "environment_prefix": str(tmp_path / "environment"), "retrospective": retrospective, "split": split}
     runtime = {"environment_prefix": resources["environment_prefix"], "gpu_uuid": "GPU-MOCK",
                "argv_options": {"port": 18581, "structured-outputs-config": {"backend": "xgrammar"}}}
     calls = []
     class Manager:
         def __init__(self, *, root, spec, runtime, model_evidence, owner):
-            assert root == (output.with_suffix("") if retrospective else output.parent) and spec.key == "qwen3"
+            assert root == (output.with_suffix("") if retrospective or split else output.parent) and spec.key == "qwen3"
             assert model_evidence == {"directory": resources["model_directory"], "verification": "MOCK"}
             assert set(owner) == {"request_digest"}
         def status(self):
@@ -488,7 +582,9 @@ def trial_wiring(tmp_path, monkeypatch, request):
             self.count = 0
         def send(self, wire, identity):
             assert output.exists()  # dispatch 在调用前已经持久化。
-            last = json.loads(output.read_bytes().splitlines()[-1])
+            with output.open("rb") as stream:
+                stream.seek(-4096, 2)
+                last = json.loads(stream.read().splitlines()[-1])
             assert last["event"] == "dispatch" and last["request_digest"] == identity
             assert wire["max_tokens"] == 96 and wire["temperature"] == 0
             assert wire["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
@@ -496,6 +592,7 @@ def trial_wiring(tmp_path, monkeypatch, request):
             calls.append("send")
             index = self.count
             self.count += 1
+            assert wire["messages"] == inputs[index]["request"]["messages"]
             if self.failure is not None and index == 1:
                 raise self.failure
             content = "invalid JSON" if index == 2 else json.dumps({
@@ -503,7 +600,7 @@ def trial_wiring(tmp_path, monkeypatch, request):
             return _teacher_reply(content)
     monkeypatch.setattr(experiment, "open_run", lambda *a, **kw: pytest.fail("MaKTO must not open a TomBaseline Run"))
     def profile(spec, **kwargs):
-        assert spec.key == "qwen3" and kwargs["root"] == (output.with_suffix("") if retrospective else output.parent)
+        assert spec.key == "qwen3" and kwargs["root"] == (output.with_suffix("") if retrospective or split else output.parent)
         if kwargs["gpu_uuid"] != "GPU-MOCK":
             raise ValueError("explicit GPU UUID required")
         return runtime
@@ -512,13 +609,13 @@ def trial_wiring(tmp_path, monkeypatch, request):
     monkeypatch.setattr(service_manager, "Service", Manager)
     monkeypatch.setattr(live_runner, "HttpTransport", Transport)
     def trial_inputs(*args, **kwargs):
-        assert kwargs == {"retrospective": retrospective}
+        assert kwargs == {"retrospective": retrospective, "split": split}
         return deepcopy(inputs)
     monkeypatch.setattr(makto, "role_trial_inputs", trial_inputs)
     monkeypatch.setattr(makto, "check_role_trial_inputs", lambda *a: {
-        "versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * 12})
+        "versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * len(inputs)})
     monkeypatch.setattr(makto.sys, "platform", "linux")
-    output = tmp_path / ("makto_retrospective_trial.jsonl" if retrospective else "trial.jsonl")
+    output = tmp_path / ("train.jsonl" if split else "makto_retrospective_trial.jsonl" if retrospective else "trial.jsonl")
     return output, resources, inputs, calls, Transport
 
 
@@ -544,16 +641,17 @@ def test_trial_prepare_then_twelve_independent_calls_save_raw_and_invalid_result
     assert output.read_bytes() == before and calls.count("send") == 12
 
 
+@pytest.mark.parametrize("trial_wiring", [False, True, "train"], indirect=True)
 def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring):
     from werewolf.tom_llm.provider_semantics import OutcomeUnknown
-    output, resources, _, calls, transport = trial_wiring
+    output, resources, inputs, calls, transport = trial_wiring
     makto.role_trial("mock_data", output, "mock_digest", **resources)
     error = OutcomeUnknown("ownership lost after response")
     error.response_body = _teacher_reply('{"suspected_werewolves":["player1"]}').encode()
     error.http_status = 200
     transport.failure = error
     result = makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
-    assert result["failed"] == 1 and result["not_attempted"] == 10
+    assert result["failed"] == 1 and result["not_attempted"] == len(inputs) - 2
     assert result["results"][1]["status"] == "unknown" and not result["results"][1]["observed"]
     assert calls.count("send") == 2 and calls[-1] == "stop"
     record = next(json.loads(line) for line in output.read_bytes().splitlines()
@@ -562,6 +660,39 @@ def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring
     with pytest.raises(ValueError, match="no automatic replay"):
         makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
     assert calls.count("send") == 2
+
+
+@pytest.mark.parametrize("trial_wiring", ["train"], indirect=True)
+def test_full_train_sends_every_real_view_and_preserves_raw_results_and_original_trials(trial_wiring):
+    output, resources, inputs, calls, _ = trial_wiring
+    original = output.parent / "makto_role_trial.jsonl"
+    original.write_bytes(b"existing twelve results\n")
+    prepared = makto.role_trial("mock_data", output, "mock_digest", **resources)
+    assert prepared["request_count"] == 706 and not calls
+    summary = makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
+    assert calls == ["start", *(["send"] * 706), "stop"]
+    assert summary["request_count"] == 706 and summary["not_attempted"] == 0 and summary["failed"] == 1
+    assert summary["valid_empty"] > 0 and summary["valid_nonempty"] > 0
+    assert summary["valid_empty"] + summary["valid_nonempty"] == 705
+    records = [json.loads(line) for line in output.read_bytes().splitlines()]
+    assert records[0]["data_split"] == "train" and len(records[0]["inputs"]) == 706
+    assert sum(r["event"] == "received" for r in records) == 706
+    dispatch = [r for r in records if r["event"] == "dispatch"]
+    assert len({tuple(r[k] for k in ("game_id", "boundary_id", "observer_id")) for r in dispatch}) == 706
+    assert summary["results"][2]["q"] == [0] * 7 and not summary["results"][2]["observed"]
+    assert original.read_bytes() == b"existing twelve results\n"
+
+
+@pytest.mark.parametrize("trial_wiring", ["train"], indirect=True)
+def test_train_preparation_cannot_be_consumed_as_test_even_if_inputs_were_identical(trial_wiring, monkeypatch):
+    output, resources, inputs, calls, _ = trial_wiring
+    makto.role_trial("mock_data", output, "mock_digest", **resources)
+    before = output.read_bytes()
+    monkeypatch.setattr(makto, "role_trial_inputs", lambda *a, **kw: inputs)
+    with pytest.raises(ValueError, match="binding changed"):
+        makto.role_trial("mock_data", output, "mock_digest", **{**resources, "split": "test"},
+                         gpu_uuid="GPU-MOCK", execute_live=True)
+    assert output.read_bytes() == before and not calls
 
 
 @pytest.mark.parametrize("trial_wiring", [True], indirect=True)
@@ -634,12 +765,27 @@ def test_trial_cli_uses_registered_teacher_paths_without_service_run(monkeypatch
     assert calls[0][0] == (tmp_path / "data", tmp_path / "trial.jsonl", "mock-digest")
     assert calls[0][1] == {"model_directory": makto.TEACHER_MODEL_DIRECTORY,
         "tokenizer_assets": makto.TEACHER_TOKENIZER_ASSETS, "environment_prefix": makto.TEACHER_ENVIRONMENT_PREFIX,
-        "gpu_uuid": None, "execute_live": False, "retrospective": retrospective}
+        "gpu_uuid": None, "execute_live": False, "retrospective": retrospective, "split": None}
     with pytest.raises(SystemExit):
         makto.main([*args, "--service-run", str(tmp_path / "obsolete-run")])
     assert len(calls) == 1
     with pytest.raises(SystemExit):
         makto.main([a for a in args if a != "--role-trial"] + ["--retrospective"])
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("split", ["train", "test"])
+def test_role_split_cli_reuses_trial_and_rejects_retrospective(monkeypatch, tmp_path, split):
+    calls = []
+    monkeypatch.setattr(makto, "role_trial", lambda *a, **kw: calls.append(kw) or {"status": "PREPARED_NOT_EXECUTED"})
+    args = ["--role-trial", "--role-split", split, "--data", str(tmp_path / "data"),
+            "--expected-data-digest", "mock", "--output", str(tmp_path / "output.jsonl")]
+    makto.main(args)
+    assert calls[0]["split"] == split and calls[0]["retrospective"] is False
+    with pytest.raises(SystemExit):
+        makto.main([*args, "--retrospective"])
+    with pytest.raises(SystemExit):
+        makto.main([a for a in args if a != "--role-trial"])
     assert len(calls) == 1
 
 

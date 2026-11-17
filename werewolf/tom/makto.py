@@ -58,6 +58,7 @@ ROLE_BELIEF_TRIAL_REQUESTS = (
     (29, 44, "player7"), (29, 44, "player6"), (29, 46, "player6"),
 )
 ROLE_BELIEF_TRIAL_DIGEST = "5d33f9eaea0057469169b9374fae33e392b5d46a9e1b836090f2918123332f4b"
+ROLE_SPLIT_COUNTS = {"train": 706, "test": 175}
 TEACHER_MODEL_DIRECTORY = Path("/data/yuxiao/models/Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218")
 TEACHER_TOKENIZER_ASSETS = Path("/data/yuxiao/models/tokenizer-assets/qwen3")
 TEACHER_ENVIRONMENT_PREFIX = Path("/data/yuxiao/envs/untrusted-network-simulation-tom-baseline")
@@ -445,29 +446,55 @@ def parse_role_belief_response(raw_response, view):
             "q": q.tolist(), "observed": observed, "error": error}
 
 
-def role_trial_inputs(data, expected_digest, *, retrospective=False):
-    """只读取固定三个 Training 游戏；原投票标签、Test 与 Baseline 均不打开。"""
+def role_trial_inputs(data, expected_digest, *, retrospective=False, split=None):
+    """默认固定12条；显式分区只读取该区原始游戏，不读取投票代理标签。"""
+    if split is not None and split not in ROLE_SPLIT_COUNTS:
+        raise ValueError("role split must be train or test")
+    if split is not None and retrospective:
+        raise ValueError("full split requires the original immediate role prompt")
     envelope = open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief", expected_schema_version=VERSION)
     if envelope.manifest_digest != expected_digest or envelope.manifest["revision"] != REVISION:
         raise ValueError("MaKTO trial data identity mismatch")
     annotations = {}
     for line in read_artifact_file(envelope, "annotations.jsonl").splitlines():
         row = json.loads(line)
-        annotations[row.pop("key")] = row
-    games, inputs, instant_requests = {}, [], []
-    for game, index, observer in ROLE_BELIEF_TRIAL_REQUESTS:
+        key = row.pop("key")
+        if key.startswith(f"raw/{split or 'train'}/"):
+            annotations[key] = row
+    games = {}
+
+    def load_game(game):
         if game not in games:
-            path = f"raw/train/7_player_game/seer_witch/game_{game}/event_zh.json"
+            path = f"raw/{split or 'train'}/7_player_game/seer_witch/game_{game}/event_zh.json"
             payload = read_artifact_file(envelope, path)
             public_game, boundaries, _ = extract_game(path, payload, annotations, speech_pre=True)
             games[game] = payload, public_game, {b["source_index"]: b for b in boundaries}
-        payload, public_game, boundaries = games[game]
+        return games[game]
+
+    positions = ROLE_BELIEF_TRIAL_REQUESTS
+    if split is not None:
+        positions = []
+        for game in SPLITS[split]:
+            payload, _, boundaries = load_game(game)
+            roles = {e["content"]["player"]: e["content"]["role"] for e in json.loads(payload) if e["event"] == "roles"}
+            for index, boundary in boundaries.items():
+                if boundary["input_problems"] or boundary["alive"] is None:
+                    continue
+                for seat, alive in enumerate(boundary["alive"], 1):
+                    if alive and roles[seat] != "werewolf":
+                        positions.append((game, index, f"player{seat}"))
+        if len(positions) != ROLE_SPLIT_COUNTS[split]:
+            raise ValueError(f"{split} role population mismatch: expected {ROLE_SPLIT_COUNTS[split]}, got {len(positions)}")
+
+    inputs, instant_requests = [], []
+    for game, index, observer in positions:
+        payload, public_game, boundaries = load_game(game)
         view = role_belief_view(payload, boundaries[index], observer)
         request = build_role_belief_request(view)
         instant_requests.append(request)
         inputs.append({"view": view, "request": build_role_belief_request(view, public_game=public_game)
                        if retrospective else request})
-    if sha256_bytes(canonical_json_bytes(instant_requests)) != ROLE_BELIEF_TRIAL_DIGEST:
+    if split is None and sha256_bytes(canonical_json_bytes(instant_requests)) != ROLE_BELIEF_TRIAL_DIGEST:
         raise ValueError("approved twelve requests changed")
     return inputs
 
@@ -582,8 +609,8 @@ def role_trial_summary(inputs, results):
 
 def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_DIRECTORY,
                tokenizer_assets=TEACHER_TOKENIZER_ASSETS, environment_prefix=TEACHER_ENVIRONMENT_PREFIX,
-               gpu_uuid=None, execute_live=False, retrospective=False):
-    """固定12条的一次性入口；共用既有服务和 HTTP，不创建 Baseline Run 或 Seal。"""
+               gpu_uuid=None, execute_live=False, retrospective=False, split=None):
+    """12条试验与分区全量共用一次性执行；不创建 Baseline Run 或 Seal。"""
     import fcntl
     from werewolf.tom_llm.common import strict_json
     from werewolf.tom_llm.experiment import safe_path
@@ -600,21 +627,25 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
     resources = {"model_directory": str(safe_path(model_directory)),
                  "tokenizer_assets": str(safe_path(tokenizer_assets)),
                  "environment_prefix": str(safe_path(environment_prefix))}
-    inputs = role_trial_inputs(data, expected_digest, retrospective=retrospective)
+    inputs = role_trial_inputs(data, expected_digest, retrospective=retrospective, split=split)
     output = safe_path(output)
     if any((parent / "manifest.json").exists() for parent in output.parents):
         raise ValueError("trial output cannot be inside an existing artifact")
+    if not execute_live and output.exists():
+        raise FileExistsError("role output already exists; existing results must not be overwritten")
     source = {"revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "files": {name: sha256_bytes((ROOT / name).read_bytes()) for name in (
                   "werewolf/tom/makto.py", "werewolf/speech/private_belief_perceiver.py",
                   "werewolf/tom_llm/live_runner.py", "werewolf/tom_llm/model_spec.py",
                   "werewolf/tom_llm/service_manager.py", "werewolf/tom_llm/deployment.py")}}
-    # 回溯用途拥有独立控制记录，不能接管即时试验已登记的服务身份；仍使用同一个 Service。
-    work_directory = output.with_suffix("") if retrospective else output.parent
+    # 回溯与全量分区各自使用输出用途下的控制记录，不接管旧12条服务身份。
+    work_directory = output.with_suffix("") if retrospective or split is not None else output.parent
     binding = {"dataset_digest": expected_digest, "teacher_resources": resources, "source": source,
                "model": spec.record()["model"], "revision": spec.record()["revision"],
                "model_spec_digest": spec.digest, "labeling_method": inputs[0]["request"]["prompt_version"],
                "request_sequence_digest": sha256_bytes(canonical_json_bytes([i["request"] for i in inputs]))}
+    if split is not None:
+        binding["data_split"] = split
 
     def append(stream, record):
         stream.write(canonical_jsonl_bytes([record])); stream.flush(); os.fsync(stream.fileno())
@@ -629,6 +660,7 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
             from werewolf.artifact_io.canonical import _fsync_directory
             _fsync_directory(output.parent)
         return {"status": "PREPARED_NOT_EXECUTED", "output": str(output),
+                "request_count": len(inputs),
                 "labeling_method": binding["labeling_method"],
                 "request_sequence_digest": binding["request_sequence_digest"], **checks}
     if sys.platform != "linux":
@@ -661,7 +693,8 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
                     extra_body={"chat_template_kwargs": row["chat_template"]["kwargs"],
                                 "top_k": row["decoding"]["top_k"], "min_p": row["decoding"]["min_p"]})
                 task_id = sha256_bytes(canonical_json_bytes(wire))
-                append(stream, {"event": "dispatch", "ordinal": ordinal, "request_digest": task_id})
+                append(stream, {"event": "dispatch", "ordinal": ordinal, "request_digest": task_id,
+                                **{k: view[k] for k in ("game_id", "boundary_id", "observer_id")}})
                 start = time.monotonic()
                 try:
                     raw = transport.send(wire, task_id)
@@ -1001,6 +1034,7 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--role-trial", action="store_true")
+    parser.add_argument("--role-split", choices=("train", "test"), help="显式执行该分区全量；省略时仍为固定12条")
     parser.add_argument("--retrospective", action="store_true", help="在同一12条试验入口使用完整公开对局回溯标注")
     parser.add_argument("--model-directory", type=Path)
     parser.add_argument("--tokenizer-assets", type=Path)
@@ -1017,18 +1051,21 @@ def main(argv=None):
         if (args.baseline or args.annotations or args.split_record or args.checkpoint or args.temporal
                 or not args.data or not args.expected_data_digest):
             parser.error("role trial requires --data/--expected-data-digest and forbids baseline/extraction arguments")
+        if args.role_split and args.retrospective:
+            parser.error("--role-split uses the original immediate role prompt; no --retrospective")
         result = role_trial(args.data, args.output, args.expected_data_digest,
                             model_directory=args.model_directory or TEACHER_MODEL_DIRECTORY,
                             tokenizer_assets=args.tokenizer_assets or TEACHER_TOKENIZER_ASSETS,
                             environment_prefix=args.environment_prefix or TEACHER_ENVIRONMENT_PREFIX,
-                            gpu_uuid=args.gpu_uuid, execute_live=args.execute_live, retrospective=args.retrospective)
+                            gpu_uuid=args.gpu_uuid, execute_live=args.execute_live, retrospective=args.retrospective,
+                            split=args.role_split)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("failed", 0) or result.get("not_attempted", 0):
             raise SystemExit(2)
         return
     if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid,
-            args.execute_live, args.retrospective)):
-        parser.error("teacher resource arguments/--execute-live/--retrospective require --role-trial")
+            args.execute_live, args.retrospective, args.role_split)):
+        parser.error("teacher resource arguments/--execute-live/--retrospective/--role-split require --role-trial")
     if args.baseline:
         if args.annotations is not None or args.data is None or args.split_record is None:
             parser.error("baseline requires --data/--split-record and forbids --annotations")
