@@ -77,7 +77,9 @@ def execute(c, args):
         require(not journal.summary()['blocked'],'unknown result; no restart/resend')
         if len(journal.rows)==run.record['request_count']:
             return run_model(run,None,resume=True,journal=journal)
-        manager = Service(run)
+        manager = Service(root=run.root,spec=run.spec,runtime=run.record['runtime'],
+                          model_evidence=run.record['model_evidence'],
+                          owner={'run_digest':run.artifact.manifest_digest})
         from werewolf.tom_llm.deployment import profile
         runtime = run.record['runtime']
         require(runtime==profile(run.spec,root=run.root,model_directory=runtime['argv_options']['model'],
@@ -113,11 +115,16 @@ def dispatch(args):
     run = open_run(run_root(c,args.run_id),with_tasks=False)
     from werewolf.tom_llm.service_manager import Service
     if args.operation=='stop':
-        return Service(run).stop(execute=args.execute_live)
+        require(run.record['mode']=='formal','real Run runtime required')
+        return Service(root=run.root,spec=run.spec,runtime=run.record['runtime'],
+                       model_evidence=run.record['model_evidence'],
+                       owner={'run_digest':run.artifact.manifest_digest}).stop(execute=args.execute_live)
     from werewolf.tom_llm.live_runner import status
     result = status(run)
     if run.record['mode']=='formal':
-        result['service'] = Service(run).status()
+        result['service'] = Service(root=run.root,spec=run.spec,runtime=run.record['runtime'],
+                                    model_evidence=run.record['model_evidence'],
+                                    owner={'run_digest':run.artifact.manifest_digest}).status()
     return result
 
 

@@ -302,24 +302,23 @@ def test_trial_reply_checks_envelope_and_never_labels_failed_generations(change)
 @pytest.fixture
 def trial_wiring(tmp_path, monkeypatch):
     """只替换物理资源；执行真实的请求、日志、解析和一次性保护代码。"""
-    from werewolf.tom_llm import deployment, experiment, live_runner, service_manager
-    from werewolf.tom_llm.model_spec import ModelSpec
+    from werewolf.tom_llm import deployment, experiment, live_runner, physical, service_manager
     events, _, _ = _role_fixture()
     inputs = []
     for i in range(12):
         view, _ = _role_request(events, (5, 3, 4)[i % 3])
         view["boundary_id"] += f"-fixture-{i // 3}"
         inputs.append({"view": view, "request": makto.build_role_belief_request(view)})
-    root = tmp_path / "service"
-    (root / "contract").mkdir(parents=True)
-    run = SimpleNamespace(root=root, key="qwen3", spec=ModelSpec("qwen3"),
-        artifact=SimpleNamespace(manifest_digest="a" * 64),
-        record={"mode": "formal", "runtime": {"environment_prefix": "/mock/environment", "gpu_uuid": "GPU-MOCK",
-            "argv_options": {"model": "/mock/model", "port": 18581, "structured-outputs-config": {"backend": "xgrammar"}}}})
+    resources = {"model_directory": str(tmp_path / "model"), "tokenizer_assets": str(tmp_path / "tokenizer"),
+                 "environment_prefix": str(tmp_path / "environment")}
+    runtime = {"environment_prefix": resources["environment_prefix"], "gpu_uuid": "GPU-MOCK",
+               "argv_options": {"port": 18581, "structured-outputs-config": {"backend": "xgrammar"}}}
     calls = []
     class Manager:
-        def __init__(self, given):
-            assert given is run
+        def __init__(self, *, root, spec, runtime, model_evidence, owner):
+            assert root == output.parent and spec.key == "qwen3"
+            assert model_evidence == {"directory": resources["model_directory"], "verification": "MOCK"}
+            assert set(owner) == {"request_digest"}
         def status(self):
             return {"state": "not_started"}
         def start(self, *, execute):
@@ -350,8 +349,14 @@ def trial_wiring(tmp_path, monkeypatch):
             content = "invalid JSON" if index == 2 else json.dumps({
                 "suspected_werewolves": inputs[index]["view"]["known_werewolves"]})
             return _teacher_reply(content)
-    monkeypatch.setattr(experiment, "open_run", lambda *a, **kw: run)
-    monkeypatch.setattr(deployment, "profile", lambda *a, **kw: run.record["runtime"])
+    monkeypatch.setattr(experiment, "open_run", lambda *a, **kw: pytest.fail("MaKTO must not open a TomBaseline Run"))
+    def profile(spec, **kwargs):
+        assert spec.key == "qwen3" and kwargs["root"] == output.parent
+        if kwargs["gpu_uuid"] != "GPU-MOCK":
+            raise ValueError("explicit GPU UUID required")
+        return runtime
+    monkeypatch.setattr(deployment, "profile", profile)
+    monkeypatch.setattr(physical, "verify_model", lambda spec, path: {"directory": path, "verification": "MOCK"})
     monkeypatch.setattr(service_manager, "Service", Manager)
     monkeypatch.setattr(live_runner, "HttpTransport", Transport)
     monkeypatch.setattr(makto, "role_trial_inputs", lambda *a: deepcopy(inputs))
@@ -359,14 +364,14 @@ def trial_wiring(tmp_path, monkeypatch):
         "versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * 12})
     monkeypatch.setattr(makto.sys, "platform", "linux")
     output = tmp_path / "trial.jsonl"
-    return output, run, inputs, calls, Transport
+    return output, resources, inputs, calls, Transport
 
 
 def test_trial_prepare_then_twelve_independent_calls_save_raw_and_invalid_results(trial_wiring):
-    output, run, inputs, calls, _ = trial_wiring
-    prepared = makto.role_trial("mock_data", output, run.root, "mock_digest")
+    output, resources, inputs, calls, _ = trial_wiring
+    prepared = makto.role_trial("mock_data", output, "mock_digest", **resources)
     assert prepared["status"] == "PREPARED_NOT_EXECUTED" and not calls
-    result = makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+    result = makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
     assert result["request_count"] == 12 and result["failed"] == 1 and result["not_attempted"] == 0
     assert result["valid_nonempty"] == 4 and result["valid_empty"] == 7
     assert result["hard_knowledge_compliant"] == 11
@@ -378,19 +383,19 @@ def test_trial_prepare_then_twelve_independent_calls_save_raw_and_invalid_result
     assert result["pre_changes"]
     before = output.read_bytes()
     with pytest.raises(ValueError, match="no automatic replay"):
-        makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+        makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
     assert output.read_bytes() == before and calls.count("send") == 12
 
 
 def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring):
     from werewolf.tom_llm.provider_semantics import OutcomeUnknown
-    output, run, _, calls, transport = trial_wiring
-    makto.role_trial("mock_data", output, run.root, "mock_digest")
+    output, resources, _, calls, transport = trial_wiring
+    makto.role_trial("mock_data", output, "mock_digest", **resources)
     error = OutcomeUnknown("ownership lost after response")
     error.response_body = _teacher_reply('{"suspected_werewolves":["player1"]}').encode()
     error.http_status = 200
     transport.failure = error
-    result = makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+    result = makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
     assert result["failed"] == 1 and result["not_attempted"] == 10
     assert result["results"][1]["status"] == "unknown" and not result["results"][1]["observed"]
     assert calls.count("send") == 2 and calls[-1] == "stop"
@@ -398,26 +403,62 @@ def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring
                   if json.loads(line)["event"] == "transport_error")
     assert bytes.fromhex(record["raw_response_hex"]) == error.response_body
     with pytest.raises(ValueError, match="no automatic replay"):
-        makto.role_trial("mock_data", output, run.root, "mock_digest", execute_live=True)
+        makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
     assert calls.count("send") == 2
 
 
 def test_missing_real_tokenizer_or_schema_assets_cannot_publish_prepared_trial(trial_wiring, monkeypatch):
-    output, run, _, calls, _ = trial_wiring
+    output, resources, _, calls, _ = trial_wiring
     def missing(*args):
         raise FileNotFoundError("real tokenizer or xgrammar unavailable")
     monkeypatch.setattr(makto, "check_role_trial_inputs", missing)
     with pytest.raises(FileNotFoundError):
-        makto.role_trial("mock_data", output, run.root, "mock_digest")
+        makto.role_trial("mock_data", output, "mock_digest", **resources)
     assert not output.exists() and calls == []
 
 
+def test_trial_execution_needs_explicit_gpu_but_cpu_preparation_does_not(trial_wiring):
+    output, resources, _, calls, _ = trial_wiring
+    makto.role_trial("mock_data", output, "mock_digest", **resources)
+    before = output.read_bytes()
+    with pytest.raises(ValueError, match="explicit GPU UUID"):
+        makto.role_trial("mock_data", output, "mock_digest", **resources, execute_live=True)
+    assert output.read_bytes() == before and not calls
+
+
+def test_trial_resource_binding_changes_cannot_reuse_preparation(trial_wiring):
+    output, resources, _, calls, _ = trial_wiring
+    makto.role_trial("mock_data", output, "mock_digest", **resources)
+    altered = {**resources, "tokenizer_assets": str(output.parent / "different-tokenizer")}
+    with pytest.raises(ValueError, match="binding changed"):
+        makto.role_trial("mock_data", output, "mock_digest", **altered, gpu_uuid="GPU-MOCK", execute_live=True)
+    assert not calls
+
+
+def test_trial_cli_uses_registered_teacher_paths_without_service_run(monkeypatch, tmp_path):
+    calls = []
+    def trial(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"status": "PREPARED_NOT_EXECUTED"}
+    monkeypatch.setattr(makto, "role_trial", trial)
+    args = ["--role-trial", "--data", str(tmp_path / "data"), "--output", str(tmp_path / "trial.jsonl"),
+            "--expected-data-digest", "mock-digest"]
+    makto.main(args)
+    assert calls[0][0] == (tmp_path / "data", tmp_path / "trial.jsonl", "mock-digest")
+    assert calls[0][1] == {"model_directory": makto.TEACHER_MODEL_DIRECTORY,
+        "tokenizer_assets": makto.TEACHER_TOKENIZER_ASSETS, "environment_prefix": makto.TEACHER_ENVIRONMENT_PREFIX,
+        "gpu_uuid": None, "execute_live": False}
+    with pytest.raises(SystemExit):
+        makto.main([*args, "--service-run", str(tmp_path / "obsolete-run")])
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("failure", [None, "template", "budget", "schema"])
-def test_trial_cpu_checks_actual_message_path_with_controlled_tokenizer_and_schema(monkeypatch, failure):
+def test_trial_cpu_checks_actual_message_path_with_controlled_tokenizer_and_schema(monkeypatch, tmp_path, failure):
     import importlib.metadata
     import sys
     from jinja2 import Environment
-    from werewolf.tom_llm import model_spec
+    from werewolf.tom_llm import deployment, model_spec
     events, _, _ = _role_fixture()
     view, request = _role_request(events, 3)
     spec = model_spec.ModelSpec("qwen3")
@@ -444,14 +485,16 @@ def test_trial_cpu_checks_actual_message_path_with_controlled_tokenizer_and_sche
     monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.27.0" if name == "vllm" else "MOCK")
     monkeypatch.setattr(model_spec, "load_cpu_tokenizer", lambda *args: Tokenizer())
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
-    run = SimpleNamespace(spec=spec, record={"tokenizer_assets": "mock-small-assets", "runtime": {
-        "environment": {}, "environment_prefix": str(Path(sys.executable).parent.parent)}})
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(deployment, "service_environment", lambda *a, **kw: {
+        "CUDA_VISIBLE_DEVICES": "", "TMPDIR": str(tmp_path)})
+    prefix = Path(sys.executable).parent.parent
     inputs = [{"view": view, "request": request}] * 12
     if failure:
         with pytest.raises(ValueError, match={"template": "template/token", "budget": "token budget", "schema": "actual schema"}[failure]):
-            makto.check_role_trial_inputs(inputs, run)
+            makto.check_role_trial_inputs(inputs, spec, "mock-small-assets", prefix, tmp_path)
     else:
-        result = makto.check_role_trial_inputs(inputs, run)
+        result = makto.check_role_trial_inputs(inputs, spec, "mock-small-assets", prefix, tmp_path)
         assert len(result["input_token_counts"]) == 12 and len(result["input_ids_digests"]) == 12
         assert len(schemas) == 1 and schemas[0] == request["response_format"]["json_schema"]["schema"]
 

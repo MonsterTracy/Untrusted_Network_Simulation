@@ -57,6 +57,9 @@ ROLE_BELIEF_TRIAL_REQUESTS = (
     (29, 44, "player7"), (29, 44, "player6"), (29, 46, "player6"),
 )
 ROLE_BELIEF_TRIAL_DIGEST = "5d33f9eaea0057469169b9374fae33e392b5d46a9e1b836090f2918123332f4b"
+TEACHER_MODEL_DIRECTORY = Path("/data/yuxiao/models/Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218")
+TEACHER_TOKENIZER_ASSETS = Path("/data/yuxiao/models/tokenizer-assets/qwen3")
+TEACHER_ENVIRONMENT_PREFIX = Path("/data/yuxiao/envs/untrusted-network-simulation-tom-baseline")
 
 
 def source_paths():
@@ -421,30 +424,33 @@ def role_trial_inputs(data, expected_digest):
     return inputs
 
 
-def check_role_trial_inputs(inputs, run):
+def check_role_trial_inputs(inputs, spec, tokenizer_assets, environment_prefix, work_directory):
     """实际环境的 CPU Tokenizer/模板与 xgrammar 校验；不加载模型、不调用服务。"""
     from importlib.metadata import version
     from jinja2 import Environment, StrictUndefined
     from werewolf.tom_llm.model_spec import load_cpu_tokenizer, template_bytes
+    from werewolf.tom_llm.deployment import EXPERIMENT_BASE, service_environment
 
     # CPU 准备沿用服务已登记缓存位置，并显式隐藏 GPU；不会初始化模型。
-    os.environ.update(run.record["runtime"]["environment"])
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    environment = service_environment(spec, root=work_directory, environment_prefix=environment_prefix,
+                                      cache_base=EXPERIMENT_BASE)
+    Path(environment["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+    os.environ.update(environment)
     from vllm.sampling_params import SamplingParams, StructuredOutputsParams
     from vllm.v1.structured_output.backend_xgrammar import validate_xgrammar_grammar
 
     versions = {name: version(name) for name in ("vllm", "xgrammar", "transformers")}
     if versions["vllm"] != "0.27.0":
         raise ValueError("existing vLLM 0.27.0 environment required")
-    if Path(sys.executable).resolve() != Path(run.record["runtime"]["environment_prefix"], "bin/python").resolve():
+    if Path(sys.executable).resolve() != Path(environment_prefix, "bin/python").resolve():
         raise ValueError("use the registered service environment Python")
-    row = run.spec.record()
-    tokenizer = load_cpu_tokenizer(run.spec, run.record["tokenizer_assets"])
+    row = spec.record()
+    tokenizer = load_cpu_tokenizer(spec, tokenizer_assets)
     env = Environment(undefined=StrictUndefined, autoescape=False)
     def refuse(message):
         raise ValueError(message)
     env.globals["raise_exception"] = refuse
-    template = env.from_string(template_bytes(run.spec).decode())
+    template = env.from_string(template_bytes(spec).decode())
     counts, ids_digests, checked_schemas = [], [], set()
     for item in inputs:
         request = item["request"]
@@ -526,52 +532,56 @@ def role_trial_summary(inputs, results):
             "results": rows, "pre_changes": changes}
 
 
-def role_trial(data, output, service_run, expected_digest, *, execute_live=False):
+def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_DIRECTORY,
+               tokenizer_assets=TEACHER_TOKENIZER_ASSETS, environment_prefix=TEACHER_ENVIRONMENT_PREFIX,
+               gpu_uuid=None, execute_live=False):
     """固定12条的一次性入口；共用既有服务和 HTTP，不创建 Baseline Run 或 Seal。"""
     import fcntl
     from werewolf.tom_llm.common import strict_json
-    from werewolf.tom_llm.experiment import open_run
-    from werewolf.tom_llm.live_runner import HttpTransport, run_lock
+    from werewolf.tom_llm.experiment import safe_path
+    from werewolf.tom_llm.live_runner import HttpTransport
     from werewolf.tom_llm.service_manager import Service
-    from werewolf.tom_llm.model_spec import ROOT
-    from werewolf.tom_llm.deployment import profile
+    from werewolf.tom_llm.model_spec import ROOT, ModelSpec
+    from werewolf.tom_llm.deployment import EXPERIMENT_BASE, profile
+    from werewolf.tom_llm.physical import verify_model
     from werewolf.tom_llm.provider_semantics import NotExecuted, OutcomeUnknown
 
-    run = open_run(service_run, with_tasks=False)
-    if run.key != "qwen3" or run.record["mode"] != "formal" or run.spec.record()["revision"] != "b968826d9c46dd6066d109eabc6255188de91218":
-        raise ValueError("registered Qwen3-8B service resource contract required")
-    runtime = run.record["runtime"]
-    if runtime != profile(run.spec, root=run.root, model_directory=runtime["argv_options"]["model"],
-                          environment_prefix=runtime["environment_prefix"], gpu_uuid=runtime["gpu_uuid"]):
-        raise ValueError("registered service runtime settings changed")
-    if runtime["argv_options"]["structured-outputs-config"] != {"backend": "xgrammar"}:
-        raise ValueError("existing xgrammar service required")
+    spec = ModelSpec("qwen3")
+    if spec.record()["revision"] != "b968826d9c46dd6066d109eabc6255188de91218":
+        raise ValueError("registered Qwen3-8B revision changed")
+    resources = {"model_directory": str(safe_path(model_directory)),
+                 "tokenizer_assets": str(safe_path(tokenizer_assets)),
+                 "environment_prefix": str(safe_path(environment_prefix))}
     inputs = role_trial_inputs(data, expected_digest)
-    output = Path(output).absolute()
+    output = safe_path(output)
     if any((parent / "manifest.json").exists() for parent in output.parents):
         raise ValueError("trial output cannot be inside an existing artifact")
     source = {"revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "files": {name: sha256_bytes((ROOT / name).read_bytes()) for name in (
                   "werewolf/tom/makto.py", "werewolf/speech/private_belief_perceiver.py",
                   "werewolf/tom_llm/live_runner.py", "werewolf/tom_llm/model_spec.py",
-                  "werewolf/tom_llm/service_manager.py")}}
-    binding = {"dataset_digest": expected_digest, "service_run": str(run.root),
-               "service_run_digest": run.artifact.manifest_digest, "source": source,
-               "model": run.spec.record()["model"], "revision": run.spec.record()["revision"],
-               "model_spec_digest": run.spec.digest, "request_sequence_digest": ROLE_BELIEF_TRIAL_DIGEST}
+                  "werewolf/tom_llm/service_manager.py", "werewolf/tom_llm/deployment.py")}}
+    binding = {"dataset_digest": expected_digest, "teacher_resources": resources, "source": source,
+               "model": spec.record()["model"], "revision": spec.record()["revision"],
+               "model_spec_digest": spec.digest, "request_sequence_digest": ROLE_BELIEF_TRIAL_DIGEST}
 
     def append(stream, record):
         stream.write(canonical_jsonl_bytes([record])); stream.flush(); os.fsync(stream.fileno())
 
     if not execute_live:
-        checks = check_role_trial_inputs(inputs, run)
+        evidence = verify_model(spec, resources["model_directory"])
+        checks = check_role_trial_inputs(inputs, spec, resources["tokenizer_assets"],
+                                        resources["environment_prefix"], output.parent)
         with output.open("xb") as stream:
-            append(stream, {"event": "prepared", **binding, "checks": checks, "inputs": inputs})
+            append(stream, {"event": "prepared", **binding, "model_evidence": evidence,
+                            "checks": checks, "inputs": inputs})
             from werewolf.artifact_io.canonical import _fsync_directory
             _fsync_directory(output.parent)
         return {"status": "PREPARED_NOT_EXECUTED", "output": str(output), **checks}
     if sys.platform != "linux":
         raise ValueError("real trial requires explicit --execute-live on Ubuntu")
+    runtime = profile(spec, root=output.parent, model_directory=resources["model_directory"],
+                      environment_prefix=resources["environment_prefix"], gpu_uuid=gpu_uuid, cache_base=EXPERIMENT_BASE)
     results = {}
     with output.open("r+b") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -582,42 +592,44 @@ def role_trial(data, output, service_run, expected_digest, *, execute_live=False
         if any(prepared.get(k) != value for k, value in binding.items()) or prepared["inputs"] != inputs:
             raise ValueError("trial preparation/source/request binding changed")
         stream.seek(0, 2)
-        with run_lock(run.root):
-            manager = Service(run)
-            already_running = manager.status()["state"] == "running"
-            manager.start(execute=True)
-            transport = HttpTransport("http://127.0.0.1:" + str(runtime["argv_options"]["port"]), alive_check=manager.guard)
-            try:
-                row = run.spec.record()
-                for ordinal, item in enumerate(inputs):
-                    request, view = item["request"], item["view"]
-                    wire = {k: deepcopy(request[k]) for k in ("messages", "temperature", "max_tokens", "response_format")}
-                    wire.update(model=row["model"], **{k: row["decoding"][k] for k in ("top_p", "n", "seed")},
-                        extra_body={"chat_template_kwargs": row["chat_template"]["kwargs"],
-                                    "top_k": row["decoding"]["top_k"], "min_p": row["decoding"]["min_p"]})
-                    task_id = sha256_bytes(canonical_json_bytes(wire))
-                    append(stream, {"event": "dispatch", "ordinal": ordinal, "request_digest": task_id})
-                    start = time.monotonic()
-                    try:
-                        raw = transport.send(wire, task_id)
-                    except (NotExecuted, OutcomeUnknown) as error:
-                        result = {**parse_role_belief_response(None, view),
-                                  "status": "unknown" if isinstance(error, OutcomeUnknown) else "not_executed", "error": str(error)}
-                        body = getattr(error, "response_body", None)
-                        append(stream, {"event": "transport_error", "ordinal": ordinal,
-                            "http_status": getattr(error, "http_status", None),
-                            "raw_response": body.decode("utf-8", errors="replace") if body is not None else None,
-                            "raw_response_hex": body.hex() if body is not None else None, **result})
-                        results[ordinal] = result
-                        break
-                    append(stream, {"event": "received", "ordinal": ordinal, "raw_response": raw,
-                                    "elapsed_seconds": time.monotonic() - start})
-                    result = role_trial_reply(raw, view, row["model"], prepared["checks"]["input_token_counts"][ordinal])
+        owner = {"request_digest": sha256_bytes(canonical_json_bytes({"prepared": prepared, "runtime": runtime}))}
+        manager = Service(root=output.parent, spec=spec, runtime=runtime,
+                          model_evidence=prepared["model_evidence"], owner=owner)
+        already_running = manager.status()["state"] == "running"
+        manager.start(execute=True)
+        transport = HttpTransport("http://127.0.0.1:" + str(runtime["argv_options"]["port"]), alive_check=manager.guard)
+        try:
+            append(stream, {"event": "service", "runtime": runtime, **owner})
+            row = spec.record()
+            for ordinal, item in enumerate(inputs):
+                request, view = item["request"], item["view"]
+                wire = {k: deepcopy(request[k]) for k in ("messages", "temperature", "max_tokens", "response_format")}
+                wire.update(model=row["model"], **{k: row["decoding"][k] for k in ("top_p", "n", "seed")},
+                    extra_body={"chat_template_kwargs": row["chat_template"]["kwargs"],
+                                "top_k": row["decoding"]["top_k"], "min_p": row["decoding"]["min_p"]})
+                task_id = sha256_bytes(canonical_json_bytes(wire))
+                append(stream, {"event": "dispatch", "ordinal": ordinal, "request_digest": task_id})
+                start = time.monotonic()
+                try:
+                    raw = transport.send(wire, task_id)
+                except (NotExecuted, OutcomeUnknown) as error:
+                    result = {**parse_role_belief_response(None, view),
+                              "status": "unknown" if isinstance(error, OutcomeUnknown) else "not_executed", "error": str(error)}
+                    body = getattr(error, "response_body", None)
+                    append(stream, {"event": "transport_error", "ordinal": ordinal,
+                        "http_status": getattr(error, "http_status", None),
+                        "raw_response": body.decode("utf-8", errors="replace") if body is not None else None,
+                        "raw_response_hex": body.hex() if body is not None else None, **result})
                     results[ordinal] = result
-                    append(stream, {"event": "result", "ordinal": ordinal, **result})
-            finally:
-                if not already_running:
-                    manager.stop(execute=True)
+                    break
+                append(stream, {"event": "received", "ordinal": ordinal, "raw_response": raw,
+                                "elapsed_seconds": time.monotonic() - start})
+                result = role_trial_reply(raw, view, row["model"], prepared["checks"]["input_token_counts"][ordinal])
+                results[ordinal] = result
+                append(stream, {"event": "result", "ordinal": ordinal, **result})
+        finally:
+            if not already_running:
+                manager.stop(execute=True)
         summary = role_trial_summary(inputs, results)
         append(stream, {"event": "summary", **summary})
     return summary
@@ -936,7 +948,10 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--role-trial", action="store_true")
-    parser.add_argument("--service-run", type=Path)
+    parser.add_argument("--model-directory", type=Path)
+    parser.add_argument("--tokenizer-assets", type=Path)
+    parser.add_argument("--environment-prefix", type=Path)
+    parser.add_argument("--gpu-uuid")
     parser.add_argument("--execute-live", action="store_true")
     parser.add_argument("--data", type=Path)
     parser.add_argument("--split-record", type=Path)
@@ -946,16 +961,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.role_trial:
         if (args.baseline or args.annotations or args.split_record or args.checkpoint or args.temporal
-                or not args.data or not args.service_run or not args.expected_data_digest):
-            parser.error("role trial requires --data/--service-run/--expected-data-digest only")
-        result = role_trial(args.data, args.output, args.service_run, args.expected_data_digest,
-                            execute_live=args.execute_live)
+                or not args.data or not args.expected_data_digest):
+            parser.error("role trial requires --data/--expected-data-digest and forbids baseline/extraction arguments")
+        result = role_trial(args.data, args.output, args.expected_data_digest,
+                            model_directory=args.model_directory or TEACHER_MODEL_DIRECTORY,
+                            tokenizer_assets=args.tokenizer_assets or TEACHER_TOKENIZER_ASSETS,
+                            environment_prefix=args.environment_prefix or TEACHER_ENVIRONMENT_PREFIX,
+                            gpu_uuid=args.gpu_uuid, execute_live=args.execute_live)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("failed", 0) or result.get("not_attempted", 0):
             raise SystemExit(2)
         return
-    if args.service_run or args.execute_live:
-        parser.error("--service-run/--execute-live require --role-trial")
+    if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid, args.execute_live)):
+        parser.error("teacher resource arguments/--execute-live require --role-trial")
     if args.baseline:
         if args.annotations is not None or args.data is None or args.split_record is None:
             parser.error("baseline requires --data/--split-record and forbids --annotations")

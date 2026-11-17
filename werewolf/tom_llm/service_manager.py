@@ -14,7 +14,7 @@ import uuid
 
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.artifact_io.canonical import _fsync_directory,ensure_durable_directory
-from werewolf.tom_llm.common import digest,require,strict_json
+from werewolf.tom_llm.common import digest,require,require_digest,strict_json
 from werewolf.tom_llm.experiment import safe_path
 from werewolf.tom_llm.model_spec import ROOT,template_bytes
 from werewolf.tom_llm.deployment import GPU_LOCK,require_idle_gpu,vllm_config_bytes
@@ -48,17 +48,24 @@ def _pidfd(pid):
 
 
 class Service:
-    def __init__(self, run):
-        require(run.record['mode']=='formal' and run.record['runtime'],'real Run runtime required')
-        self.run = run
-        self.runtime = run.record['runtime']
-        self.directory = safe_path(run.root/'runtime/service-control')
+    def __init__(self, *, root, spec, runtime, model_evidence, owner):
+        """同一服务生命周期接收实际资源；不负责读取或伪造科研 Run。"""
+        require(runtime,'service runtime required')
+        require(type(owner) is dict and len(owner)==1
+                and set(owner)<={'run_digest','request_digest'},'one service owner binding required')
+        require_digest(next(iter(owner.values())))
+        self.root = safe_path(root)
+        self.spec = spec
+        self.runtime = runtime
+        self.model_evidence = model_evidence
+        self.owner = dict(owner)
+        self.directory = safe_path(self.root/'runtime/service-control')
         self.pending_launch = self.directory/'launch.pending.json'
         self.child = None
 
     def command(self):
         return [self.runtime['environment_prefix']+'/bin/python','-m','vllm.entrypoints.openai.api_server',
-                '--config',str(self.run.root/'runtime/vllm.yaml')]
+                '--config',str(self.root/'runtime/vllm.yaml')]
 
     def identity(self, pid):
         proc = Path('/proc')/str(pid)
@@ -80,7 +87,7 @@ class Service:
             return None
         state = strict_json(path.read_bytes())
         wanted = state.pop('state_digest')
-        require(digest(state)==wanted and state['run_digest']==self.run.artifact.manifest_digest
+        require(digest(state)==wanted and all(state.get(k)==v for k,v in self.owner.items())
                 and state['argv']==self.command(),'service ownership record drift')
         ident = state['identity']
         require(ident['argv']==self.command() and ident['uid']==os.getuid()
@@ -183,7 +190,7 @@ class Service:
             data = strict_json(reply.read())
             self.guard(expected=binding)
             require((pinned.getsockname(),pinned.getpeername())==endpoints,'ready connection changed')
-            require(self.run.spec.record()['model'] in [r['id'] for r in data['data']],'served model mismatch')
+            require(self.spec.record()['model'] in [r['id'] for r in data['data']],'served model mismatch')
         finally:
             connection.close()
             if pinned is not None:
@@ -193,7 +200,7 @@ class Service:
     def start(self, *, execute=False, timeout=1800):
         require(execute and sys.platform=='linux','explicit --execute-live on Ubuntu required')
         from werewolf.tom_llm.physical import verify_model
-        require(verify_model(self.run.spec,self.runtime['argv_options']['model'])==self.run.record['model_evidence'],
+        require(verify_model(self.spec,self.runtime['argv_options']['model'])==self.model_evidence,
                 'model revision/stat changed since preparation')
         with _pidfd(os.getpid()) as send:
             send(0)
@@ -202,8 +209,8 @@ class Service:
             return self.ready()
         require(state in ('not_started','exited'),'unresolved launch/PID ownership; no adoption or signal')
         ensure_durable_directory(self.directory)
-        runtime = self.run.root/'runtime'
-        for name,raw in [('chat_template.jinja',template_bytes(self.run.spec)),
+        runtime = self.root/'runtime'
+        for name,raw in [('chat_template.jinja',template_bytes(self.spec)),
                          ('vllm.yaml',vllm_config_bytes(self.runtime['argv_options']))]:
             path = safe_path(runtime/name)
             if path.exists():
@@ -231,7 +238,7 @@ class Service:
             log = self.directory/('stdout-'+token+'.log')
             env = {k:os.environ[k] for k in ('HOME','USER','LANG','LC_ALL') if k in os.environ}
             env.update(self.runtime['environment'])
-            intent = {'run_digest':self.run.artifact.manifest_digest,'argv':self.command(),'log':str(log)}
+            intent = {**self.owner,'argv':self.command(),'log':str(log)}
             with self.pending_launch.open('xb') as stream:
                 stream.write(canonical_json_bytes(intent));stream.flush();os.fsync(stream.fileno())
             _fsync_directory(self.directory)

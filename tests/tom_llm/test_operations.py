@@ -137,8 +137,10 @@ def test_single_service_start_and_stop_for_whole_model(make_run,monkeypatch):
     monkeypatch.setattr(lr,'HttpTransport',lambda *a,**kw:transport)
     events = []
     class Manager:
-        def __init__(self,r):
-            assert r is run
+        def __init__(self, *, root, spec, runtime, model_evidence, owner):
+            assert root == run.root and spec is run.spec and runtime is run.record['runtime']
+            assert model_evidence == run.record['model_evidence']
+            assert owner == {'run_digest':run.artifact.manifest_digest}
         def start(self,**kw):
             events.append('start')
         def stop(self,**kw):

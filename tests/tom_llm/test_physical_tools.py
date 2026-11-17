@@ -60,7 +60,9 @@ def manager_for(run,tmp_path):
     (prefix/'bin/python').touch()
     run.record['mode'] = 'formal'
     run.record['runtime'] = {'environment_prefix':str(prefix),'argv_options':{'port':18581}}
-    manager = sm.Service(run)
+    manager = sm.Service(root=run.root,spec=run.spec,runtime=run.record['runtime'],
+                         model_evidence=run.record['model_evidence'],
+                         owner={'run_digest':run.artifact.manifest_digest})
     manager.directory.mkdir(parents=True)
     ident = {'pid':12345,'boot_id':'boot','start_ticks':'7','uid':os.getuid(),'cwd':str(sm.ROOT),
              'executable':str(prefix/'bin/python'),'pgid':12345,'argv':manager.command()}
@@ -124,7 +126,7 @@ def test_mock_service_launch_reuses_instance_and_holds_shared_gpu_lock(make_run,
                    environment={'TMPDIR':str(tmp_path/'temp')})
     runtime['argv_options']['model'] = 'not-loaded'
     runtime['argv_options']['port'] = 0
-    manager.run.record['model_evidence'] = {'mock':'stat'}
+    manager.model_evidence = {'mock':'stat'}
     monkeypatch.setattr(physical,'verify_model',lambda *a:{'mock':'stat'})
     monkeypatch.setattr(sm.sys,'platform','linux')
     monkeypatch.setattr(sm,'GPU_LOCK',tmp_path/'gpu.lock')
@@ -188,6 +190,34 @@ def _runtime_paths(tmp_path,monkeypatch):
         encoded = dep.vllm_config_bytes(options)
         assert b'"no-enable-prefix-caching":true' in encoded
     assert not root.exists()
+    external = Path('/data/yuxiao/Untrusted_Network_Simulation/tom_sft')
+    with pytest.raises(ValueError,match='baseline roots'):
+        dep.profile(ModelSpec('qwen3'),root=external,model_directory=model,environment_prefix=prefix,gpu_uuid='GPU-example')
+    profile = dep.profile(ModelSpec('qwen3'),root=external,model_directory=model,
+                          environment_prefix=prefix,gpu_uuid='GPU-example',cache_base=dep.EXPERIMENT_BASE)
+    assert profile['cache_root']==str(dep.EXPERIMENT_BASE/'runtime-cache/qwen3')
+    assert profile['argv_options']['chat-template']==str(external/'runtime/chat_template.jinja')
+    environment = dep.service_environment(ModelSpec('qwen3'),root=external,
+        environment_prefix=prefix,cache_base=dep.EXPERIMENT_BASE)
+    assert environment['CUDA_VISIBLE_DEVICES']==''
+
+
+def test_request_owned_service_cannot_adopt_a_baseline_ownership_record(make_run,tmp_path,monkeypatch):
+    original,ident = manager_for(make_run(),tmp_path)
+    manager = sm.Service(root=original.root,spec=original.spec,runtime=original.runtime,
+                         model_evidence=None,owner={'request_digest':'b'*64})
+    monkeypatch.setattr(manager,'identity',lambda pid:ident)
+    with pytest.raises(ValueError,match='ownership record drift'):
+        manager.status()
+    path = original.directory/'current.json'
+    import json
+    state = json.loads(path.read_bytes())
+    del state['run_digest']
+    del state['state_digest']
+    state['request_digest'] = 'b'*64
+    state['state_digest'] = digest(state)
+    path.write_bytes(canonical_json_bytes(state))
+    assert manager.status()['state']=='running'
 
 
 @pytest.fixture
@@ -200,9 +230,8 @@ def listener_fixture(tmp_path,monkeypatch):
     (process/'net').mkdir()
     ident = {'pid':12345,'boot_id':'boot','start_ticks':'7','uid':os.getuid()}
     spec = ModelSpec('qwen3')
-    run = SimpleNamespace(root=tmp_path,spec=spec,
-        record={'mode':'formal','runtime':{'argv_options':{'port':18581}}})
-    manager = sm.Service(run)
+    manager = sm.Service(root=tmp_path,spec=spec,runtime={'argv_options':{'port':18581}},
+                         model_evidence=None,owner={'request_digest':'a'*64})
     monkeypatch.setattr(sm,'_PROC',root,raising=False)
     monkeypatch.setattr(sm.sys,'platform','linux')
     monkeypatch.setattr(manager,'_state',lambda:{'identity':ident,'log':'not-opened.log'})
