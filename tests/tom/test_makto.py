@@ -387,6 +387,32 @@ def test_shared_renderer_preserves_original_online_prompt_bytes():
     assert sha256_bytes(prompt.encode()) == "fe9878196affcd65ee2d20beca331d63d1f16d6c9d21ec81c0f9744ee14a48f7"
 
 
+def test_actor_omission_keeps_all_past_speakers_and_private_constraints():
+    events, _, _ = _role_fixture()
+    index = next(i for i, e in enumerate(events) if e["event"] == "speech")
+    events.insert(index + 1, {"event": "speech", "content": {
+        "player": 4, "day": "1-1", "context": "目标 PRE 之后才发生的发言"}})
+    _, payload, boundaries = _role_fixture(events)
+    view = makto.role_belief_view(payload, boundaries[1], 3)
+    original = makto.build_role_belief_request(view)
+    omitted = makto.build_role_belief_request(view, omit_current_actor=True)
+    old, new = (r["messages"][1]["content"] for r in (original, omitted))
+    assert omitted["prompt_version"] == makto.ROLE_BELIEF_WITHOUT_ACTOR_PROMPT
+    assert omitted["response_format"] == original["response_format"]
+    old_private, new_private = (json.loads(s.split("\n", 1)[1].split("\n\n", 1)[0]) for s in (old, new))
+    assert old_private.pop("current_public_actor") == "player4"
+    assert new_private == old_private and new_private["private_facts"][0]["target"] == "player1"
+    old_events, new_events = (json.loads(s.split("Canonical pre-speech public_events:\n", 1)[1]
+                                          .split("\n\nEnvironment-derived", 1)[0]) for s in (old, new))
+    assert new_events == old_events[:-1] and new_events[-1]["speaker"] == "player3"
+    assert "MUST INCLUDE: player1\nMUST EXCLUDE: player3" in new
+    assert "目标 PRE 之后才发生的发言" not in new
+    shifted = deepcopy(view)
+    shifted["current_public_actor"] = shifted["public_events"][-1]["speaker"] = "player5"
+    assert makto.build_role_belief_request(shifted, omit_current_actor=True) == omitted
+    assert makto.build_role_belief_request(view) == original
+
+
 def test_role_prompt_sends_only_player_visible_facts_and_keeps_internal_audit():
     events, _, _ = _role_fixture()
     view, request = _role_request(events, 4)
@@ -502,6 +528,7 @@ def test_role_successful_empty_full_and_hard_knowledge_use_existing_targets():
     assert result["q"] == empty["q"]
     seer, _ = _role_request(events, 3)
     assert not makto.parse_role_belief_response('{"suspected_werewolves":[]}', seer)["observed"]
+    assert not makto.parse_role_belief_response('{"suspected_werewolves":[]}', seer, preserve_empty=True)["observed"]
     assert makto.parse_role_belief_response('{"suspected_werewolves":["player1"]}', seer)["q"] == [1, 0, 0, 0, 0, 0, 0]
 
 
@@ -560,6 +587,7 @@ def trial_wiring(tmp_path, monkeypatch, request):
     runtime = {"environment_prefix": resources["environment_prefix"], "gpu_uuid": "GPU-MOCK",
                "argv_options": {"port": 18581, "structured-outputs-config": {"backend": "xgrammar"}}}
     calls = []
+    checked_inputs = []
     class Manager:
         def __init__(self, *, root, spec, runtime, model_evidence, owner):
             assert root == (output.with_suffix("") if retrospective or split else output.parent) and spec.key == "qwen3"
@@ -592,11 +620,12 @@ def trial_wiring(tmp_path, monkeypatch, request):
             calls.append("send")
             index = self.count
             self.count += 1
-            assert wire["messages"] == inputs[index]["request"]["messages"]
+            item = checked_inputs[index]
+            assert wire["messages"] == item["request"]["messages"]
             if self.failure is not None and index == 1:
                 raise self.failure
-            content = "invalid JSON" if index == 2 else json.dumps({
-                "suspected_werewolves": inputs[index]["view"]["known_werewolves"]})
+            support = [item["pair"]["replacement_actor"]] if "pair" in item else item["view"]["known_werewolves"]
+            content = "invalid JSON" if index == 2 else json.dumps({"suspected_werewolves": support})
             return _teacher_reply(content)
     monkeypatch.setattr(experiment, "open_run", lambda *a, **kw: pytest.fail("MaKTO must not open a TomBaseline Run"))
     def profile(spec, **kwargs):
@@ -612,8 +641,10 @@ def trial_wiring(tmp_path, monkeypatch, request):
         assert kwargs == {"retrospective": retrospective, "split": split}
         return deepcopy(inputs)
     monkeypatch.setattr(makto, "role_trial_inputs", trial_inputs)
-    monkeypatch.setattr(makto, "check_role_trial_inputs", lambda *a: {
-        "versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * len(inputs)})
+    def check(requests, *args):
+        checked_inputs[:] = requests
+        return {"versions": {"vllm": "MOCK_NOT_REAL_PARITY"}, "input_token_counts": [100] * len(requests)}
+    monkeypatch.setattr(makto, "check_role_trial_inputs", check)
     monkeypatch.setattr(makto.sys, "platform", "linux")
     output = tmp_path / ("train.jsonl" if split else "makto_retrospective_trial.jsonl" if retrospective else "trial.jsonl")
     return output, resources, inputs, calls, Transport
@@ -663,13 +694,17 @@ def test_trial_unknown_keeps_raw_error_and_never_accepts_or_resends(trial_wiring
 
 
 @pytest.mark.parametrize("trial_wiring", ["train"], indirect=True)
-def test_full_train_sends_every_real_view_and_preserves_raw_results_and_original_trials(trial_wiring):
+@pytest.mark.parametrize("omit_current_actor", [False, True])
+def test_full_train_sends_every_real_view_and_preserves_raw_results_and_original_trials(trial_wiring, omit_current_actor):
     output, resources, inputs, calls, _ = trial_wiring
-    original = output.parent / "makto_role_trial.jsonl"
-    original.write_bytes(b"existing twelve results\n")
-    prepared = makto.role_trial("mock_data", output, "mock_digest", **resources)
+    old_files = {output.parent / "makto_role_trial.jsonl": b"existing twelve results\n",
+                 output.parent / "makto_role_train.jsonl": b"existing full Train including failures\n"}
+    for path, value in old_files.items():
+        path.write_bytes(value)
+    options = {**resources, "omit_current_actor": omit_current_actor}
+    prepared = makto.role_trial("mock_data", output, "mock_digest", **options)
     assert prepared["request_count"] == 706 and not calls
-    summary = makto.role_trial("mock_data", output, "mock_digest", **resources, gpu_uuid="GPU-MOCK", execute_live=True)
+    summary = makto.role_trial("mock_data", output, "mock_digest", **options, gpu_uuid="GPU-MOCK", execute_live=True)
     assert calls == ["start", *(["send"] * 706), "stop"]
     assert summary["request_count"] == 706 and summary["not_attempted"] == 0 and summary["failed"] == 1
     assert summary["valid_empty"] > 0 and summary["valid_nonempty"] > 0
@@ -680,7 +715,66 @@ def test_full_train_sends_every_real_view_and_preserves_raw_results_and_original
     dispatch = [r for r in records if r["event"] == "dispatch"]
     assert len({tuple(r[k] for k in ("game_id", "boundary_id", "observer_id")) for r in dispatch}) == 706
     assert summary["results"][2]["q"] == [0] * 7 and not summary["results"][2]["observed"]
-    assert original.read_bytes() == b"existing twelve results\n"
+    assert all(path.read_bytes() == value for path, value in old_files.items())
+    empties = [r for r in summary["results"] if r["observed"] and r["suspected_werewolves"] == []]
+    if omit_current_actor:
+        assert prepared["labeling_method"] == makto.ROLE_BELIEF_WITHOUT_ACTOR_PROMPT
+        assert all(r["q"] is None for r in empties)
+        assert [i["view"] for i in records[0]["inputs"]] == [i["view"] for i in inputs]
+        assert all("current_public_actor" not in i["request"]["messages"][1]["content"] for i in records[0]["inputs"])
+    else:
+        assert prepared["labeling_method"] == makto.ROLE_BELIEF_PROMPT
+        assert all(sum(r["q"]) == pytest.approx(1) for r in empties)
+
+
+@pytest.mark.parametrize("trial_wiring", ["train"], indirect=True)
+def test_actor_counterfactual_only_sends_twelve_changed_wires_and_pairs_saved_replies(trial_wiring):
+    from werewolf.tom_llm.model_spec import ModelSpec
+
+    output, resources, inputs, calls, _ = trial_wiring
+    original = output.parent / "makto_role_train.jsonl"
+    makto.role_trial("mock_data", original, "mock_digest", **resources)
+    model = ModelSpec("qwen3").record()
+    with original.open("ab") as stream:
+        for ordinal, item in enumerate(inputs):
+            view = item["view"]
+            actor = view["current_public_actor"]
+            if actor == view["observer_id"]:
+                continue
+            raw = _teacher_reply(json.dumps({"suspected_werewolves": [actor]}))
+            result = makto.role_trial_reply(raw, view, model["model"], 100)
+            digest = sha256_bytes(canonical_json_bytes(makto._role_trial_wire(item["request"], model)))
+            for record in ({"event": "dispatch", "request_digest": digest},
+                           {"event": "received", "raw_response": raw}, {"event": "result", **result}):
+                stream.write(canonical_json_bytes({**record, "ordinal": ordinal}) + b"\n")
+    before = original.read_bytes()
+    options = {**resources, "actor_counterfactual": original}
+    prepared = makto.role_trial("mock_data", output, "mock_digest", **options)
+    assert prepared["request_count"] == 12 and not calls
+    summary = makto.role_trial("mock_data", output, "mock_digest", **options, gpu_uuid="GPU-MOCK", execute_live=True)
+    assert calls == ["start", *(["send"] * 12), "stop"]
+    records = [json.loads(line) for line in output.read_bytes().splitlines()]
+    assert sum(r["event"] == "received" for r in records) == 12
+    assert records[0]["labeling_method"] == makto.ROLE_ACTOR_COUNTERFACTUAL
+    assert records[0]["actor_counterfactual_source"]["sha256"] == sha256_bytes(before)
+    assert original.read_bytes() == before
+    pairs = records[0]["inputs"]
+    assert len({i["view"]["game_id"] for i in pairs}) == 12
+    for item in pairs:
+        view, pair = item["view"], item["pair"]
+        assert view["self_role"] == "simple_villager" and view["observer_id"] != pair["original_actor"]
+        assert not any(e["event_type"] == "public_speech" for e in view["public_events"])
+        original_request = inputs[pair["original_ordinal"]]["request"]
+        reverted = deepcopy(item["request"])
+        reverted["prompt_version"] = original_request["prompt_version"]
+        actor, replacement = pair["original_actor"], pair["replacement_actor"]
+        body = reverted["messages"][1]["content"]
+        body = body.replace(f'"current_public_actor": "{replacement}"', f'"current_public_actor": "{actor}"')
+        reverted["messages"][1]["content"] = body.replace(f'"speaker":"{replacement}"', f'"speaker":"{actor}"')
+        assert reverted == original_request
+    comparison = summary["actor_counterfactual"]
+    assert comparison["valid_pairs"] == comparison["switch_eligible_pairs"] == comparison["switched"] == 11
+    assert comparison["sole_actor_to_sole_replacement"] == 11 and comparison["pairs"][2]["switched"] is None
 
 
 @pytest.mark.parametrize("trial_wiring", ["train"], indirect=True)
@@ -765,7 +859,8 @@ def test_trial_cli_uses_registered_teacher_paths_without_service_run(monkeypatch
     assert calls[0][0] == (tmp_path / "data", tmp_path / "trial.jsonl", "mock-digest")
     assert calls[0][1] == {"model_directory": makto.TEACHER_MODEL_DIRECTORY,
         "tokenizer_assets": makto.TEACHER_TOKENIZER_ASSETS, "environment_prefix": makto.TEACHER_ENVIRONMENT_PREFIX,
-        "gpu_uuid": None, "execute_live": False, "retrospective": retrospective, "split": None}
+        "gpu_uuid": None, "execute_live": False, "retrospective": retrospective, "split": None,
+        "actor_counterfactual": None, "omit_current_actor": False}
     with pytest.raises(SystemExit):
         makto.main([*args, "--service-run", str(tmp_path / "obsolete-run")])
     assert len(calls) == 1
@@ -787,6 +882,19 @@ def test_role_split_cli_reuses_trial_and_rejects_retrospective(monkeypatch, tmp_
     with pytest.raises(SystemExit):
         makto.main([a for a in args if a != "--role-trial"])
     assert len(calls) == 1
+    original = tmp_path / "original.jsonl"
+    if split == "test":
+        with pytest.raises(SystemExit):
+            makto.main([*args, "--actor-counterfactual", str(original)])
+        with pytest.raises(SystemExit):
+            makto.main([*args, "--omit-current-actor"])
+    else:
+        makto.main([*args, "--actor-counterfactual", str(original)])
+        assert calls[-1]["actor_counterfactual"] == original and not calls[-1]["omit_current_actor"]
+        makto.main([*args, "--omit-current-actor"])
+        assert calls[-1]["omit_current_actor"] and calls[-1]["actor_counterfactual"] is None
+        with pytest.raises(SystemExit):
+            makto.main([*args, "--actor-counterfactual", str(original), "--omit-current-actor"])
 
 
 @pytest.mark.parametrize("failure", [None, "template", "budget", "schema"])

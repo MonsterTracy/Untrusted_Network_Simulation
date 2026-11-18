@@ -50,6 +50,8 @@ CONFLICTS = {
 ROLES = {"werewolf", "simple_villager", "seer", "witch"}
 ROLE_BELIEF_PROMPT = "makto_pre_speech_role_belief"
 RETROSPECTIVE_BELIEF_PROMPT = "makto_pre_speech_retrospective_belief"
+ROLE_BELIEF_WITHOUT_ACTOR_PROMPT = "makto_pre_speech_role_belief_without_actor"
+ROLE_ACTOR_COUNTERFACTUAL = "makto_role_actor_counterfactual"
 # 真实调用前固定的小规模质量试验，均来自既有内部 Training；不用于性能评价。
 ROLE_BELIEF_TRIAL_REQUESTS = (
     (22, 15, "player3"), (22, 15, "player2"), (22, 15, "player4"),
@@ -348,7 +350,7 @@ def role_belief_view(payload, boundary, observer_id):
             "known_werewolves": wolves, "known_non_werewolves": non_wolves}
 
 
-def build_role_belief_request(view, *, public_game=None):
+def build_role_belief_request(view, *, public_game=None, omit_current_actor=False):
     """逐三元组构造消息；回溯只额外接收已投影的公开游戏，不接收原始全局记录。"""
     observer = view["observer_id"]
     private = {k: deepcopy(view[k]) for k in (
@@ -375,14 +377,26 @@ def build_role_belief_request(view, *, public_game=None):
         if (public_game["game_id"] != view["game_id"]
                 or public_game["public_events"][:cutoff] != view["public_events"]):
             raise ValueError("retrospective public timeline does not match target PRE")
-    public = public_records(view["public_events"])
+    events = view["public_events"]
+    prompt_version = ROLE_BELIEF_PROMPT
+    report_context = "这是独立重建请求；没有此前对话或私人记忆，回答不会用于公开发言或回写游戏。"
+    if omit_current_actor:
+        if (public_game is not None or not events or events[-1]["event_type"] != "turn_start"
+                or events[-1]["speaker"] != view["current_public_actor"]):
+            raise ValueError("actor omission requires the immediate speech boundary")
+        # 只移除本次发言前最后一个轮次提示，保留此前所有公开事件与本人知识。
+        del private["current_public_actor"]
+        events = events[:-1]
+        prompt_version = ROLE_BELIEF_WITHOUT_ACTOR_PROMPT
+        report_context += ("可以根据当时合法可见的信息报告尚不确定的相对怀疑。"
+                           "不要随意猜测或为了填满答案枚举名单；没有具体怀疑且无必含对象时，报告空集合。")
     prompt = PlayingAgentBeliefReporter.render_prompt(
-        observer_id=observer, public_events=public,
+        observer_id=observer, public_events=public_records(events),
         public_history_digest=view["public_history_digest"],
         known_werewolves=view["known_werewolves"], known_non_werewolves=view["known_non_werewolves"],
-        prompt_version=ROLE_BELIEF_PROMPT,
+        prompt_version=prompt_version,
         include_audit_metadata=False,
-        report_context="这是独立重建请求；没有此前对话或私人记忆，回答不会用于公开发言或回写游戏。")
+        report_context=report_context)
     legal = PlayingAgentBeliefReporter.legal_candidates(
         observer_id=observer, known_werewolves=view["known_werewolves"],
         known_non_werewolves=view["known_non_werewolves"])
@@ -424,13 +438,13 @@ def build_role_belief_request(view, *, public_game=None):
                 "仅输出目标 PRE 的 suspected_werewolves JSON，遵守合同的集合和硬知识约束。"
                 "没有足够依据时允许空集合（除非已有 MUST INCLUDE）；不强行找满两名狼人，不输出理由或额外字段。") }]
     return {"game_id": view["game_id"], "boundary_id": view["boundary_id"], "observer_id": observer,
-            "prompt_version": RETROSPECTIVE_BELIEF_PROMPT if public_game is not None else ROLE_BELIEF_PROMPT,
+            "prompt_version": RETROSPECTIVE_BELIEF_PROMPT if public_game is not None else prompt_version,
             "messages": messages, "temperature": 0.0, "max_tokens": PRIVATE_BELIEF_MAX_TOKENS,
             "response_format": private_belief_response_format(supports_json_schema=True,
                 legal_candidates=legal, required_candidates=view["known_werewolves"])}
 
 
-def parse_role_belief_response(raw_response, view):
+def parse_role_belief_response(raw_response, view, *, preserve_empty=False):
     """严格沿用私人集合协议；失败保持未监督，绝不转成成功均匀标签。"""
     support, error = None, None
     try:
@@ -438,12 +452,17 @@ def parse_role_belief_response(raw_response, view):
             view["known_werewolves"], view["known_non_werewolves"], observer_id=view["observer_id"])
     except (ValueError, TypeError) as exc:
         error = str(exc)
-    q, observed = belief_target(PLAYER_IDS.index(view["observer_id"]),
-                                tuple(support) if error is None else (), "success" if error is None else "error")
+    if preserve_empty and error is None and support == []:
+        # 成功空报告是已观测的集合，但没有可用于现有单纯形损失的目标。
+        q, observed = None, True
+    else:
+        target, observed = belief_target(PLAYER_IDS.index(view["observer_id"]),
+                                         tuple(support) if error is None else (), "success" if error is None else "error")
+        q = target.tolist()
     return {"game_id": view["game_id"], "boundary_id": view["boundary_id"],
             "observer_id": view["observer_id"], "status": "success" if observed else "error",
             "suspected_werewolves": support if observed else None,
-            "q": q.tolist(), "observed": observed, "error": error}
+            "q": q, "observed": observed, "error": error}
 
 
 def role_trial_inputs(data, expected_digest, *, retrospective=False, split=None):
@@ -549,7 +568,7 @@ def check_role_trial_inputs(inputs, spec, tokenizer_assets, environment_prefix, 
             "maximum_input_tokens": max(counts), "schema_digests": sorted(checked_schemas)}
 
 
-def role_trial_reply(raw, view, model, input_tokens):
+def role_trial_reply(raw, view, model, input_tokens, *, preserve_empty=False):
     """保留完整信封；拒答、截断、身份或 Token 数不符均不能成为监督。"""
     from werewolf.tom_llm.common import strict_json
     try:
@@ -566,7 +585,7 @@ def role_trial_reply(raw, view, model, input_tokens):
                 or usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]):
             raise ValueError("actual teacher token usage differs from preparation")
         content = choice["message"]["content"]
-        result = parse_role_belief_response(content, view)
+        result = parse_role_belief_response(content, view, preserve_empty=preserve_empty)
         try:
             PlayingAgentBeliefReporter.parse_response(content)
         except (ValueError, TypeError):
@@ -607,10 +626,78 @@ def role_trial_summary(inputs, results):
             "results": rows, "pre_changes": changes}
 
 
+def _role_trial_wire(request, model):
+    wire = {k: deepcopy(request[k]) for k in ("messages", "temperature", "max_tokens", "response_format")}
+    wire.update(model=model["model"], **{k: model["decoding"][k] for k in ("top_p", "n", "seed")},
+                extra_body={"chat_template_kwargs": model["chat_template"]["kwargs"],
+                            "top_k": model["decoding"]["top_k"], "min_p": model["decoding"]["min_p"]})
+    return wire
+
+
+def _role_actor_pairs(inputs, records, model):
+    """从请求顺序选每局一个首发前村民视角；旧答案只用于配对评分。"""
+    events = [r for r in records[1:] if r["event"] in ("dispatch", "received", "result")]
+    original = {(r["event"], r["ordinal"]): r for r in events}
+    if len(original) != len(events):
+        raise ValueError("duplicate original role response evidence")
+    games, replacements, pairs = set(), Counter(), []
+    for ordinal, item in enumerate(inputs):
+        view = item["view"]
+        actor, observer = view["current_public_actor"], view["observer_id"]
+        if (view["game_id"] in games or view["self_role"] != "simple_villager" or observer == actor
+                or any(e["event_type"] == "public_speech" for e in view["public_events"])):
+            continue
+        alternatives = set(view["alive_players"]) - {observer, actor} - set(view["known_non_werewolves"])
+        if not alternatives:
+            continue
+        replacement = min(alternatives, key=lambda player: (replacements[player], player))
+        dispatch = original.get(("dispatch", ordinal), {})
+        digest = sha256_bytes(canonical_json_bytes(_role_trial_wire(item["request"], model)))
+        if dispatch.get("request_digest") != digest:
+            raise ValueError(f"original role dispatch does not match request {ordinal}")
+        reply = original.get(("received", ordinal), {}).get("raw_response")
+        tokens = records[0]["checks"]["input_token_counts"][ordinal]
+        parsed = role_trial_reply(reply, view, model["model"], tokens)
+        saved = original.get(("result", ordinal), {})
+        if not parsed["observed"] or any(saved.get(k) != v for k, v in parsed.items()):
+            raise ValueError(f"original role response is missing, invalid or mismatched at {ordinal}")
+        changed = deepcopy(view)
+        changed["current_public_actor"] = replacement
+        changed["public_events"][-1]["speaker"] = replacement
+        request = build_role_belief_request(changed)
+        request["prompt_version"] = ROLE_ACTOR_COUNTERFACTUAL
+        pairs.append({"view": view, "request": request, "pair": {"original_ordinal": ordinal,
+            "original_request_digest": digest, "original_actor": actor, "replacement_actor": replacement,
+            "original_support": parsed["suspected_werewolves"]}})
+        games.add(view["game_id"])
+        replacements[replacement] += 1
+        if len(pairs) == 12:
+            return pairs
+    raise ValueError("expected 12 eligible counterfactual samples from distinct Train games")
+
+
+def _role_actor_comparison(inputs, results):
+    pairs = []
+    for item, result in zip(inputs, results, strict=True):
+        pair = item["pair"]
+        after = result["suspected_werewolves"] if result["observed"] else None
+        old, new = pair["original_actor"], pair["replacement_actor"]
+        comparable = after is not None and old in pair["original_support"] and new not in pair["original_support"]
+        pairs.append({**{k: result[k] for k in ("game_id", "boundary_id", "observer_id", "status")}, **pair,
+                      "counterfactual_support": after,
+                      "switched": (new in after and old not in after) if comparable else None})
+    return {"valid_pairs": sum(r["counterfactual_support"] is not None for r in pairs),
+            "switch_eligible_pairs": sum(r["switched"] is not None for r in pairs),
+            "switched": sum(r["switched"] is True for r in pairs),
+            "sole_actor_to_sole_replacement": sum(r["original_support"] == [r["original_actor"]]
+                and r["counterfactual_support"] == [r["replacement_actor"]] for r in pairs), "pairs": pairs}
+
+
 def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_DIRECTORY,
                tokenizer_assets=TEACHER_TOKENIZER_ASSETS, environment_prefix=TEACHER_ENVIRONMENT_PREFIX,
-               gpu_uuid=None, execute_live=False, retrospective=False, split=None):
-    """12条试验与分区全量共用一次性执行；不创建 Baseline Run 或 Seal。"""
+               gpu_uuid=None, execute_live=False, retrospective=False, split=None,
+               actor_counterfactual=None, omit_current_actor=False):
+    """试验、分区全量与反事实诊断共用现有一次性执行路径。"""
     import fcntl
     from werewolf.tom_llm.common import strict_json
     from werewolf.tom_llm.experiment import safe_path
@@ -621,18 +708,43 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
     from werewolf.tom_llm.physical import verify_model
     from werewolf.tom_llm.provider_semantics import NotExecuted, OutcomeUnknown
 
+    if (actor_counterfactual is not None or omit_current_actor) and (
+            split != "train" or retrospective or (actor_counterfactual is not None and omit_current_actor)):
+        raise ValueError("actor counterfactual and actor omission are separate Train-only modes")
     spec = ModelSpec("qwen3")
-    if spec.record()["revision"] != "b968826d9c46dd6066d109eabc6255188de91218":
+    model = spec.record()
+    if model["revision"] != "b968826d9c46dd6066d109eabc6255188de91218":
         raise ValueError("registered Qwen3-8B revision changed")
     resources = {"model_directory": str(safe_path(model_directory)),
                  "tokenizer_assets": str(safe_path(tokenizer_assets)),
                  "environment_prefix": str(safe_path(environment_prefix))}
-    inputs = role_trial_inputs(data, expected_digest, retrospective=retrospective, split=split)
     output = safe_path(output)
     if any((parent / "manifest.json").exists() for parent in output.parents):
         raise ValueError("trial output cannot be inside an existing artifact")
     if not execute_live and output.exists():
         raise FileExistsError("role output already exists; existing results must not be overwritten")
+    inputs = role_trial_inputs(data, expected_digest, retrospective=retrospective, split=split)
+    identity = {"dataset_digest": expected_digest, "teacher_resources": resources,
+                "model": model["model"], "revision": model["revision"], "model_spec_digest": spec.digest}
+    original_prepared = None
+    if actor_counterfactual is not None:
+        origin = safe_path(actor_counterfactual)
+        if origin == output:
+            raise ValueError("counterfactual output must be separate from the original Train file")
+        raw_log = origin.read_bytes()
+        records = [strict_json(line) for line in raw_log.splitlines()]
+        original_prepared = records[0] if records else {}
+        if (original_prepared.get("event") != "prepared" or original_prepared.get("data_split") != "train"
+                or original_prepared.get("labeling_method") != ROLE_BELIEF_PROMPT
+                or any(original_prepared.get(k) != v for k, v in identity.items())
+                or original_prepared.get("inputs") != inputs):
+            raise ValueError("counterfactual requires the matching original Train requests and teacher")
+        inputs = _role_actor_pairs(inputs, records, model)
+        identity["actor_counterfactual_source"] = {"path": str(origin), "sha256": sha256_bytes(raw_log)}
+    elif omit_current_actor:
+        for item in inputs:
+            item["request"] = build_role_belief_request(item["view"], omit_current_actor=True)
+
     source = {"revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "files": {name: sha256_bytes((ROOT / name).read_bytes()) for name in (
                   "werewolf/tom/makto.py", "werewolf/speech/private_belief_perceiver.py",
@@ -640,9 +752,7 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
                   "werewolf/tom_llm/service_manager.py", "werewolf/tom_llm/deployment.py")}}
     # 回溯与全量分区各自使用输出用途下的控制记录，不接管旧12条服务身份。
     work_directory = output.with_suffix("") if retrospective or split is not None else output.parent
-    binding = {"dataset_digest": expected_digest, "teacher_resources": resources, "source": source,
-               "model": spec.record()["model"], "revision": spec.record()["revision"],
-               "model_spec_digest": spec.digest, "labeling_method": inputs[0]["request"]["prompt_version"],
+    binding = {**identity, "source": source, "labeling_method": inputs[0]["request"]["prompt_version"],
                "request_sequence_digest": sha256_bytes(canonical_json_bytes([i["request"] for i in inputs]))}
     if split is not None:
         binding["data_split"] = split
@@ -652,8 +762,12 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
 
     if not execute_live:
         evidence = verify_model(spec, resources["model_directory"])
+        if original_prepared is not None and evidence != original_prepared.get("model_evidence"):
+            raise ValueError("counterfactual model asset evidence differs from the original Train run")
         checks = check_role_trial_inputs(inputs, spec, resources["tokenizer_assets"],
                                         resources["environment_prefix"], work_directory)
+        if original_prepared is not None and checks["versions"] != original_prepared["checks"]["versions"]:
+            raise ValueError("counterfactual Tokenizer or serving package versions differ from the original Train run")
         with output.open("xb") as stream:
             append(stream, {"event": "prepared", **binding, "model_evidence": evidence,
                             "checks": checks, "inputs": inputs})
@@ -685,13 +799,9 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
         transport = HttpTransport("http://127.0.0.1:" + str(runtime["argv_options"]["port"]), alive_check=manager.guard)
         try:
             append(stream, {"event": "service", "runtime": runtime, **owner})
-            row = spec.record()
             for ordinal, item in enumerate(inputs):
                 request, view = item["request"], item["view"]
-                wire = {k: deepcopy(request[k]) for k in ("messages", "temperature", "max_tokens", "response_format")}
-                wire.update(model=row["model"], **{k: row["decoding"][k] for k in ("top_p", "n", "seed")},
-                    extra_body={"chat_template_kwargs": row["chat_template"]["kwargs"],
-                                "top_k": row["decoding"]["top_k"], "min_p": row["decoding"]["min_p"]})
+                wire = _role_trial_wire(request, model)
                 task_id = sha256_bytes(canonical_json_bytes(wire))
                 append(stream, {"event": "dispatch", "ordinal": ordinal, "request_digest": task_id,
                                 **{k: view[k] for k in ("game_id", "boundary_id", "observer_id")}})
@@ -710,13 +820,16 @@ def role_trial(data, output, expected_digest, *, model_directory=TEACHER_MODEL_D
                     break
                 append(stream, {"event": "received", "ordinal": ordinal, "raw_response": raw,
                                 "elapsed_seconds": time.monotonic() - start})
-                result = role_trial_reply(raw, view, row["model"], prepared["checks"]["input_token_counts"][ordinal])
+                result = role_trial_reply(raw, view, model["model"], prepared["checks"]["input_token_counts"][ordinal],
+                                          preserve_empty=omit_current_actor or actor_counterfactual is not None)
                 results[ordinal] = result
                 append(stream, {"event": "result", "ordinal": ordinal, **result})
         finally:
             if not already_running:
                 manager.stop(execute=True)
         summary = role_trial_summary(inputs, results)
+        if actor_counterfactual is not None:
+            summary["actor_counterfactual"] = _role_actor_comparison(inputs, summary["results"])
         append(stream, {"event": "summary", **summary})
     return summary
 
@@ -1036,6 +1149,11 @@ def main(argv=None):
     parser.add_argument("--role-trial", action="store_true")
     parser.add_argument("--role-split", choices=("train", "test"), help="显式执行该分区全量；省略时仍为固定12条")
     parser.add_argument("--retrospective", action="store_true", help="在同一12条试验入口使用完整公开对局回溯标注")
+    actor_mode = parser.add_mutually_exclusive_group()
+    actor_mode.add_argument("--actor-counterfactual", type=Path, metavar="ORIGINAL_TRAIN_JSONL",
+                            help="只向模型发送12条发言者座号替换请求，与旧 Train 响应配对")
+    actor_mode.add_argument("--omit-current-actor", action="store_true",
+                            help="全量 Train 使用去除当前发言者提示的独立 Prompt")
     parser.add_argument("--model-directory", type=Path)
     parser.add_argument("--tokenizer-assets", type=Path)
     parser.add_argument("--environment-prefix", type=Path)
@@ -1053,19 +1171,22 @@ def main(argv=None):
             parser.error("role trial requires --data/--expected-data-digest and forbids baseline/extraction arguments")
         if args.role_split and args.retrospective:
             parser.error("--role-split uses the original immediate role prompt; no --retrospective")
+        if (args.actor_counterfactual or args.omit_current_actor) and args.role_split != "train":
+            parser.error("actor modes require --role-split train")
         result = role_trial(args.data, args.output, args.expected_data_digest,
                             model_directory=args.model_directory or TEACHER_MODEL_DIRECTORY,
                             tokenizer_assets=args.tokenizer_assets or TEACHER_TOKENIZER_ASSETS,
                             environment_prefix=args.environment_prefix or TEACHER_ENVIRONMENT_PREFIX,
                             gpu_uuid=args.gpu_uuid, execute_live=args.execute_live, retrospective=args.retrospective,
-                            split=args.role_split)
+                            split=args.role_split, actor_counterfactual=args.actor_counterfactual,
+                            omit_current_actor=args.omit_current_actor)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("failed", 0) or result.get("not_attempted", 0):
             raise SystemExit(2)
         return
     if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid,
-            args.execute_live, args.retrospective, args.role_split)):
-        parser.error("teacher resource arguments/--execute-live/--retrospective/--role-split require --role-trial")
+            args.execute_live, args.retrospective, args.role_split, args.actor_counterfactual, args.omit_current_actor)):
+        parser.error("teacher resource and role labeling options require --role-trial")
     if args.baseline:
         if args.annotations is not None or args.data is None or args.split_record is None:
             parser.error("baseline requires --data/--split-record and forbids --annotations")
