@@ -1238,6 +1238,161 @@ def test_speech_pre_epoch35_baseline_uses_fixed_conditional_game_macro_kl(speech
     assert result["relative_difference"] == pytest.approx((epoch35 - uniform) / uniform)
 
 
+class _MockHeadOnlyModel(torch.nn.Module):
+    """以小型公开输入骨干替代 Qwen3，保留正式输出形状、Dropout 及梯度路径。"""
+
+    def __init__(self):
+        super().__init__()
+        self.backbone = torch.nn.Sequential(torch.nn.Linear(1, 512), torch.nn.Dropout(.8))
+        self.output = torch.nn.Linear(512, 7)
+        self.temporal = SimpleNamespace(artifact_digest="f" * 64)
+        self.graph = {"test_scope": "synthetic_cpu_only"}
+        self.training_outputs = []
+
+    def forward(self, **public):
+        from werewolf.tom.dataset import PublicTensors
+
+        assert set(public) == set(PublicTensors.__dataclass_fields__)
+        assert not self.training and not self.backbone.training
+        sources = public["source_ids"].float().sum(-1)[:, None, None]
+        features = self.backbone((sources + torch.arange(7)[None, :, None]) / 10)
+        logits = self.output(features)
+        logp = logits.masked_fill(torch.eye(7, dtype=torch.bool), -torch.inf).log_softmax(-1)
+        if torch.is_grad_enabled():
+            logp.retain_grad()
+            self.training_outputs.append(logp)
+        else:
+            assert torch.is_inference_mode_enabled()
+        return logp
+
+
+@pytest.fixture
+def head_only_inputs(speech_pre_reports, tmp_path, monkeypatch):
+    digest, records, _ = speech_pre_reports
+    reports = tmp_path / "teacher.jsonl"
+    reports.write_bytes(makto.canonical_jsonl_bytes(records))
+    data = makto.MaKTOSpeechPREToMDataset("train-artifact", reports, expected_data_digest=digest)
+    prior = (torch.get_num_threads(), torch.are_deterministic_algorithms_enabled(), torch.get_float32_matmul_precision())
+    with torch.random.fork_rng(devices=[]):
+        torch.random.default_generator.manual_seed(11)
+        initial = _MockHeadOnlyModel().eval()
+        scores = makto._game_macro_validation_scores(data, data.validation_game_ids, initial)
+        monkeypatch.setattr(makto, "DEANCHORED_VALIDATION_ROW_DIGEST", scores["row_identity_digest"])
+        monkeypatch.setattr(makto, "DEANCHORED_EPOCH35_KL", scores["epoch35_kl"])
+        yield data, digest, reports, initial, scores["epoch35_kl"]
+    torch.set_num_threads(prior[0])
+    torch.use_deterministic_algorithms(prior[1])
+    torch.set_float32_matmul_precision(prior[2])
+
+
+@pytest.mark.parametrize("improves", [False, True])
+def test_head_only_cli_keeps_epoch0_or_the_first_best_head(head_only_inputs, tmp_path, monkeypatch, capsys, improves):
+    from werewolf.artifact_io.tensor_state import decode_tensor_container
+    from werewolf.tom.qwen3_large_training import game_schedule
+
+    data, digest, reports, initial, epoch0 = head_only_inputs
+    checkpoint, temporal = tmp_path / "epoch35", tmp_path / "temporal"
+    models, weights = [], []
+
+    def load(epoch_path, time_path):
+        assert (epoch_path, time_path) == (checkpoint, temporal)
+        model = deepcopy(initial)
+        models.append(model)
+        weights.clear()
+        return model
+
+    original = makto._game_macro_validation_scores
+
+    def scores(dataset, games, model):
+        assert tuple(games) == data.validation_game_ids
+        before = deepcopy(model.state_dict())
+        result = original(dataset, games, model)
+        assert all(torch.equal(t, model.state_dict()[name]) for name, t in before.items())
+        if weights:
+            # 验证值受控以覆盖严格相等与早停，实际前向和 CE 仍执行。
+            result["epoch35_kl"] = epoch0 - .01 if improves and len(weights) >= 2 else epoch0
+        weights.append(before)
+        return result
+
+    monkeypatch.setattr(makto, "load_epoch35_model", load)
+    monkeypatch.setattr(makto, "_game_macro_validation_scores", scores)
+    output = tmp_path / "result"
+    args = ["--head-only", "--data", "train-artifact", "--teacher-reports", str(reports), "--checkpoint", str(checkpoint),
+            "--temporal", str(temporal), "--expected-data-digest", digest, "--output", str(output)]
+    makto.main(args)
+    result = json.loads(capsys.readouterr().out)
+    manifest = json.loads((output / "manifest.json").read_bytes())
+    assert result == {"path": str(output.resolve()), **manifest}
+    assert result["parent_checkpoint_digest"] == makto.EPOCH35_DIGEST
+    assert result["teacher_reports_digest"] == sha256_bytes(reports.read_bytes())
+    assert result["training_game_ids"] == list(data.training_game_ids)
+    assert result["validation_game_ids"] == list(data.validation_game_ids)
+    assert result["trainable_parameter_count"] == 3591
+    assert result["optimizer"] == {"name": "AdamW", "lr": 1e-4, "weight_decay": 1e-4, "betas": [.9, .999],
+                                   "eps": 1e-8, "foreach": False, "fused": False}
+    assert result["torch_seed"] == result["schedule_seed"] == 42
+    assert result["stop_reason"] == "patience" and result["trained_epochs"] == 5 + 2 * improves
+    assert result["best_epoch"] == 2 * improves
+    assert result["best_kl"] == epoch0 - .01 * improves
+    assert result["best_minus_epoch35"] == pytest.approx(-.01 * improves)
+    assert result["relative_improvement_percent"] == pytest.approx(100 * .01 * improves / epoch0)
+    assert result["history"][0]["training_game_balanced_ce"] is None
+    assert result["history"][0]["validation_kl"] == epoch0
+    assert [g["effective_rows"] for g in result["history"][0]["games"]] == [3, 2, 2, 2]
+    assert all(math.isfinite(row["training_game_balanced_ce"]) for row in result["history"][1:])
+    model, = models
+    assert {name for name, p in model.named_parameters() if p.requires_grad} == {"output.weight", "output.bias"}
+    assert all(p.grad is None and torch.equal(p, initial.state_dict()[name])
+               for name, p in model.named_parameters() if name.startswith("backbone."))
+    assert not torch.equal(model.output.weight, initial.output.weight)
+
+    samples = [s for s in data if s.game_id in data.training_game_ids]
+    unrotated = torch.stack([data.effective_mask(s) for s in samples])
+    assert len(model.training_outputs) == result["trained_epochs"]
+    for epoch, logp in enumerate(model.training_outputs, 1):
+        batch, = game_schedule(data.training_game_ids, epoch, 42)
+        expected = torch.roll(unrotated, batch[0]["shift"], -1)
+        assert torch.equal(logp.grad.ne(0).any(-1), expected)
+        assert result["history"][epoch]["training_schedule"] == batch
+
+    if not improves:
+        assert result["best_head_tensor_container"] is None
+        assert set(p.name for p in output.iterdir()) == {"manifest.json"}
+        return
+    payload = (output / "head.bin").read_bytes()
+    saved = decode_tensor_container(result["best_head_tensor_container"], payload, payload_path="head.bin")
+    assert len(payload) == 3591 * 4 and set(saved) == {"output.weight", "output.bias"}
+    assert all(torch.equal(torch.tensor(t.array), weights[2][name]) for name, t in saved.items())
+    assert not torch.equal(torch.tensor(saved["output.weight"].array), weights[-1]["output.weight"])
+    with pytest.raises(FileExistsError):
+        makto.main(args)
+    rerun = tmp_path / "replay"
+    makto.main([*args[:-1], str(rerun)])
+    assert json.loads(capsys.readouterr().out) == {**result, "path": str(rerun.resolve())}
+    assert (rerun / "head.bin").read_bytes() == payload
+
+
+def test_head_only_rejects_wrong_epoch0_before_any_update(head_only_inputs, tmp_path, monkeypatch):
+    _, digest, reports, model, _ = head_only_inputs
+    monkeypatch.setattr(makto, "load_epoch35_model", lambda *a: model)
+    monkeypatch.setattr(makto, "DEANCHORED_VALIDATION_ROW_DIGEST", "0" * 64)
+    output = tmp_path / "should-not-exist"
+    with pytest.raises(ValueError, match="Epoch0 differs"):
+        makto.train_makto_head_only("train-artifact", reports, "epoch35", "temporal", output, expected_data_digest=digest)
+    assert not output.exists() and not model.training_outputs
+
+
+def test_head_only_rejects_a_mask_that_changes_effective_training_rows(head_only_inputs, tmp_path, monkeypatch):
+    data, digest, reports, _, _ = head_only_inputs
+    original = data.effective_mask
+    monkeypatch.setattr(data, "effective_mask", lambda sample: original(sample) & False)
+    monkeypatch.setattr(makto, "MaKTOSpeechPREToMDataset", lambda *a, **kw: data)
+    monkeypatch.setattr(makto, "load_epoch35_model", lambda *a: pytest.fail("invalid Mask reached model load"))
+    with pytest.raises(ValueError, match="training supervision count mismatch"):
+        makto.train_makto_head_only("train-artifact", reports, "epoch35", "temporal", tmp_path / "result",
+                                   expected_data_digest=digest)
+
+
 def _holdout_data():
     """仿真同样的游戏行数分布；不读取官方Test或真实Checkpoint。"""
     from werewolf.tom.dataset import CanonicalToMSample, PublicTensors

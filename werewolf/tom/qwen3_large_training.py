@@ -91,22 +91,30 @@ def open_training_data(path, *, publication_digest, split_digest):
 
 
 def epoch_schedule(game_ids, epoch, protocol):
+    return game_schedule(game_ids, epoch, protocol.schedule_seed)
+
+
+def game_schedule(game_ids, epoch, schedule_seed):
     """每局每 Epoch 一次；任意连续七个 Epoch 恰好覆盖该局七种旋转。"""
     games = tuple(sorted(game_ids))
     if (not games or len(set(games)) != len(games)
             or any(type(g) is not str or not g for g in games)
             or type(epoch) is not int or not 1 <= epoch <= 80):
         raise ValueError("invalid Large epoch/game identities")
-    ordered = sorted(games, key=lambda g: (digest_fields(ORDER_VERSION, protocol.schedule_seed, epoch, g), g))
+    ordered = sorted(games, key=lambda g: (digest_fields(ORDER_VERSION, schedule_seed, epoch, g), g))
     rows = [{"game_id": g, "shift": (int.from_bytes(
-        digest_fields(ROTATION_VERSION, protocol.schedule_seed, g), "big") + epoch - 1) % 7} for g in ordered]
+        digest_fields(ROTATION_VERSION, schedule_seed, g), "big") + epoch - 1) % 7} for g in ordered]
     return [rows[start:start + 32] for start in range(0, len(rows), 32)]
 
 
-def _effective_masks(samples, primary):
+def _primary_mask(data, sample):
+    return data.primary.mask(sample.game_id, sample.boundary_id) & sample.label_observed
+
+
+def _effective_masks(samples, effective_mask):
     masks = []
     for sample in samples:
-        mask = primary.mask(sample.game_id, sample.boundary_id) & sample.label_observed
+        mask = effective_mask(sample)
         if not torch.allclose(sample.q.sum(-1)[mask], torch.ones_like(sample.q.sum(-1)[mask])):
             raise ValueError("effective belief targets must sum to one")
         masks.append(mask)
@@ -131,6 +139,13 @@ def _microbatches(samples, masks, size, device, shift):
 
 
 def train_batch(model, optimizer, data, batch, *, pre_microbatch_size):
+    return train_game_batch(model, optimizer, batch, samples_for_game=data.samples,
+                            effective_mask=lambda sample: _primary_mask(data, sample),
+                            pre_microbatch_size=pre_microbatch_size, training_mode=True)
+
+
+def train_game_batch(model, optimizer, batch, *, samples_for_game, effective_mask,
+                     pre_microbatch_size, training_mode):
     """一次更新：sum(微批 CE)/(整局有效行数 * 实际 Batch 游戏数)。"""
     if (not batch or len(batch) > 32 or len({row["game_id"] for row in batch}) != len(batch)
             or type(pre_microbatch_size) is not int or pre_microbatch_size < 1):
@@ -139,11 +154,11 @@ def train_batch(model, optimizer, data, batch, *, pre_microbatch_size):
     for row in batch:
         if type(row["shift"]) is not int or not 0 <= row["shift"] < 7:
             raise ValueError("invalid Large rotation")
-        samples = data.samples(row["game_id"])
-        masks, count = _effective_masks(samples, data.primary)
+        samples = samples_for_game(row["game_id"])
+        masks, count = _effective_masks(samples, effective_mask)
         prepared.append((samples, masks, count, row["shift"]))
     optimizer.zero_grad(set_to_none=True)
-    model.train()
+    model.train(training_mode)
     device = next(model.parameters()).device
     game_losses = []
     for samples, masks, count, shift in prepared:
@@ -171,7 +186,7 @@ def validate(model, data, *, pre_microbatch_size):
         with torch.inference_mode():
             for game_id in data.split["validation_game_ids"]:
                 samples = data.samples(game_id)
-                masks, count = _effective_masks(samples, data.primary)
+                masks, count = _effective_masks(samples, lambda sample: _primary_mask(data, sample))
                 total = 0.
                 for public, q, mask in _microbatches(samples, masks, pre_microbatch_size, device, 0):
                     total += float(row_kl(model(**public).double(), q.double())[mask].sum())

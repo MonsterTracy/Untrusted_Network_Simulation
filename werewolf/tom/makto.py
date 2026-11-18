@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 from urllib.request import urlopen
 
 import torch
@@ -64,6 +65,8 @@ ROLE_SPLIT_COUNTS = {"train": 706, "test": 175}
 DEANCHORED_DATA_DIGEST = "9321676114a83c053a6e2311b060025ce5652368f470f52d3158576e661c3579"
 DEANCHORED_REQUEST_DIGEST = "493d4bed2de5741cc60566ecb0a91adf75f696ede86f1d2234cdd547414f6bd2"
 DEANCHORED_VALIDATION_GAMES = (31, 34, 37, 38)
+DEANCHORED_VALIDATION_ROW_DIGEST = "3144f5afb1f90a7020d997dd1374c1d5590940fd9f8cbf408aca3980d04b1372"
+DEANCHORED_EPOCH35_KL = 0.8472560648385181
 DEANCHORED_REPORT_COUNTS = {
     "training": {"nonempty": 405, "empty": 155, "failed": 6},
     "validation": {"nonempty": 107, "empty": 31, "failed": 2},
@@ -1272,6 +1275,132 @@ def load_epoch35_model(checkpoint_path, temporal_path):
     return model.eval()
 
 
+def _trainable_output_head(model):
+    """冻结公开编码、Transformer 和观察者读出，只开放七席输出的权重与偏置。"""
+    shapes = {"output.weight": (7, 512), "output.bias": (7,)}
+    params = dict(model.named_parameters())
+    if any(name not in params or params[name].shape != shape for name, shape in shapes.items()):
+        raise ValueError("unexpected Epoch35 output head; expected Linear(512, 7)")
+    model.requires_grad_(False)
+    return {name: params[name].requires_grad_(True) for name in shapes}
+
+
+def _head_only_epoch(epoch, training_ce, scores):
+    return {"epoch": epoch, "training_game_balanced_ce": training_ce,
+            "validation_kl": scores["epoch35_kl"],
+            "games": [{"game_id": g["game_id"], "effective_rows": g["effective_rows"],
+                       "kl": g["epoch35_kl"]} for g in scores["games"]]}
+
+
+def train_makto_head_only(data_path, teacher_reports, checkpoint_path, temporal_path, output, *,
+                          device="cpu", expected_data_digest=DEANCHORED_DATA_DIGEST):
+    """从 Epoch35 训练输出层，发布单份验证轨迹和最佳输出权重。"""
+    from werewolf.artifact_io import TensorValue
+    from werewolf.artifact_io.tensor_state import encode_tensor_container
+    from werewolf.tom.experiment import configure_runtime, runtime_provenance
+    from werewolf.tom.qwen3_large_training import ORDER_VERSION, ROTATION_VERSION, game_schedule, train_game_batch
+
+    output = Path(output).resolve()
+    if output.exists():
+        raise FileExistsError(f"MaKTO Head-only output already exists: {output}")
+    if any((p / name).exists() for p in output.parents for name in ("manifest.json", "phase_codebook.manifest.json")):
+        raise ValueError("MaKTO Head-only output cannot be inside an existing artifact")
+    if device not in ("cpu", "cuda"):
+        raise ValueError("MaKTO Head-only device must be cpu or cuda")
+    if device == "cuda" and os.environ.get("CUBLAS_WORKSPACE_CONFIG") != ":4096:8":
+        raise ValueError("MaKTO Head-only CUDA requires CUBLAS_WORKSPACE_CONFIG=:4096:8")
+
+    data = MaKTOSpeechPREToMDataset(data_path, teacher_reports, expected_data_digest=expected_data_digest)
+    training_games = {game_id: [] for game_id in data.training_game_ids}
+    training_rows = 0
+    for sample in data:
+        if sample.game_id in training_games:
+            training_games[sample.game_id].append(sample)
+            training_rows += int(data.effective_mask(sample).sum())
+    if training_rows != data.partition_counts["training"]["nonempty"]:
+        raise ValueError(f"MaKTO training supervision count mismatch: {training_rows}")
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                       cwd=Path(__file__).resolve().parents[2], text=True).strip()
+    runtime_config = SimpleNamespace(device=device, torch_num_threads=1, source_revision=revision)
+    configure_runtime(runtime_config)
+    torch.set_float32_matmul_precision("highest")
+    runtime = runtime_provenance(runtime_config)
+    validation_model = load_epoch35_model(checkpoint_path, temporal_path)
+    scores = _game_macro_validation_scores(data, data.validation_game_ids, validation_model)
+    reproduced_epoch0 = scores["epoch35_kl"]
+    if (sum(g["effective_rows"] for g in scores["games"]) != data.partition_counts["validation"]["nonempty"]
+            or scores["row_identity_digest"] != DEANCHORED_VALIDATION_ROW_DIGEST
+            or not math.isclose(reproduced_epoch0, DEANCHORED_EPOCH35_KL, rel_tol=0., abs_tol=1e-6)):
+        raise ValueError(f"MaKTO Epoch0 differs from the recorded validation: "
+                         f"rows={scores['row_identity_digest']}, KL={reproduced_epoch0}")
+    epoch0 = _head_only_epoch(0, None, scores)
+    epoch0["validation_kl"] = DEANCHORED_EPOCH35_KL
+    history = [epoch0]
+
+    # GPU 仅用于训练。只将更新后的输出层同步回 CPU，验证沿用历史同一打分路径。
+    model = deepcopy(validation_model).to(device) if device == "cuda" else validation_model
+    head = _trainable_output_head(model)
+    adamw = {"lr": 1e-4, "weight_decay": 1e-4, "betas": (.9, .999), "eps": 1e-8,
+             "foreach": False, "fused": False}
+    schedule_seed, torch_seed, pre_microbatch_size, max_epochs, patience = 42, 42, 4, 30, 5
+    torch.manual_seed(torch_seed)
+    optimizer = torch.optim.AdamW(head.values(), **adamw)
+    best_epoch, best_kl, best_head, stop_reason = 0, DEANCHORED_EPOCH35_KL, None, "max_epochs"
+    # 替换 Epoch0 时也须优于同环境复测值，防止把硬件舍入差异当成改善。
+    comparison_kl = min(best_kl, reproduced_epoch0)
+    for epoch in range(1, max_epochs + 1):
+        batch, = game_schedule(data.training_game_ids, epoch, schedule_seed)
+        training_ce = train_game_batch(model, optimizer, batch, samples_for_game=training_games.__getitem__,
+                                      effective_mask=data.effective_mask, pre_microbatch_size=pre_microbatch_size,
+                                      training_mode=False)
+        if validation_model is not model:
+            validation_model.output.load_state_dict(model.output.state_dict())
+        scores = _game_macro_validation_scores(data, data.validation_game_ids, validation_model)
+        metrics = _head_only_epoch(epoch, training_ce, scores)
+        metrics["training_schedule"] = batch
+        history.append(metrics)
+        kl = metrics["validation_kl"]
+        if not math.isfinite(kl):
+            raise ValueError("nonfinite MaKTO Validation KL")
+        if kl < comparison_kl:
+            best_epoch, best_kl, comparison_kl = epoch, kl, kl
+            best_head = {name: TensorValue(p.detach().cpu().numpy().copy(), True) for name, p in head.items()}
+        if epoch - best_epoch == patience:
+            stop_reason = "patience"
+            break
+
+    files, container = {}, None
+    if best_head is not None:
+        container, files["head.bin"] = encode_tensor_container(best_head, payload_path="head.bin")
+    difference = best_kl - DEANCHORED_EPOCH35_KL
+    parameter_counts = {name: p.numel() for name, p in head.items()}
+    artifact = publish_artifact(output, manifest_fields={
+        "artifact_type": "makto_deanchored_head_only", "schema_version": "classic7_makto_deanchored_head_only_v1",
+        "parent_checkpoint_digest": EPOCH35_DIGEST, "parent_checkpoint_path": str(Path(checkpoint_path).resolve()),
+        "temporal_artifact_digest": validation_model.temporal.artifact_digest,
+        "graph": validation_model.graph, "runtime": runtime, "validation_device": "cpu",
+        "dataset_digest": data.source_digest, "teacher_reports_digest": data.teacher_reports_digest,
+        "request_sequence_digest": DEANCHORED_REQUEST_DIGEST,
+        "training_game_ids": data.training_game_ids, "validation_game_ids": data.validation_game_ids,
+        "partition_counts": data.partition_counts, "validation_row_identity_digest": DEANCHORED_VALIDATION_ROW_DIGEST,
+        "public_projection": "completed_public_events_without_final_pending_turn_start",
+        "target_condition": "successful_nonempty_teacher_reports", "validation_direction": "KL(q||p)",
+        "training_loss": "game_macro_row_cross_entropy", "validation_unit": "nats",
+        "trainable_parameters": parameter_counts, "trainable_parameter_count": sum(parameter_counts.values()),
+        "total_parameter_count": sum(p.numel() for p in model.parameters()),
+        "optimizer": {"name": "AdamW", **adamw}, "model_mode": "eval_during_head_training",
+        "schedule_seed": schedule_seed, "torch_seed": torch_seed, "order_version": ORDER_VERSION,
+        "rotation_version": ROTATION_VERSION, "pre_microbatch_size": pre_microbatch_size, "steps_per_epoch": 1,
+        "max_epochs": max_epochs, "patience": patience, "tie_policy": "earliest_epoch",
+        "history": history, "epoch0_cpu_kl_recomputed": reproduced_epoch0,
+        "best_epoch": best_epoch, "best_kl": best_kl, "best_minus_epoch35": difference,
+        "relative_improvement_percent": 100 * (DEANCHORED_EPOCH35_KL - best_kl) / DEANCHORED_EPOCH35_KL,
+        "trained_epochs": len(history) - 1, "stop_reason": stop_reason,
+        "best_head_tensor_container": container,
+    }, files=files)
+    return {"path": str(artifact.path), **artifact.manifest}
+
+
 def _write_record(path, record):
     """小型实验记录只写一次；不向已有数据Artifact内部增加文件。"""
     path = Path(path).absolute()
@@ -1291,7 +1420,9 @@ def main(argv=None):
     parser.add_argument("--annotations", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--baseline", action="store_true")
-    parser.add_argument("--teacher-reports", type=Path, help="使用已完成的去锚定 Train 发言 PRE 标签计算基线")
+    parser.add_argument("--head-only", action="store_true", help="在去锚定 Train 发言 PRE 上微调 Epoch35 输出层")
+    parser.add_argument("--device", choices=("cpu", "cuda"), help="Head-only 训练设备，默认 CPU")
+    parser.add_argument("--teacher-reports", type=Path, help="读取已完成的去锚定 Train 发言 PRE 标签")
     parser.add_argument("--role-trial", action="store_true")
     parser.add_argument("--role-split", choices=("train", "test"), help="显式执行该分区全量；省略时仍为固定12条")
     parser.add_argument("--retrospective", action="store_true", help="在同一12条试验入口使用完整公开对局回溯标注")
@@ -1311,12 +1442,14 @@ def main(argv=None):
     parser.add_argument("--temporal", type=Path)
     parser.add_argument("--expected-data-digest")
     args = parser.parse_args(argv)
-    if args.teacher_reports is not None and not args.baseline:
-        parser.error("--teacher-reports requires --baseline")
+    if args.teacher_reports is not None and not (args.baseline or args.head_only):
+        parser.error("--teacher-reports requires --baseline or --head-only")
+    if args.device is not None and not args.head_only:
+        parser.error("--device requires --head-only")
     if args.output is None and args.teacher_reports is None:
         parser.error("--output is required except for the speech PRE baseline")
     if args.role_trial:
-        if (args.baseline or args.annotations or args.split_record or args.checkpoint or args.temporal
+        if (args.baseline or args.head_only or args.annotations or args.split_record or args.checkpoint or args.temporal
                 or not args.data or not args.expected_data_digest):
             parser.error("role trial requires --data/--expected-data-digest and forbids baseline/extraction arguments")
         if args.role_split and args.retrospective:
@@ -1337,6 +1470,15 @@ def main(argv=None):
     if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid,
             args.execute_live, args.retrospective, args.role_split, args.actor_counterfactual, args.omit_current_actor)):
         parser.error("teacher resource and role labeling options require --role-trial")
+    if args.head_only:
+        if (args.baseline or args.annotations or args.split_record
+                or not all((args.data, args.teacher_reports, args.checkpoint, args.temporal, args.output))):
+            parser.error("head-only requires --data/--teacher-reports/--checkpoint/--temporal/--output and the fixed game split")
+        result = train_makto_head_only(args.data, args.teacher_reports, args.checkpoint, args.temporal, args.output,
+                                      device=args.device or "cpu",
+                                      expected_data_digest=args.expected_data_digest or DEANCHORED_DATA_DIGEST)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     if args.baseline:
         if args.annotations is not None or args.data is None:
             parser.error("baseline requires --data and forbids --annotations")
