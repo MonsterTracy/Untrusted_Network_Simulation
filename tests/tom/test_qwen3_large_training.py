@@ -376,6 +376,20 @@ def test_data_adapter_binds_fixed_split_and_preserves_fold_metadata(monkeypatch)
     assert data.primary is primary
     assert len(data.split["training_game_ids"]) == 4500 and len(data.split["validation_game_ids"]) == 300
     assert view.fold_manifest == {"unchanged": True}
+
+    validation_ids = data.split["validation_game_ids"]
+    validation_view = SimpleNamespace(game_ids=tuple(validation_ids), max_structured_token_count=1024)
+    publication = replace(publication, public_view=validation_view,
+                          manifest={"development_games": [{"game_id": game_id} for game_id in ids]})
+    subset = t.open_training_data("synthetic-development", publication_digest="a" * 64, split_digest="b" * 64,
+                                  validation_game_ids=validation_ids)
+    assert calls[-1][1]["game_ids"] == validation_ids and subset.split == data.split
+    assert subset.publication.public_view.game_ids == tuple(validation_ids)
+    validation_view.game_ids = tuple(data.split["training_game_ids"][:300])
+    with pytest.raises(ValueError, match="fixed Validation game set"):
+        t.open_training_data("synthetic-development", publication_digest="a" * 64, split_digest="b" * 64,
+                             validation_game_ids=validation_ids)
+    publication = replace(publication, public_view=view)
     view.max_structured_token_count = 1025
     with pytest.raises(ValueError, match="capacity"):
         t.open_training_data("synthetic-development", publication_digest="a" * 64, split_digest="b" * 64)

@@ -39,6 +39,9 @@ from werewolf.tom.dataset import (
 REVISION = "7d7d516f780879dbe9f512ef29655f51548f7578"
 PREPARED_DIGEST = "eadb9dc8c5d31a0594f734561c8144485c1f8407432dbebc928d050cb17be8ad"
 EPOCH35_DIGEST = "6229037415e6aec74f3e615f3f4838f269a6ff1634b6bd9e83dbd291b9ef1609"
+AI_DEVELOPMENT_DIGEST = "28843a2f1cd79750c588682c376d66f6636c0bb955ab59ca6ee64ddbce4c641a"
+MAKTO_HEAD_DIGEST = "6905ad3af3c83722a9a71708ea917ca8f23afa42d6f7615cace83895cc6763a7"
+AI_VALIDATION_COUNTS = {"games": 300, "pres": 3835, "effective_rows": 15276, "successful_empty": 3791}
 DATASET = "ReneeYe/werewolf_game_reasoning"
 VERSION = "makto_seer_witch_proxy_belief_v1"
 SPLITS = {"train": range(21, 41), "test": range(6, 14)}
@@ -1246,12 +1249,8 @@ def _game_macro_validation_scores(data, validation_game_ids, model):
             "relative_difference": difference / uniform if difference is not None and uniform else None}
 
 
-def load_epoch35_model(checkpoint_path, temporal_path):
-    """只读原模型容器及绑定的时间表；不读取或恢复旧优化器、RNG和AI数据。"""
-    from werewolf.artifact_io.tensor_state import decode_tensor_container
-    from werewolf.tom.qwen3_large import Qwen3ToMLarge, graph_identity
-    from werewolf.tom.state import restore_model_tensors
-    from werewolf.tom.temporal import TemporalCodeProvider, TEMPORAL_VERSION
+def _open_epoch35_checkpoint(checkpoint_path):
+    from werewolf.tom.qwen3_large import graph_identity
 
     checkpoint = open_artifact_envelope(checkpoint_path,
         expected_artifact_type="qwen3_large_training_checkpoint",
@@ -1260,6 +1259,21 @@ def load_epoch35_model(checkpoint_path, temporal_path):
     if (checkpoint.manifest_digest != EPOCH35_DIGEST or m["completed_epoch"] != 35
             or m["selection"]["best_epoch"] != 35 or m["binding"]["graph"] != graph_identity()):
         raise ValueError("Epoch 35 checkpoint digest/epoch/graph mismatch")
+    return checkpoint
+
+
+def load_epoch35_model(checkpoint_path, temporal_path):
+    """只读原模型容器及绑定的时间表；不读取或恢复旧优化器、RNG和AI数据。"""
+    return _restore_epoch35_model(_open_epoch35_checkpoint(checkpoint_path), temporal_path)
+
+
+def _restore_epoch35_model(checkpoint, temporal_path):
+    from werewolf.artifact_io.tensor_state import decode_tensor_container
+    from werewolf.tom.qwen3_large import Qwen3ToMLarge
+    from werewolf.tom.state import restore_model_tensors
+    from werewolf.tom.temporal import TemporalCodeProvider, TEMPORAL_VERSION
+
+    m = checkpoint.manifest
     temporal_envelope = open_artifact_envelope(temporal_path,
         expected_artifact_type="deterministic_temporal_code", expected_schema_version=TEMPORAL_VERSION,
         manifest_name="phase_codebook.manifest.json")
@@ -1273,6 +1287,93 @@ def load_epoch35_model(checkpoint_path, temporal_path):
                                      read_artifact_file(checkpoint, "model.bin"), payload_path="model.bin")
     restore_model_tensors(model, tensors)
     return model.eval()
+
+
+def _load_makto_head(parent, head_path):
+    """在父模型的内存副本上严格恢复已封存的两个输出张量。"""
+    from werewolf.artifact_io.tensor_state import decode_tensor_container
+    from werewolf.tom.state import restore_model_tensors
+
+    head = open_artifact_envelope(head_path, expected_artifact_type="makto_deanchored_head_only",
+                                  expected_schema_version="classic7_makto_deanchored_head_only_v1")
+    m = head.manifest
+    if (head.manifest_digest != MAKTO_HEAD_DIGEST or m["parent_checkpoint_digest"] != EPOCH35_DIGEST
+            or m["temporal_artifact_digest"] != parent.temporal.artifact_digest or m["graph"] != parent.graph
+            or m["best_epoch"] != 16):
+        raise ValueError("MaKTO best head digest/parent/temporal/graph/epoch mismatch")
+    tensors = decode_tensor_container(m["best_head_tensor_container"], read_artifact_file(head, "head.bin"),
+                                      payload_path="head.bin")
+    if set(tensors) != {"output.weight", "output.bias"}:
+        raise ValueError("MaKTO best head must contain exactly output.weight and output.bias")
+    model = deepcopy(parent)
+    restore_model_tensors(model.output, {name.removeprefix("output."): tensor for name, tensor in tensors.items()})
+    return model.eval(), head
+
+
+def evaluate_ai_validation_pair(publication_path, checkpoint_path, temporal_path, head_path, output, *, device="cpu"):
+    """只对 Epoch35 已绑定的 AI Validation 进行配对诊断。"""
+    from werewolf.tom.experiment import configure_runtime, runtime_provenance
+    from werewolf.tom.qwen3_large_training import open_training_data, summarize_validation_pair, validate_pair
+
+    output = Path(output).resolve()
+    if output.exists():
+        raise FileExistsError(f"AI Validation pair report already exists: {output}")
+    if any((p / name).exists() for p in output.parents for name in ("manifest.json", "phase_codebook.manifest.json")):
+        raise ValueError("AI Validation pair report cannot be inside an immutable artifact")
+    if not output.parent.is_dir():
+        raise ValueError("AI Validation pair report needs an existing output directory")
+
+    checkpoint = _open_epoch35_checkpoint(checkpoint_path)
+    binding = checkpoint.manifest["binding"]
+    split = binding["training_split"]
+    if binding["publication_digest"] != AI_DEVELOPMENT_DIGEST or len(split["validation_game_ids"]) != AI_VALIDATION_COUNTS["games"]:
+        raise ValueError("unexpected Epoch35 AI Validation publication/game binding")
+    data = open_training_data(publication_path, publication_digest=AI_DEVELOPMENT_DIGEST,
+                              split_digest=binding["split_manifest_digest"], validation_game_ids=split["validation_game_ids"])
+    if data.split != split or data.primary.metadata != binding["population"]:
+        raise ValueError("AI Validation split or Primary identity differs from Epoch35")
+    if device not in ("cpu", "cuda") or (device == "cuda" and os.environ.get("CUBLAS_WORKSPACE_CONFIG") != ":4096:8"):
+        raise ValueError("use cpu or cuda with CUBLAS_WORKSPACE_CONFIG=:4096:8")
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                       cwd=Path(__file__).resolve().parents[2], text=True).strip()
+    runtime_config = SimpleNamespace(device=device, torch_num_threads=1, source_revision=revision)
+    configure_runtime(runtime_config)
+    torch.set_float32_matmul_precision("highest")
+    if device == "cuda":
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+
+    epoch35 = _restore_epoch35_model(checkpoint, temporal_path)
+    head_only, head = _load_makto_head(epoch35, head_path)
+    microbatch = binding["protocol"]["pre_microbatch_size"]
+    games = validate_pair(epoch35.to(device), head_only.to(device), data, pre_microbatch_size=microbatch)
+    counts = {"games": len(games), "pres": sum(g["pres"] for g in games),
+              "effective_rows": sum(g["effective_rows"] for g in games),
+              "successful_empty": sum(g["report_types"]["successful_empty"]["effective_rows"] for g in games)}
+    if counts != AI_VALIDATION_COUNTS:
+        raise ValueError(f"AI Validation population count mismatch: {counts}")
+    summary = summarize_validation_pair(games)
+    historical = checkpoint.manifest["selection"]["best_validation_kl"]
+    historical_delta = summary["epoch35_kl"] - historical
+    # 历史与本次均以 FP32 前向和 FP64 KL 计分，只允许微小设备舍入差。
+    tolerance = 1e-6
+    if not math.isclose(summary["epoch35_kl"], historical, abs_tol=tolerance, rel_tol=0.):
+        raise ValueError(f"AI Validation Epoch35 KL mismatch: {summary['epoch35_kl']} vs {historical} (atol={tolerance})")
+    result = {"analysis_type": "epoch35_makto_ai_validation_pair", "evaluation_scope": "ai_development_validation",
+              "publication_digest": data.publication.manifest_digest, "split_digest": binding["split_manifest_digest"],
+              "validation_game_ids_digest": split["validation_game_ids_digest"], "population": data.primary.metadata,
+              "epoch35_checkpoint_digest": checkpoint.manifest_digest, "makto_head_manifest_digest": head.manifest_digest,
+              "makto_head_epoch": head.manifest["best_epoch"], "head_bin_sha256": head.manifest["file_table"]["head.bin"]["sha256"],
+              "temporal_artifact_digest": binding["temporal_artifact_digest"], "graph_digest": binding["graph"]["graph_digest"],
+              "input_projection": "canonical_full_public_pre_with_terminal_turn_start", "seat_rotation": 0,
+              "direction": "KL(q||p)", "unit": "nats", "aggregation": "game_macro", "delta_direction": "head_only_minus_epoch35",
+              "numeric_precision": {"model_forward": "float32", "kl": "float64"},
+              "historical_epoch35_kl": historical, "epoch35_minus_historical_kl": historical_delta,
+              "historical_kl_absolute_tolerance": tolerance, "runtime": runtime_provenance(runtime_config),
+              "pre_microbatch_size": microbatch, "counts": counts, "per_game": games, **summary}
+    _write_record(output, result)
+    return result
 
 
 def _trainable_output_head(model):
@@ -1421,7 +1522,9 @@ def main(argv=None):
     parser.add_argument("--output", type=Path)
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--head-only", action="store_true", help="在去锚定 Train 发言 PRE 上微调 Epoch35 输出层")
-    parser.add_argument("--device", choices=("cpu", "cuda"), help="Head-only 训练设备，默认 CPU")
+    parser.add_argument("--ai-validation-pair", type=Path, metavar="HEAD_ARTIFACT",
+                        help="在原 AI Validation 配对评估 Epoch35 和指定 MaKTO Head-only Artifact")
+    parser.add_argument("--device", choices=("cpu", "cuda"), help="Head-only 训练或 AI 配对评价设备，默认 CPU")
     parser.add_argument("--teacher-reports", type=Path, help="读取已完成的去锚定 Train 发言 PRE 标签")
     parser.add_argument("--role-trial", action="store_true")
     parser.add_argument("--role-split", choices=("train", "test"), help="显式执行该分区全量；省略时仍为固定12条")
@@ -1444,12 +1547,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.teacher_reports is not None and not (args.baseline or args.head_only):
         parser.error("--teacher-reports requires --baseline or --head-only")
-    if args.device is not None and not args.head_only:
-        parser.error("--device requires --head-only")
+    if args.device is not None and not (args.head_only or args.ai_validation_pair):
+        parser.error("--device requires --head-only or --ai-validation-pair")
     if args.output is None and args.teacher_reports is None:
         parser.error("--output is required except for the speech PRE baseline")
     if args.role_trial:
-        if (args.baseline or args.head_only or args.annotations or args.split_record or args.checkpoint or args.temporal
+        if (args.baseline or args.head_only or args.ai_validation_pair or args.annotations or args.split_record or args.checkpoint or args.temporal
                 or not args.data or not args.expected_data_digest):
             parser.error("role trial requires --data/--expected-data-digest and forbids baseline/extraction arguments")
         if args.role_split and args.retrospective:
@@ -1470,6 +1573,15 @@ def main(argv=None):
     if any((args.model_directory, args.tokenizer_assets, args.environment_prefix, args.gpu_uuid,
             args.execute_live, args.retrospective, args.role_split, args.actor_counterfactual, args.omit_current_actor)):
         parser.error("teacher resource and role labeling options require --role-trial")
+    if args.ai_validation_pair:
+        if (any((args.baseline, args.head_only, args.annotations, args.teacher_reports, args.split_record, args.expected_data_digest))
+                or not all((args.data, args.checkpoint, args.temporal, args.output))):
+            parser.error("AI Validation pair requires --data/--checkpoint/--temporal/--output and the fixed AI split")
+        result = evaluate_ai_validation_pair(args.data, args.checkpoint, args.temporal, args.ai_validation_pair,
+                                             args.output, device=args.device or "cpu")
+        print(json.dumps({"output": str(args.output), **{k: v for k, v in result.items() if k != "per_game"}},
+                         ensure_ascii=False, indent=2))
+        return
     if args.head_only:
         if (args.baseline or args.annotations or args.split_record
                 or not all((args.data, args.teacher_reports, args.checkpoint, args.temporal, args.output))):

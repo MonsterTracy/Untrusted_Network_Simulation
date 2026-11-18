@@ -1393,6 +1393,181 @@ def test_head_only_rejects_a_mask_that_changes_effective_training_rows(head_only
                                    expected_data_digest=digest)
 
 
+def _publish_pair_head(path, parent, *, bad=None):
+    from werewolf.artifact_io import TensorValue, publish_artifact
+    from werewolf.artifact_io.tensor_state import encode_tensor_container
+
+    bias = torch.zeros(7)
+    bias[1] = math.log(3)
+    tensors = {"output.weight": TensorValue(torch.zeros(7, 511 if bad == "shape" else 512).numpy(), True),
+               "output.bias": TensorValue(bias.numpy(), True)}
+    if bad == "name":
+        tensors["backbone.bias"] = tensors.pop("output.bias")
+    container, payload = encode_tensor_container(tensors, payload_path="head.bin")
+    fields = {"artifact_type": "makto_deanchored_head_only", "schema_version": "classic7_makto_deanchored_head_only_v1",
+              "parent_checkpoint_digest": makto.EPOCH35_DIGEST, "graph": parent.graph,
+              "temporal_artifact_digest": parent.temporal.artifact_digest, "best_epoch": 16,
+              "best_head_tensor_container": container}
+    overrides = {"type": ("artifact_type", "unrelated_artifact"), "parent": ("parent_checkpoint_digest", "0" * 64),
+                 "temporal": ("temporal_artifact_digest", "0" * 64), "epoch": ("best_epoch", 21), "graph": ("graph", {})}
+    if bad in overrides:
+        key, value = overrides[bad]
+        fields[key] = value
+    return publish_artifact(path, manifest_fields=fields, files={"head.bin": payload})
+
+
+@pytest.mark.parametrize("bad", ["digest", "type", "parent", "temporal", "graph", "epoch", "name", "shape", "payload"])
+def test_ai_pair_rejects_unbound_or_invalid_head(tmp_path, monkeypatch, bad):
+    parent = _MockHeadOnlyModel().eval()
+    artifact = _publish_pair_head(tmp_path / "head", parent, bad=bad)
+    if bad != "digest":
+        monkeypatch.setattr(makto, "MAKTO_HEAD_DIGEST", artifact.manifest_digest)
+    if bad == "payload":
+        payload = artifact.path / "head.bin"
+        raw = payload.read_bytes()
+        payload.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
+    with pytest.raises(ValueError, match="digest|type|exactly|shape"):
+        makto._load_makto_head(parent, artifact.path)
+
+
+def test_ai_validation_pair_cli_preserves_rows_and_separates_original_empty_reports(tmp_path, monkeypatch, capsys):
+    from werewolf.structured_history import STRUCTURED_TOKEN_TYPES
+    from werewolf.tom import experiment, qwen3_large_training as large
+    from werewolf.tom.dataset import CanonicalToMSample, PublicTensors, belief_target
+
+    class PairProbe(_MockHeadOnlyModel):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+            self.bad_probability = False
+            with torch.no_grad():
+                self.output.weight.zero_()
+                self.output.bias.zero_()
+
+        def forward(self, **public):
+            assert set(public) == set(PublicTensors.__dataclass_fields__)
+            assert not self.training and torch.is_inference_mode_enabled()
+            self.calls.append(public)
+            logp = super().forward(**public)
+            if self.bad_probability:
+                logp[:, 1, 6] = -torch.inf
+            return logp
+
+    parent = PairProbe().eval()
+    original_state = deepcopy(parent.state_dict())
+    artifact = _publish_pair_head(tmp_path / "head", parent)
+    monkeypatch.setattr(makto, "MAKTO_HEAD_DIGEST", artifact.manifest_digest)
+    data_counts = {"games": 3, "pres": 4, "effective_rows": 6, "successful_empty": 1}
+    monkeypatch.setattr(makto, "AI_VALIDATION_COUNTS", data_counts)
+    monkeypatch.setattr(experiment, "configure_runtime", lambda config: None)
+    monkeypatch.setattr(experiment, "runtime_provenance", lambda config: vars(config))
+    monkeypatch.setattr(torch, "set_float32_matmul_precision", lambda value: None)
+
+    split = {"training_game_ids": ["training"], "validation_game_ids": ["a", "b", "c"],
+             "validation_game_ids_digest": "a" * 64}
+    primary = SimpleNamespace(metadata={"population_identity": "non_wolf_alive"})
+    historical = 2 * math.log(6) / 3
+    checkpoint = SimpleNamespace(manifest_digest=makto.EPOCH35_DIGEST, manifest={"selection": {"best_validation_kl": historical},
+        "binding": {"publication_digest": makto.AI_DEVELOPMENT_DIGEST, "split_manifest_digest": "b" * 64,
+                    "training_split": split, "population": primary.metadata, "graph": {"graph_digest": "d" * 64},
+                    "protocol": {"pre_microbatch_size": 1}, "temporal_artifact_digest": parent.temporal.artifact_digest}})
+    monkeypatch.setattr(makto, "_open_epoch35_checkpoint", lambda path: checkpoint if path == Path("epoch35") else pytest.fail())
+    monkeypatch.setattr(makto, "_restore_epoch35_model",
+                        lambda c, path: parent if (c, path) == (checkpoint, Path("temporal")) else pytest.fail())
+
+    sample_lists = {g: [] for g in split["validation_game_ids"]}
+    observations = {g: [] for g in sample_lists}
+    eligibility = {}
+
+    def pre(game_id, actor, roles):
+        boundary_id = f"{game_id}-{len(sample_lists[game_id])}"
+        ids = {k: torch.zeros(3, dtype=torch.long) for k in ("source_ids", "action_ids", "target_ids", "day_ids", "phase_ids")}
+        ids["source_ids"][1] = actor
+        events = torch.tensor([1, STRUCTURED_TOKEN_TYPES.index("turn_start") + 1, 0])
+        public = PublicTensors(event_ids=events, attention_mask=torch.tensor([True, True, False]), **ids)
+        q, observed, include = torch.zeros(7, 7), torch.zeros(7, dtype=torch.bool), torch.zeros(7, dtype=torch.bool)
+        for i, support, primary_row in roles:
+            q[i], observed[i] = belief_target(i, support, "success")
+            include[i] = primary_row
+            observations[game_id].append(SimpleNamespace(boundary_id=boundary_id, observer_id=makto.PLAYER_IDS[i],
+                                                         status=SimpleNamespace(value="success"), suspicion_support=support))
+        eligibility[game_id, boundary_id] = include
+        sample_lists[game_id].append(CanonicalToMSample(game_id, boundary_id, "a" * 64, "b" * 64, 2, public, q, observed, observed))
+
+    full_nonself = tuple(p for p in makto.PLAYER_IDS if p != "player4")
+    pre("a", 7, [(0, (), True), (3, full_nonself, True), (4, (), False)])
+    pre("b", 6, [(0, (), False)])
+    pre("b", 5, [(i, ("player2",), True) for i in (0, 2, 4)])
+    pre("c", 4, [(1, ("player1",), True)])
+    primary.mask = lambda g, b: eligibility[g, b]
+    publication = SimpleNamespace(manifest_digest=makto.AI_DEVELOPMENT_DIGEST, public_view=SimpleNamespace(
+        load_game=lambda game: SimpleNamespace(belief_observations=observations[game])))
+    data = SimpleNamespace(publication=publication, split=split, primary=primary, samples=sample_lists.__getitem__)
+
+    def open_data(path, **kwargs):
+        assert path == Path("development") and kwargs == {"publication_digest": makto.AI_DEVELOPMENT_DIGEST,
+            "split_digest": "b" * 64, "validation_game_ids": ["a", "b", "c"]}
+        return data
+
+    monkeypatch.setattr(large, "open_training_data", open_data)
+    other_models = []
+    open_head = makto._load_makto_head
+
+    def load_head(*args):
+        model, verified = open_head(*args)
+        other_models.append(model)
+        return model, verified
+
+    monkeypatch.setattr(makto, "_load_makto_head", load_head)
+    output = tmp_path / "result.json"
+    args = ["--ai-validation-pair", str(artifact.path), "--data", "development", "--checkpoint", "epoch35",
+            "--temporal", "temporal", "--output", str(output)]
+    makto.main(args)
+    full = json.loads(output.read_bytes())
+    stdout = json.loads(capsys.readouterr().out)
+    assert stdout == {"output": str(output), **{k: v for k, v in full.items() if k != "per_game"}}
+    assert full["counts"] == data_counts and full["game_outcomes"] == {"improved": 1, "worsened": 1, "tied": 1}
+    assert full["epoch35_kl"] == pytest.approx(historical, abs=1e-7)
+    assert full["uniform_kl"] == pytest.approx(historical, abs=1e-7)
+    deltas = [math.log(8 / 6) - math.log(3) / 6, math.log(8 / (6 * 3)), 0.]
+    assert [g["delta"] for g in full["per_game"]] == pytest.approx(deltas, abs=1e-7)
+    assert full["delta"] == pytest.approx(sum(deltas) / 3, abs=1e-7)
+    assert full["head_only_delta_percent_of_epoch35"] == pytest.approx(100 * sum(deltas) / (3 * historical), abs=1e-5)
+    assert full["paired_bootstrap"]["sampling_unit"] == "game"
+    assert full["paired_bootstrap"]["interval"] == pytest.approx([min(deltas), max(deltas)], abs=1e-7)
+    empty = full["report_types"]["successful_empty"]
+    assert empty["games"] == empty["effective_rows"] == 1 and empty["delta"] == pytest.approx(deltas[0], abs=1e-7)
+    assert full["report_types"]["successful_nonempty"]["effective_rows"] == 5
+    assert full["per_game"][1]["report_types"]["successful_empty"]["head_only_kl"] is None
+    assert sum(r["contribution_to_primary_delta"] for r in full["report_types"].values()) == pytest.approx(full["delta"])
+    other, = other_models
+    assert all(torch.equal(t, parent.state_dict()[k]) for k, t in original_state.items())
+    assert all(torch.equal(t, other.state_dict()[k]) for k, t in original_state.items() if not k.startswith("output."))
+    assert not torch.equal(parent.output.bias, other.output.bias)
+    for a, b, actor in zip(parent.calls, other.calls, (7, 5, 4), strict=True):
+        assert a["source_ids"][0, -1] == actor
+        assert all(a[k] is b[k] for k in a)
+    with pytest.raises(FileExistsError):
+        makto.main(args)
+    assert json.loads(output.read_bytes()) == full
+
+    checkpoint.manifest["selection"]["best_validation_kl"] = historical + 1e-4
+    wrong = tmp_path / "mismatch.json"
+    with pytest.raises(ValueError, match="Epoch35 KL mismatch"):
+        makto.main([*args[:-1], str(wrong)])
+    assert not wrong.exists()
+
+    monkeypatch.setattr(makto, "AI_VALIDATION_COUNTS", {**data_counts, "successful_empty": 2})
+    with pytest.raises(ValueError, match="population count mismatch"):
+        makto.main([*args[:-1], str(wrong)])
+    assert not wrong.exists()
+
+    parent.bad_probability = True
+    with pytest.raises(ValueError, match="invalid Validation log-probabilities for c"):
+        makto.main([*args[:-1], str(wrong)])
+    assert not wrong.exists()
+
+
 def _holdout_data():
     """仿真同样的游戏行数分布；不读取官方Test或真实Checkpoint。"""
     from werewolf.tom.dataset import CanonicalToMSample, PublicTensors

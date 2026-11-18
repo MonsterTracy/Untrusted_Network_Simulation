@@ -11,6 +11,7 @@ import torch
 
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact, sha256_bytes, verify_artifact
 from werewolf.artifact_io.tensor_state import decode_tensor_container
+from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.development_publication_v2 import VerifiedDevelopmentPublicationV2
 from werewolf.tom import training
 from werewolf.tom.backbone_execution import _capture, _validate_optimizer
@@ -21,7 +22,7 @@ from werewolf.tom.paper_study import attest_source
 from werewolf.tom.population import select_primary_population
 from werewolf.tom.protocol import FIELD_ENCODING, development_holdout_split, digest_fields
 from werewolf.tom.qwen3_large import Qwen3ToMLarge, graph_identity
-from werewolf.tom.scoring import row_cross_entropy, row_kl
+from werewolf.tom.scoring import paired_summary, row_cross_entropy, row_kl
 from werewolf.tom.state import restore_model_tensors
 
 
@@ -77,14 +78,19 @@ class _DevelopmentData:
         return CanonicalToMDataset(self.publication.public_view, [game_id], ExperimentCapacity(1024)).samples
 
 
-def open_training_data(path, *, publication_digest, split_digest):
-    """只接受已锚定的完整 Development V2；不打开 Collection 或 Test。"""
+def open_training_data(path, *, publication_digest, split_digest, validation_game_ids=None):
+    """锚定完整 Development V2，可只读取固定 Validation 的游戏记录。"""
+    scope = {} if validation_game_ids is None else {"game_ids": validation_game_ids}
     publication = open_development_input(path, expected_publication_digest=publication_digest,
-                                         expected_split_digest=split_digest)
+                                         expected_split_digest=split_digest, **scope)
     if not isinstance(publication, VerifiedDevelopmentPublicationV2):
         raise ValueError("Large training requires Development V2")
     view = publication.public_view
-    split = development_holdout_split(view.game_ids, development_game_ids=view.game_ids)
+    # 验证模式只以全量清单验证划分身份，实际只加载验证局的公开记录。
+    ids = view.game_ids if validation_game_ids is None else [g["game_id"] for g in publication.manifest["development_games"]]
+    split = development_holdout_split(ids, development_game_ids=ids)
+    if validation_game_ids is not None and set(view.game_ids) != set(split["validation_game_ids"]):
+        raise ValueError("Large evaluation requires the fixed Validation game set")
     if view.max_structured_token_count > 1024:
         raise ValueError("complete Development PRE exceeds Large capacity; truncation forbidden")
     return _DevelopmentData(publication, split, select_primary_population(publication))
@@ -196,6 +202,83 @@ def validate(model, data, *, pre_microbatch_size):
     if not values or not all(math.isfinite(value) for value in values):
         raise ValueError("invalid Large Validation KL")
     return math.fsum(values) / len(values)
+
+
+def validate_pair(epoch35, head_only, data, *, pre_microbatch_size):
+    """同一个原始座号微批上的三套 KL，并按原始成功报告类型标记行。"""
+    device = next(epoch35.parameters()).device
+    diagonal = torch.eye(7, dtype=torch.bool, device=device)
+    uniform = torch.full((7, 7), -math.log(6), dtype=torch.float64, device=device).masked_fill(diagonal, -torch.inf)
+    epoch35.eval()
+    head_only.eval()
+    games = []
+    with torch.inference_mode():
+        for game_id in data.split["validation_game_ids"]:
+            samples = data.samples(game_id)
+            masks, count = _effective_masks(samples, lambda sample: _primary_mask(data, sample))
+            observations = data.publication.public_view.load_game(game_id).belief_observations
+            empty = {(o.boundary_id, o.observer_id) for o in observations
+                     if o.status.value == "success" and not o.suspicion_support}
+            empty_rows = torch.tensor([(s.boundary_id, PLAYER_IDS[i]) in empty
+                                       for s, mask in zip(samples, masks, strict=True)
+                                       for i in mask.nonzero().flatten().tolist()], dtype=torch.bool)
+            scores = []
+            for public, q, mask in _microbatches(samples, masks, pre_microbatch_size, device, 0):
+                seats = mask.nonzero(as_tuple=True)[1]
+                self_seats = diagonal[seats]
+                q = q[mask].double()
+                values = [row_kl(uniform[seats], q)]
+                for model in (epoch35, head_only):
+                    logp = model(**public)[mask]
+                    if (logp.dtype != torch.float32 or not torch.isfinite(logp[~self_seats]).all()
+                            or not torch.isneginf(logp[self_seats]).all()):
+                        raise ValueError(f"invalid Validation log-probabilities for {game_id}")
+                    values.append(row_kl(logp.double(), q))
+                scores.append(torch.stack(values, dim=-1))
+            values = torch.cat(scores).cpu()
+            if not torch.isfinite(values).all():
+                raise ValueError(f"nonfinite Validation KL for {game_id}")
+            groups = {"successful_empty": values[empty_rows], "successful_nonempty": values[~empty_rows]}
+            games.append({"game_id": game_id, "pres": len(samples), "effective_rows": count,
+                          **_validation_kl_means(values), "report_types": {
+                              name: {"effective_rows": len(rows), **_validation_kl_means(rows)}
+                              for name, rows in groups.items()}})
+    return games
+
+
+def _validation_kl_means(rows):
+    uniform, epoch35, head = rows.mean(0).tolist() if len(rows) else (None, None, None)
+    return {"uniform_kl": uniform, "epoch35_kl": epoch35, "head_only_kl": head,
+            "delta": head - epoch35 if len(rows) else None}
+
+
+def summarize_validation_pair(games):
+    """主指标对游戏等权；分层仅对存在该类报告的游戏等权。"""
+    def macro(records):
+        keys = ("uniform_kl", "epoch35_kl", "head_only_kl", "delta")
+        return {k: math.fsum(r[k] for r in records) / len(records) if records else None for k in keys}
+
+    result = macro(games)
+    report_types = {}
+    for name in ("successful_empty", "successful_nonempty"):
+        pairs = [(g, g["report_types"][name]) for g in games if g["report_types"][name]["effective_rows"]]
+        records = [r for _, r in pairs]
+        # 回到完整 Primary 的局内分母，使两类贡献恰好相加为总差值。
+        report_types[name] = {"games": len(records), "effective_rows": sum(r["effective_rows"] for r in records),
+                              **macro(records), "contribution_to_primary_delta": math.fsum(
+                                  r["delta"] * r["effective_rows"] / g["effective_rows"] for g, r in pairs) / len(games)}
+    seed, replicates = 20260928, 10_000
+    rng = np.random.Generator(np.random.PCG64(seed))
+    indices = rng.integers(len(games), size=(replicates, len(games)), dtype=np.int32)
+    bootstrap = paired_summary([g["head_only_kl"] for g in games], [g["epoch35_kl"] for g in games], indices, .95)
+    return {**result, "epoch35_improvement_over_uniform_percent": 100 * (result["uniform_kl"] - result["epoch35_kl"]) / result["uniform_kl"],
+            "head_only_delta_percent_of_epoch35": 100 * result["delta"] / result["epoch35_kl"],
+            "game_outcomes": {"improved": sum(g["delta"] < 0 for g in games),
+                              "worsened": sum(g["delta"] > 0 for g in games),
+                              "tied": sum(g["delta"] == 0 for g in games)},
+            "paired_bootstrap": {**bootstrap, "seed": seed, "replicates": replicates, "rng": "PCG64",
+                                 "indices_digest": sha256_bytes(indices.astype("<i4", copy=False).tobytes())},
+            "report_types": report_types}
 
 
 def _selection(history, data, protocol):
