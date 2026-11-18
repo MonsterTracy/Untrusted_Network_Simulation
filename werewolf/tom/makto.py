@@ -61,6 +61,13 @@ ROLE_BELIEF_TRIAL_REQUESTS = (
 )
 ROLE_BELIEF_TRIAL_DIGEST = "5d33f9eaea0057469169b9374fae33e392b5d46a9e1b836090f2918123332f4b"
 ROLE_SPLIT_COUNTS = {"train": 706, "test": 175}
+DEANCHORED_DATA_DIGEST = "9321676114a83c053a6e2311b060025ce5652368f470f52d3158576e661c3579"
+DEANCHORED_REQUEST_DIGEST = "493d4bed2de5741cc60566ecb0a91adf75f696ede86f1d2234cdd547414f6bd2"
+DEANCHORED_VALIDATION_GAMES = (31, 34, 37, 38)
+DEANCHORED_REPORT_COUNTS = {
+    "training": {"nonempty": 405, "empty": 155, "failed": 6},
+    "validation": {"nonempty": 107, "empty": 31, "failed": 2},
+}
 TEACHER_MODEL_DIRECTORY = Path("/data/yuxiao/models/Qwen3-8B-b968826d9c46dd6066d109eabc6255188de91218")
 TEACHER_TOKENIZER_ASSETS = Path("/data/yuxiao/models/tokenizer-assets/qwen3")
 TEACHER_ENVIRONMENT_PREFIX = Path("/data/yuxiao/envs/untrusted-network-simulation-tom-baseline")
@@ -350,6 +357,13 @@ def role_belief_view(payload, boundary, observer_id):
             "known_werewolves": wolves, "known_non_werewolves": non_wolves}
 
 
+def _completed_public_events(events):
+    """只移除末尾尚未发言的轮次提示；此前发言及其起始事件完整保留。"""
+    if not events or events[-1]["event_type"] != "turn_start":
+        raise ValueError("actor omission requires the immediate speech boundary")
+    return events[:-1]
+
+
 def build_role_belief_request(view, *, public_game=None, omit_current_actor=False):
     """逐三元组构造消息；回溯只额外接收已投影的公开游戏，不接收原始全局记录。"""
     observer = view["observer_id"]
@@ -381,12 +395,10 @@ def build_role_belief_request(view, *, public_game=None, omit_current_actor=Fals
     prompt_version = ROLE_BELIEF_PROMPT
     report_context = "这是独立重建请求；没有此前对话或私人记忆，回答不会用于公开发言或回写游戏。"
     if omit_current_actor:
-        if (public_game is not None or not events or events[-1]["event_type"] != "turn_start"
-                or events[-1]["speaker"] != view["current_public_actor"]):
+        if public_game is not None or not events or events[-1].get("speaker") != view["current_public_actor"]:
             raise ValueError("actor omission requires the immediate speech boundary")
-        # 只移除本次发言前最后一个轮次提示，保留此前所有公开事件与本人知识。
+        events = _completed_public_events(events)
         del private["current_public_actor"]
-        events = events[:-1]
         prompt_version = ROLE_BELIEF_WITHOUT_ACTOR_PROMPT
         report_context += ("可以根据当时合法可见的信息报告尚不确定的相对怀疑。"
                            "不要随意猜测或为了填满答案枚举名单；没有具体怀疑且无必含对象时，报告空集合。")
@@ -465,12 +477,8 @@ def parse_role_belief_response(raw_response, view, *, preserve_empty=False):
             "q": q, "observed": observed, "error": error}
 
 
-def role_trial_inputs(data, expected_digest, *, retrospective=False, split=None):
-    """默认固定12条；显式分区只读取该区原始游戏，不读取投票代理标签。"""
-    if split is not None and split not in ROLE_SPLIT_COUNTS:
-        raise ValueError("role split must be train or test")
-    if split is not None and retrospective:
-        raise ValueError("full split requires the original immediate role prompt")
+def _load_speech_pre_games(data, expected_digest, split, game_numbers):
+    """标注与数据集共用发言边界和 V1 公开发言动作来源。"""
     envelope = open_artifact_envelope(data, expected_artifact_type="makto_proxy_belief", expected_schema_version=VERSION)
     if envelope.manifest_digest != expected_digest or envelope.manifest["revision"] != REVISION:
         raise ValueError("MaKTO trial data identity mismatch")
@@ -478,23 +486,23 @@ def role_trial_inputs(data, expected_digest, *, retrospective=False, split=None)
     for line in read_artifact_file(envelope, "annotations.jsonl").splitlines():
         row = json.loads(line)
         key = row.pop("key")
-        if key.startswith(f"raw/{split or 'train'}/"):
+        if key.startswith(f"raw/{split}/"):
             annotations[key] = row
     games = {}
+    for game in game_numbers:
+        path = f"raw/{split}/7_player_game/seer_witch/game_{game}/event_zh.json"
+        payload = read_artifact_file(envelope, path)
+        public_game, boundaries, _ = extract_game(path, payload, annotations, speech_pre=True)
+        games[game] = payload, public_game, {b["source_index"]: b for b in boundaries}
+    return games
 
-    def load_game(game):
-        if game not in games:
-            path = f"raw/{split or 'train'}/7_player_game/seer_witch/game_{game}/event_zh.json"
-            payload = read_artifact_file(envelope, path)
-            public_game, boundaries, _ = extract_game(path, payload, annotations, speech_pre=True)
-            games[game] = payload, public_game, {b["source_index"]: b for b in boundaries}
-        return games[game]
 
+def _speech_pre_requests(games, *, split, retrospective=False, omit_current_actor=False):
     positions = ROLE_BELIEF_TRIAL_REQUESTS
     if split is not None:
         positions = []
         for game in SPLITS[split]:
-            payload, _, boundaries = load_game(game)
+            payload, _, boundaries = games[game]
             roles = {e["content"]["player"]: e["content"]["role"] for e in json.loads(payload) if e["event"] == "roles"}
             for index, boundary in boundaries.items():
                 if boundary["input_problems"] or boundary["alive"] is None:
@@ -507,15 +515,26 @@ def role_trial_inputs(data, expected_digest, *, retrospective=False, split=None)
 
     inputs, instant_requests = [], []
     for game, index, observer in positions:
-        payload, public_game, boundaries = load_game(game)
+        payload, public_game, boundaries = games[game]
         view = role_belief_view(payload, boundaries[index], observer)
-        request = build_role_belief_request(view)
+        request = build_role_belief_request(view, omit_current_actor=omit_current_actor)
         instant_requests.append(request)
         inputs.append({"view": view, "request": build_role_belief_request(view, public_game=public_game)
                        if retrospective else request})
     if split is None and sha256_bytes(canonical_json_bytes(instant_requests)) != ROLE_BELIEF_TRIAL_DIGEST:
         raise ValueError("approved twelve requests changed")
     return inputs
+
+
+def role_trial_inputs(data, expected_digest, *, retrospective=False, split=None):
+    """默认固定12条；显式分区只读取该区原始游戏，不读取投票代理标签。"""
+    if split is not None and split not in ROLE_SPLIT_COUNTS:
+        raise ValueError("role split must be train or test")
+    if split is not None and retrospective:
+        raise ValueError("full split requires the original immediate role prompt")
+    game_numbers = SPLITS[split] if split else dict.fromkeys(game for game, _, _ in ROLE_BELIEF_TRIAL_REQUESTS)
+    games = _load_speech_pre_games(data, expected_digest, split or "train", game_numbers)
+    return _speech_pre_requests(games, split=split, retrospective=retrospective)
 
 
 def check_role_trial_inputs(inputs, spec, tokenizer_assets, environment_prefix, work_directory):
@@ -1012,6 +1031,129 @@ class MaKTOToMDataset:
         return self.samples[index]
 
 
+def _read_deanchored_reports(payload, data_digest, inputs):
+    """按原发送顺序核验落盘请求及原始响应，保留失败，不从汇总表推断标签。"""
+    from werewolf.tom_llm.common import strict_json
+    from werewolf.tom_llm.model_spec import ModelSpec
+
+    records = [strict_json(line) for line in payload.splitlines()]
+    if (len(records) != 3 * len(inputs) + 3 or records[0]["event"] != "prepared"
+            or records[1]["event"] != "service" or records[-1]["event"] != "summary"):
+        raise ValueError("deanchored Train log must have a complete dispatch, response and result for every request")
+    spec = ModelSpec("qwen3")
+    model = spec.record()
+    digest = sha256_bytes(canonical_json_bytes([item["request"] for item in inputs]))
+    identity = {"dataset_digest": data_digest, "data_split": "train",
+                "labeling_method": ROLE_BELIEF_WITHOUT_ACTOR_PROMPT, "model": model["model"],
+                "revision": model["revision"], "model_spec_digest": spec.digest, "request_sequence_digest": digest}
+    prepared = records[0]
+    if (digest != DEANCHORED_REQUEST_DIGEST or any(prepared.get(k) != v for k, v in identity.items())
+            or prepared.get("inputs") != inputs):
+        raise ValueError("deanchored Train request identity mismatch")
+    token_counts = prepared["checks"]["input_token_counts"]
+    if len(token_counts) != len(inputs):
+        raise ValueError("deanchored Train input token count coverage mismatch")
+
+    reports = []
+    seen = set()
+    for ordinal, item in enumerate(inputs):
+        offset = 2 + 3 * ordinal
+        dispatch, received, saved = records[offset:offset + 3]
+        view = item["view"]
+        key = tuple(view[k] for k in ("game_id", "boundary_id", "observer_id"))
+        wire_digest = sha256_bytes(canonical_json_bytes(_role_trial_wire(item["request"], model)))
+        if (key in seen or any(row.get("ordinal") != ordinal or row.get("event") != event
+                for row, event in zip((dispatch, received, saved), ("dispatch", "received", "result"), strict=True))
+                or tuple(dispatch.get(k) for k in ("game_id", "boundary_id", "observer_id")) != key
+                or dispatch.get("request_digest") != wire_digest):
+            raise ValueError(f"deanchored Train dispatch/response identity mismatch at {ordinal}: {key}")
+        seen.add(key)
+        report = role_trial_reply(received["raw_response"], view, model["model"], token_counts[ordinal],
+                                  preserve_empty=True)
+        if saved != {"event": "result", "ordinal": ordinal, **report}:
+            raise ValueError(f"deanchored Train parsed result mismatch at {ordinal}: {key}")
+        reports.append(report)
+    return reports
+
+
+class MaKTOSpeechPREToMDataset:
+    """固定 Train 游戏与真实教师 JSONL；学生样本只含投影后的公开输入及目标。"""
+
+    def __init__(self, path, teacher_reports, *, expected_data_digest=DEANCHORED_DATA_DIGEST,
+                 capacity=ExperimentCapacity(1024)):
+        if capacity.max_seq_len > 1024:
+            raise ValueError("MaKTO speech PRE capacity cannot exceed 1024")
+        games = _load_speech_pre_games(path, expected_data_digest, "train", SPLITS["train"])
+        inputs = _speech_pre_requests(games, split="train", omit_current_actor=True)
+        payload = teacher_reports if isinstance(teacher_reports, bytes) else Path(teacher_reports).read_bytes()
+        reports = _read_deanchored_reports(payload, expected_data_digest, inputs)
+        self.source_digest = expected_data_digest
+        self.teacher_reports_digest = sha256_bytes(payload)
+        self.capacity = capacity
+        self.samples, self.report_status, self.game_counts = [], {}, {}
+        self.validation_game_ids = tuple(games[n][1]["game_id"] for n in DEANCHORED_VALIDATION_GAMES)
+        self.training_game_ids = tuple(game["game_id"] for _, game, _ in games.values()
+                                       if game["game_id"] not in self.validation_game_ids)
+        by_boundary = {}
+        for report in reports:
+            by_boundary.setdefault((report["game_id"], report["boundary_id"]), []).append(report)
+
+        for _, game, boundaries in games.values():
+            game_id = game["game_id"]
+            actions = {event_id: tuple(V1SpeechAction(*row) for row in rows)
+                       for event_id, rows in game["speech_actions"].items()}
+            counts = self.game_counts[game_id] = {"pres": 0, "nonempty": 0, "empty": 0, "failed": 0}
+            for boundary in boundaries.values():
+                if boundary["plan"] is None:
+                    continue
+                boundary_id = boundary["boundary_id"]
+                events = _completed_public_events(boundary["public_events"])
+                prefix_digest = sha256_bytes(canonical_json_bytes({"game_id": game_id, "boundary_id": boundary_id,
+                                                                    "public_events": events}))
+                speech_actions = {event["event_id"]: actions[event["event_id"]]
+                                  for event in events if event["event_type"] == "public_speech"}
+                plan = plan_public_history(freeze_public_event_history(events), speech_actions,
+                                           boundary_digest=prefix_digest)
+                if not 0 < plan.token_count <= capacity.max_seq_len:
+                    raise ValueError(f"{boundary_id} has {plan.token_count} tokens for capacity {capacity.max_seq_len}")
+                q = torch.zeros(7, 7, dtype=torch.float32)
+                nonempty = torch.zeros(7, dtype=torch.bool)
+                for report in by_boundary.get((game_id, boundary_id), ()):
+                    observer = report["observer_id"]
+                    support = report["suspected_werewolves"]
+                    status = "failed" if not report["observed"] else "nonempty" if support else "empty"
+                    self.report_status[game_id, boundary_id, observer] = status
+                    counts[status] += 1
+                    if status == "nonempty":
+                        seat = PLAYER_IDS.index(observer)
+                        q[seat] = torch.tensor(report["q"], dtype=q.dtype)
+                        nonempty[seat] = True
+                self.samples.append(CanonicalToMSample(game_id, boundary_id, prefix_digest, plan.plan_digest,
+                    plan.token_count, tensorize_structured_plan(plan, capacity), q, nonempty,
+                    torch.tensor(boundary["alive"], dtype=torch.bool)))
+                counts["pres"] += 1
+
+        zero = [game_id for game_id, counts in self.game_counts.items() if not counts["nonempty"]]
+        if zero:
+            raise ValueError(f"zero effective nonempty reports for games: {', '.join(zero)}")
+        partition = {"training": self.training_game_ids, "validation": self.validation_game_ids}
+        self.partition_counts = {name: {status: sum(self.game_counts[g][status] for g in game_ids)
+                                       for status in ("nonempty", "empty", "failed")}
+                                 for name, game_ids in partition.items()}
+        if len(self.report_status) != len(reports) or self.partition_counts != DEANCHORED_REPORT_COUNTS:
+            raise ValueError(f"deanchored Train/Validation report counts mismatch: {self.partition_counts}")
+
+    def effective_mask(self, sample):
+        """label_observed 表示分布目标有效；原始空报告与失败状态由 report_status 单独保存。"""
+        return sample.label_observed & sample.observer_alive
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        return self.samples[index]
+
+
 def internal_split(data):
     """仅按Train的监督行数分层，再用固定哈希一次选定整局Validation。"""
     if data.split != "train":
@@ -1045,12 +1187,15 @@ def internal_split(data):
 
 def validation_scores(data, split, model=None):
     """同一Mask逐行KL、局内平均后游戏等权；不更新模型或优化器。"""
-    from werewolf.tom.scoring import row_kl
-
     if split != internal_split(data):
         raise ValueError("internal split identity mismatch")
-    totals = {g: {"rows": 0, "uniform": 0., "model": 0.}
-              for g in split["validation_game_ids"]}
+    return _game_macro_validation_scores(data, split["validation_game_ids"], model)
+
+
+def _game_macro_validation_scores(data, validation_game_ids, model):
+    from werewolf.tom.scoring import row_kl
+
+    totals = {g: {"rows": 0, "uniform": 0., "model": 0.} for g in validation_game_ids}
     identity = []
     was_training = model.training if model is not None else None
     try:
@@ -1144,8 +1289,9 @@ def _write_record(path, record):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--annotations", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--baseline", action="store_true")
+    parser.add_argument("--teacher-reports", type=Path, help="使用已完成的去锚定 Train 发言 PRE 标签计算基线")
     parser.add_argument("--role-trial", action="store_true")
     parser.add_argument("--role-split", choices=("train", "test"), help="显式执行该分区全量；省略时仍为固定12条")
     parser.add_argument("--retrospective", action="store_true", help="在同一12条试验入口使用完整公开对局回溯标注")
@@ -1165,6 +1311,10 @@ def main(argv=None):
     parser.add_argument("--temporal", type=Path)
     parser.add_argument("--expected-data-digest")
     args = parser.parse_args(argv)
+    if args.teacher_reports is not None and not args.baseline:
+        parser.error("--teacher-reports requires --baseline")
+    if args.output is None and args.teacher_reports is None:
+        parser.error("--output is required except for the speech PRE baseline")
     if args.role_trial:
         if (args.baseline or args.annotations or args.split_record or args.checkpoint or args.temporal
                 or not args.data or not args.expected_data_digest):
@@ -1188,10 +1338,38 @@ def main(argv=None):
             args.execute_live, args.retrospective, args.role_split, args.actor_counterfactual, args.omit_current_actor)):
         parser.error("teacher resource and role labeling options require --role-trial")
     if args.baseline:
-        if args.annotations is not None or args.data is None or args.split_record is None:
-            parser.error("baseline requires --data/--split-record and forbids --annotations")
+        if args.annotations is not None or args.data is None:
+            parser.error("baseline requires --data and forbids --annotations")
         if bool(args.checkpoint) != bool(args.temporal):
             parser.error("--checkpoint and --temporal must be supplied together")
+        if args.teacher_reports is not None:
+            if args.split_record is not None:
+                parser.error("speech PRE baseline uses a fixed game split without --split-record")
+            data = MaKTOSpeechPREToMDataset(args.data, args.teacher_reports,
+                                           expected_data_digest=args.expected_data_digest or DEANCHORED_DATA_DIGEST)
+            model = load_epoch35_model(args.checkpoint, args.temporal) if args.checkpoint else None
+            lengths = Counter(s.token_count for s in data)
+            result = {
+                "labeling_method": ROLE_BELIEF_WITHOUT_ACTOR_PROMPT,
+                "dataset_digest": data.source_digest, "teacher_reports_digest": data.teacher_reports_digest,
+                "request_sequence_digest": DEANCHORED_REQUEST_DIGEST,
+                "checkpoint_digest": EPOCH35_DIGEST if model is not None else None,
+                "epoch35_status": "PASS" if model is not None else "NOT_RUN",
+                "evaluation_code_digest": sha256_bytes(Path(__file__).read_bytes()),
+                "target_condition": "successful_nonempty_teacher_reports",
+                "training_game_ids": data.training_game_ids, "validation_game_ids": data.validation_game_ids,
+                "partition_counts": data.partition_counts, "game_counts": data.game_counts,
+                "structured_tokens": {"pres": len(data), "capacity": data.capacity.max_seq_len,
+                                      "min": min(lengths), "max": max(lengths),
+                                      "length_histogram": {str(length): lengths[length] for length in sorted(lengths)}},
+                **_game_macro_validation_scores(data, data.validation_game_ids, model),
+            }
+            if args.output is not None:
+                _write_record(args.output, result)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        if args.split_record is None:
+            parser.error("vote proxy baseline requires --split-record")
         if args.output.absolute() == args.split_record.absolute():
             parser.error("split and baseline records must use different paths")
         data = MaKTOToMDataset(args.data, "train")

@@ -1086,6 +1086,158 @@ def test_artifact_split_reader_partial_mask_tensors_and_no_overwrite(tmp_path, m
     assert sha256_bytes((output / "manifest.json").read_bytes()) == before
 
 
+@pytest.fixture
+def speech_pre_reports(monkeypatch):
+    """用五局合成 Train 演示三种报告状态；不接触官方 Test 或真实服务。"""
+    from werewolf.tom_llm.model_spec import ModelSpec
+
+    numbers = (21, 31, 34, 37, 38)
+    events, _, _ = _role_fixture()
+    speech_index = next(i for i, event in enumerate(events) if event["event"] == "speech")
+    events.insert(speech_index + 1, {"event": "speech", "content": {
+        "player": 3, "day": "1-1", "context": "第二条公开发言"}})
+    raw_games = {f"raw/train/7_player_game/seer_witch/game_{g}/event_zh.json": canonical_json_bytes(events)
+                 for g in numbers}
+    files = {**raw_games, "annotations.jsonl": makto.canonical_jsonl_bytes(
+        {"key": key, **value} for key, value in _annotations(raw_games).items())}
+    digest = "f" * 64
+    monkeypatch.setitem(makto.SPLITS, "train", numbers)
+    monkeypatch.setitem(makto.ROLE_SPLIT_COUNTS, "train", 50)
+    monkeypatch.setattr(makto, "open_artifact_envelope", lambda *a, **kw: SimpleNamespace(
+        manifest_digest=digest, manifest={"revision": makto.REVISION}))
+    reads = []
+
+    def read_train_only(envelope, path):
+        assert path in files
+        reads.append(path)
+        return files[path]
+
+    monkeypatch.setattr(makto, "read_artifact_file", read_train_only)
+    inputs = makto.role_trial_inputs("train-artifact", digest, split="train")
+    for item in inputs:
+        item["request"] = makto.build_role_belief_request(item["view"], omit_current_actor=True)
+    sequence = sha256_bytes(canonical_json_bytes([item["request"] for item in inputs]))
+    monkeypatch.setattr(makto, "DEANCHORED_REQUEST_DIGEST", sequence)
+    monkeypatch.setattr(makto, "DEANCHORED_REPORT_COUNTS", {
+        "training": {"nonempty": 2, "empty": 6, "failed": 2},
+        "validation": {"nonempty": 9, "empty": 23, "failed": 8},
+    })
+    spec = ModelSpec("qwen3")
+    model = spec.record()
+    records = [{"event": "prepared", "data_split": "train", "dataset_digest": digest,
+                "labeling_method": makto.ROLE_BELIEF_WITHOUT_ACTOR_PROMPT, "inputs": inputs,
+                "checks": {"input_token_counts": [100] * len(inputs)}, "request_sequence_digest": sequence,
+                "model": model["model"], "revision": model["revision"], "model_spec_digest": spec.digest},
+               {"event": "service"}]
+    for ordinal, item in enumerate(inputs):
+        view = item["view"]
+        observer = view["observer_id"]
+        game31 = view["game_id"].endswith("game_31")
+        second = view["boundary_id"].endswith(f"speech-pre-{speech_index + 1}")
+        support = []
+        if observer == "player5" or (observer == "player4" and game31 and second):
+            support = ["player1"] if game31 else ["player1", "player2"]
+        raw = _teacher_reply(json.dumps({"suspected_werewolves": support}))
+        records.extend([
+            {"event": "dispatch", "ordinal": ordinal, **{k: view[k] for k in ("game_id", "boundary_id", "observer_id")},
+             "request_digest": sha256_bytes(canonical_json_bytes(makto._role_trial_wire(item["request"], model)))},
+            {"event": "received", "ordinal": ordinal, "raw_response": raw},
+            {"event": "result", "ordinal": ordinal, **makto.role_trial_reply(raw, view, model["model"], 100,
+                                                                            preserve_empty=True)},
+        ])
+    records.append({"event": "summary"})
+    reads.clear()
+    return digest, records, reads
+
+
+def test_speech_pre_dataset_replans_public_input_and_separates_empty_and_failure(speech_pre_reports):
+    from werewolf.structured_history import STRUCTURED_TOKEN_TYPES
+
+    digest, records, reads = speech_pre_reports
+    data = makto.MaKTOSpeechPREToMDataset("train-artifact", makto.canonical_jsonl_bytes(records),
+                                         expected_data_digest=digest)
+    assert len(data) == 10 and len(data.report_status) == 50
+    assert reads[0] == "annotations.jsonl" and len(reads) == 6
+    assert all(path.startswith("raw/train/") for path in reads[1:])
+    assert len(data.training_game_ids) == 1
+    assert [g.rsplit("/", 1)[-1] for g in data.validation_game_ids] == ["game_31", "game_34", "game_37", "game_38"]
+    assert set(data.training_game_ids).isdisjoint(data.validation_game_ids)
+    first, second = data[0], data[1]
+    first_key = first.game_id, first.boundary_id
+    assert data.report_status[*first_key, "player3"] == "failed"
+    assert data.report_status[*first_key, "player4"] == "empty"
+    assert data.report_status[*first_key, "player5"] == "nonempty"
+    assert data.effective_mask(first).tolist() == [False, False, False, False, True, False, False]
+    assert first.q[4].tolist() == [.5, .5, 0., 0., 0., 0., 0.]
+    assert torch.count_nonzero(first.q[2:4]) == 0
+    assert first.token_count == 3 and first.public.attention_mask.sum().item() == 3
+    assert not first.public.source_ids.any() and not first.public.target_ids.any()
+    assert first.prefix_digest != records[0]["inputs"][0]["view"]["public_history_digest"]
+    turn_start = STRUCTURED_TOKEN_TYPES.index("turn_start") + 1
+    speech = STRUCTURED_TOKEN_TYPES.index("public_speech") + 1
+    assert second.public.source_ids[second.public.event_ids == turn_start].tolist() == [3]
+    assert second.public.source_ids[second.public.event_ids == speech].tolist() == [3]
+    assert second.token_count == first.token_count + 4
+    assert second.public.attention_mask.sum().item() == second.token_count
+
+
+@pytest.mark.parametrize("problem, error", [("dispatch", "dispatch/response identity"), ("result", "parsed result mismatch"),
+                                             ("capacity", "tokens for capacity"), ("zero", "zero effective.*game_31")])
+def test_speech_pre_dataset_rejects_bad_pairing_and_unscorable_fixed_games(speech_pre_reports, problem, error):
+    digest, records, _ = speech_pre_reports
+    cap = ExperimentCapacity(1 if problem == "capacity" else 1024)
+    if problem == "dispatch":
+        records[2]["observer_id"] = "player7"
+    elif problem == "result":
+        records[4]["observer_id"] = "player7"
+    elif problem == "zero":
+        for i, record in enumerate(records):
+            if record["event"] == "result" and record["game_id"].endswith("game_31") and record["suspected_werewolves"]:
+                raw = _teacher_reply('{"suspected_werewolves":[]}')
+                records[i - 1]["raw_response"] = raw
+                view = records[0]["inputs"][record["ordinal"]]["view"]
+                records[i] = {**record, **makto.role_trial_reply(raw, view, "Qwen/Qwen3-8B", 100, preserve_empty=True)}
+    with pytest.raises(ValueError, match=error):
+        makto.MaKTOSpeechPREToMDataset("train-artifact", makto.canonical_jsonl_bytes(records),
+                                       expected_data_digest=digest, capacity=cap)
+
+
+def test_speech_pre_epoch35_baseline_uses_fixed_conditional_game_macro_kl(speech_pre_reports, tmp_path, monkeypatch, capsys):
+    digest, records, _ = speech_pre_reports
+    reports, output = tmp_path / "teacher.jsonl", tmp_path / "baseline.json"
+    reports.write_bytes(makto.canonical_jsonl_bytes(records))
+    loads = []
+
+    class MockEpoch35(torch.nn.Module):
+        def forward(self, **public):
+            assert not self.training and not torch.is_grad_enabled()
+            assert set(public) == {"event_ids", "source_ids", "action_ids", "target_ids", "day_ids", "phase_ids", "attention_mask"}
+            weights = torch.ones((1, 7, 7), dtype=torch.float64)
+            weights[:, :, 0] = 3.
+            weights[0].fill_diagonal_(0.)
+            return (weights / weights.sum(-1, keepdim=True)).log()
+
+    def load(checkpoint, temporal):
+        loads.append((checkpoint, temporal))
+        return MockEpoch35()
+
+    monkeypatch.setattr(makto, "load_epoch35_model", load)
+    monkeypatch.setattr(makto, "internal_split", lambda *a: pytest.fail("speech PRE must use its fixed game split"))
+    makto.main(["--baseline", "--teacher-reports", str(reports), "--data", "train-artifact",
+                "--expected-data-digest", digest, "--checkpoint", "epoch35", "--temporal", "temporal", "--output", str(output)])
+    result = json.loads(capsys.readouterr().out)
+    assert json.loads(output.read_bytes()) == result
+    assert loads == [(Path("epoch35"), Path("temporal"))]
+    assert result["target_condition"] == "successful_nonempty_teacher_reports"
+    assert [g["effective_rows"] for g in result["games"]] == [3, 2, 2, 2]
+    uniform = (math.log(6) + 3 * math.log(3)) / 4
+    epoch35 = (math.log(8 / 3) + 3 * (.5 * math.log(16 / 3))) / 4
+    assert result["uniform_kl"] == pytest.approx(uniform)
+    assert result["epoch35_kl"] == pytest.approx(epoch35)
+    assert result["absolute_difference_epoch35_minus_uniform"] == pytest.approx(epoch35 - uniform)
+    assert result["relative_difference"] == pytest.approx((epoch35 - uniform) / uniform)
+
+
 def _holdout_data():
     """仿真同样的游戏行数分布；不读取官方Test或真实Checkpoint。"""
     from werewolf.tom.dataset import CanonicalToMSample, PublicTensors
