@@ -21,12 +21,12 @@ from werewolf.artifact_io import (
 )
 from werewolf.cli import _artifact_path, _storage_root
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from werewolf import phase2_offline as offline
-from werewolf.phase2_mapper import (
+from werewolf.interventions import offline
+from werewolf.interventions.mapper.model import (
     FEATURE_CONTRACT_VERSION, FOLDS, MODEL_SPECS, OOFProvenance, MapperPrediction,
     PROBABILITY_EPSILON, _log_loss,
 )
-from werewolf.phase2_mapper_selection import (
+from werewolf.interventions.mapper.selection import (
     _GamePanel, _draw_game_multiplicities, _weighted_metrics, percentile_interval,
 )
 from scripts.run_phase2_mapper_study import EXPERIMENT_A_VERSION
@@ -40,8 +40,8 @@ METRICS = ("pooled_log_loss", "pooled_brier", "game_macro_log_loss", "game_macro
 METRIC_CONTRACT = {"primary": METRICS[0], "secondary": list(METRICS[1:]),
                    "contrasts": {"A1": "implicit - explicit", "A2": "hard_top1 - continuous"}}
 SOURCE_FILES = ("scripts/experiment_a_mapper_contrasts.py", "scripts/run_phase2_mapper_study.py",
-                "werewolf/phase2_mapper_selection.py", "werewolf/phase2_mapper.py",
-                "werewolf/phase2_offline.py", "werewolf/phase2_q_representation.py",
+                "werewolf/interventions/mapper/selection.py", "werewolf/interventions/mapper/model.py",
+                "werewolf/interventions/offline.py", "werewolf/interventions/mapper/q_representation.py",
                 "werewolf/tom/backbone_evaluation.py", "werewolf/artifact_io/canonical.py",
                 "werewolf/cli.py")
 KERNELS = ("_draw_game_multiplicities", "_weighted_metrics", "percentile_interval")
@@ -79,9 +79,9 @@ def _analysis_source():
     return {"source_revision": revision, "source_sha256": inventory,
             "implementation_digest": _digest(inventory),
             "bootstrap_implementation_digest": _digest({"helpers": KERNELS,
-                "kernel_sha256": inventory["werewolf/phase2_mapper_selection.py"],
+                "kernel_sha256": inventory["werewolf/interventions/mapper/selection.py"],
                 "consumer_sha256": inventory[SOURCE_FILES[0]],
-                "metric_sha256": inventory["werewolf/phase2_mapper.py"]})}
+                "metric_sha256": inventory["werewolf/interventions/mapper/model.py"]})}
 
 
 def _load(root, expected_digest, condition, storage_root):

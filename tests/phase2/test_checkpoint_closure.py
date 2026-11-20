@@ -6,13 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from tests.phase2.test_decision_opportunity import opportunity
-from werewolf.phase2_actions import Action
-from werewolf.phase2_intervention import (
+from werewolf.interventions.actions import Action
+from werewolf.interventions.intervention import (
     CHECKPOINT_BLOCKERS, CheckpointUnavailable,
     assess_phase2_checkpoint_closure,
     validate_treatment_checkpoint_binding,
 )
-from werewolf.phase2_treatment import build_phase2_treatment
+from werewolf.interventions.treatment import build_phase2_treatment
 
 
 def live_slot(opp):

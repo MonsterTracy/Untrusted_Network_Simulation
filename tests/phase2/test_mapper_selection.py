@@ -6,8 +6,8 @@ import math
 import numpy as np
 import pytest
 
-from werewolf.phase2_mapper import MODEL_SPECS, MapperPrediction
-from werewolf.phase2_mapper_selection import (
+from werewolf.interventions.mapper.model import MODEL_SPECS, MapperPrediction
+from werewolf.interventions.mapper.selection import (
     ADJACENT_PAIRS, ALL_PAIRS, DEFAULT_REPLICATES, DEFAULT_SEED,
     MODEL_ORDER, BootstrapComparison, MapperSelectionError,
     ModelPointMetrics, PairComparison, _draw_game_multiplicities,
@@ -110,7 +110,7 @@ def test_every_model_uses_the_identical_cluster_draw(monkeypatch):
         draws.append(1)
         return weights.copy()
 
-    monkeypatch.setattr("werewolf.phase2_mapper_selection._draw_game_multiplicities",
+    monkeypatch.setattr("werewolf.interventions.mapper.selection._draw_game_multiplicities",
                         fixed_draw)
     result = bootstrap_compare(predictions(), replicates=1)
     assert draws == [1]  # Not one independent draw per model or candidate.
@@ -207,7 +207,7 @@ def test_bootstrap_never_invokes_model_fitting(monkeypatch):
     def forbidden_fit(*_args, **_kwargs):
         raise AssertionError("bootstrap attempted mapper refit")
 
-    monkeypatch.setattr("werewolf.phase2_mapper._fit_mapper", forbidden_fit)
+    monkeypatch.setattr("werewolf.interventions.mapper.model._fit_mapper", forbidden_fit)
     assert bootstrap_compare(predictions(), replicates=4).replicates == 4
 
 

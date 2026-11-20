@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from werewolf.phase2_terminal_estimator_io import analyze
+from werewolf.interventions.terminal_estimator_io import analyze
 
 
 def main(argv=None):

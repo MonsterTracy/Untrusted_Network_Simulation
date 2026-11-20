@@ -25,11 +25,11 @@ from werewolf.canonical_collection.game_bundle import (
 )
 from werewolf.canonical_collection.trajectory_evidence import construct_private_replay_evidence
 from werewolf.canonical_collection.failure_evidence import construct_canonical_partial_evidence, publish_canonical_partial_evidence
-from werewolf.phase2_gameplay import (
+from werewolf.interventions.gameplay import (
     GameplayLedger, NAMES, allocations, derived_seed, digest, freeze_source, make_plan,
     policy_for, publish_campaign, recover, validate_plan, validate_publication, verify_results,
 )
-from werewolf import phase2_gameplay_server as server
+from werewolf.interventions import gameplay_server as server
 from scripts import phase2_gameplay_campaign as cli
 
 
@@ -183,7 +183,7 @@ def test_cli_validate_binds_actual_publication_to_exact_prepared_plan(tmp_path, 
         "plan_digest": expected["plan_digest"]}, files={
             "run_plan.json": canonical_json_bytes(expected), "game_plan.json": canonical_json_bytes(expected["game_plan"]),
             "operator_paths.json": canonical_json_bytes({"work": paths["work"], "destination": paths["destination"]})})
-    monkeypatch.setattr("werewolf.phase2_gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
+    monkeypatch.setattr("werewolf.interventions.gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
     module = ModuleType("werewolf.canonical_collection.production_runtime")
     module.classic7_full_game_replay_executor = lambda config: replay
     monkeypatch.setitem(sys.modules, module.__name__, module)
@@ -297,7 +297,7 @@ def test_clean_source_real_git_includes_staged_and_ignores_unrelated_untracked(t
     git("init", "-q", "-b", "twd/mainline")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test")
-    for name in ("werewolf/phase2_gameplay.py", "werewolf/phase2_gameplay_server.py", "scripts/phase2_gameplay_campaign.py",
+    for name in ("werewolf/interventions/gameplay.py", "werewolf/interventions/gameplay_server.py", "scripts/phase2_gameplay_campaign.py",
                  "docs/research/phase2-router-v1-contract.md", "configs/phase2/router-gameplay-qualification-v1.json",
                  "configs/phase2/router-gameplay-formal-v1.json"):
         path = repo / name
@@ -308,10 +308,10 @@ def test_clean_source_real_git_includes_staged_and_ignores_unrelated_untracked(t
     (repo / "unrelated-note.md").write_text("untracked")
     frozen = freeze_source(repo)
     assert frozen["commit"] == git("rev-parse", "HEAD")
-    (repo / "werewolf/phase2_gameplay.py").write_text("dirty\n")
+    (repo / "werewolf/interventions/gameplay.py").write_text("dirty\n")
     with pytest.raises(ValueError, match="clean"):
         freeze_source(repo)
-    git("add", "werewolf/phase2_gameplay.py")
+    git("add", "werewolf/interventions/gameplay.py")
     with pytest.raises(ValueError, match="clean"):
         freeze_source(repo)
 
@@ -362,7 +362,7 @@ def test_actual_production_signature_is_part_of_gameplay_adapter_contract(runtim
     signature = inspect.signature(runtime.run_canonical_game)
     assert signature.parameters["online_pilot"].kind is inspect.Parameter.KEYWORD_ONLY
     signature.bind(None, (), (), canonical_recorder=None, call_audit=None, online_pilot=None)
-    source = ast.parse((Path(__file__).resolve().parents[2] / "werewolf/phase2_gameplay_server.py").read_text())
+    source = ast.parse((Path(__file__).resolve().parents[2] / "werewolf/interventions/gameplay_server.py").read_text())
     assert any(isinstance(n, ast.keyword) and n.arg == "online_pilot" for n in ast.walk(source))
 
 
@@ -370,7 +370,7 @@ def test_actual_production_signature_is_part_of_gameplay_adapter_contract(runtim
 def test_server_preflight_does_not_construct_runtime_or_mutate_ledger(tmp_path, monkeypatch, runtime, interrupted):
     """Only native assembly is scripted; real adapter/signature/durable state."""
     p = plan(paths={"plan": str(tmp_path / "plan"), "work": str(tmp_path / "work"), "destination": str(tmp_path / "pub")})
-    monkeypatch.setattr("werewolf.phase2_gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
+    monkeypatch.setattr("werewolf.interventions.gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
     p["runtime_inputs"]["q_python"] = "/fixture/python"
     p["plan_digest"] = digest({k: v for k, v in p.items() if k != "plan_digest"})
     ledger = GameplayLedger(tmp_path / "work", p)
@@ -393,7 +393,7 @@ def test_server_preflight_does_not_construct_runtime_or_mutate_ledger(tmp_path, 
         "werewolf.backends.factory": {"load_named_backends": forbidden},
         "werewolf.canonical_collection.production_runtime": {"Classic7RuntimeFactory": forbidden,
             "classic7_full_game_replay_executor": lambda config: endpoint_replay(), "run_game": runtime.run_canonical_game},
-        "werewolf.phase2_online_runner": {"OnlineTerminalPilotRunnerV1": forbidden},
+        "werewolf.interventions.online.runner": {"OnlineTerminalPilotRunnerV1": forbidden},
     }
     for name, fields in modules.items():
         module = ModuleType(name)
@@ -420,16 +420,16 @@ def canonical_verifier_module(monkeypatch):
     """Load the unchanged real proof methods without optional server assembly."""
     from werewolf.canonical_collection.game_bundle import _prefix_from_record, _backend_call_from_record
     from werewolf.canonical_collection.public_history import freeze_public_event_history
-    from werewolf.phase2_online_plan import probe_opportunity_from_record
+    from werewolf.interventions.online.plan import probe_opportunity_from_record
     root = Path(__file__).resolve().parents[2]
-    tree = ast.parse((root / "werewolf/phase2_online_server.py").read_text())
+    tree = ast.parse((root / "werewolf/interventions/online/server.py").read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ServerRuntimeFactory")
     cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ("_probe_pre", "_verify_probe_stage")]
-    module = ModuleType("werewolf.phase2_online_server")
+    module = ModuleType("werewolf.interventions.online.server")
     module.__dict__.update(_prefix_from_record=_prefix_from_record, _backend_call_from_record=_backend_call_from_record,
         freeze_public_event_history=freeze_public_event_history, probe_opportunity_from_record=probe_opportunity_from_record,
         canonical_json_bytes=canonical_json_bytes, sha256_bytes=server.sha256_bytes)
-    exec(compile(ast.Module(body=[cls], type_ignores=[]), str(root / "werewolf/phase2_online_server.py"), "exec"), module.__dict__)
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), str(root / "werewolf/interventions/online/server.py"), "exec"), module.__dict__)
     monkeypatch.setitem(sys.modules, module.__name__, module)
 
 
@@ -438,14 +438,14 @@ def canonical_verifier_module(monkeypatch):
 ])
 def test_durable_router_proofs_preserve_invalid_and_cancelled_assignments(tmp_path, monkeypatch, strategy, success):
     """Real PRE, assignment, lifecycle and canonical calls; no language generation."""
-    from werewolf.phase2_actions import Action, context_from_pre
-    from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
-    from werewolf.phase2_online_plan import select_probe_candidate, assign_router_policy
-    from werewolf.phase2_online_records import Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1
-    from werewolf.phase2_backend_audit import Phase2BackendCallV1
-    from werewolf.phase2_treatment import build_phase2_treatment
-    from werewolf.phase2_pilot_records import PublicProbeObservationV1
-    from werewolf.phase2_outcome import extract_phase2_day_outcome, reference_tables_digest
+    from werewolf.interventions.actions import Action, context_from_pre
+    from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity
+    from werewolf.interventions.online.plan import select_probe_candidate, assign_router_policy
+    from werewolf.interventions.online.records import Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1
+    from werewolf.interventions.online.backend_audit import Phase2BackendCallV1
+    from werewolf.interventions.treatment import build_phase2_treatment
+    from werewolf.interventions.online.pilot_records import PublicProbeObservationV1
+    from werewolf.interventions.outcome import extract_phase2_day_outcome, reference_tables_digest
     from tests.phase2.test_outcome_and_execution import values
     from werewolf.canonical_collection.public_history import freeze_public_event_history
     from werewolf.canonical_collection.trajectory_evidence import (
@@ -575,7 +575,7 @@ def test_durable_router_proofs_preserve_invalid_and_cancelled_assignments(tmp_pa
 def test_production_loop_to_real_bundle_and_publication_includes_both_noeligible_games(tmp_path, runtime, monkeypatch):
     """Actual eval body and Router, scripted one-step env, real bundle I/O."""
     from tests.phase2.test_outcome_and_execution import values
-    from werewolf.phase2_outcome import reference_tables_digest
+    from werewolf.interventions.outcome import reference_tables_digest
     canonical_verifier_module(monkeypatch)
     ledger = GameplayLedger(tmp_path / "work", plan())
     constructed, ballots = [], []

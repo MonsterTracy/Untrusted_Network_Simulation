@@ -18,19 +18,19 @@ from werewolf.canonical_collection.public_history import freeze_public_event_his
 from werewolf.canonical_collection.trajectory_evidence import (
     BackendCallPurpose, BackendCallStatus, construct_backend_call_evidence,
 )
-from werewolf.phase2_actions import Action, context_from_pre
-from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.actions import Action, context_from_pre
+from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity
+from werewolf.interventions.online.plan import (
     PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
     probe_opportunity_from_record,
 )
-from werewolf.phase2_treatment import build_phase2_treatment
-from werewolf.phase2_offline import classify_outcome
+from werewolf.interventions.treatment import build_phase2_treatment
+from werewolf.interventions.offline import classify_outcome
 
 
 @pytest.fixture
 def server():
-    source = ast.parse(Path("werewolf/phase2_online_server.py").read_text())
+    source = ast.parse(Path("werewolf/interventions/online/server.py").read_text())
     nodes = [node for node in source.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
              and node.name in ("_read_json", "load_online_plan", "ServerRuntimeFactory")]
     scope = dict(json=json, Path=Path, re=re, canonical_json_bytes=canonical_json_bytes,
@@ -42,7 +42,7 @@ def server():
                  PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
                  Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
                  Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1)
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), "phase2_online_server.py", "exec"), scope)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "werewolf/interventions/online/server.py", "exec"), scope)
     return scope
 
 
@@ -156,12 +156,12 @@ def test_full_server_ledger_proof_retains_t0_consequence_for_invalid_strategy(se
     from dataclasses import replace
     from types import SimpleNamespace
     from tests.phase2.test_outcome_and_execution import values
-    from werewolf.phase2_backend_audit import Phase2BackendCallV1
-    from werewolf.phase2_offline import ValueEstimate
-    from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-    from werewolf.phase2_online_plan import ProbeStrategy, assign_probe_strategy, select_probe_candidate
-    from werewolf.phase2_online_records import Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1
-    from werewolf.phase2_outcome import extract_phase2_day_outcome, reference_tables_digest
+    from werewolf.interventions.online.backend_audit import Phase2BackendCallV1
+    from werewolf.interventions.offline import ValueEstimate
+    from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+    from werewolf.interventions.online.plan import ProbeStrategy, assign_probe_strategy, select_probe_candidate
+    from werewolf.interventions.online.records import Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1
+    from werewolf.interventions.outcome import extract_phase2_day_outcome, reference_tables_digest
 
     prefix, template, _ = canonical_stage()
     op = probe_opportunity_from_record(template["opportunity"])

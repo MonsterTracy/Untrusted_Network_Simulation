@@ -12,7 +12,7 @@ from tests.phase2.test_probe_policy_resume import (
 )
 from tests.phase2.test_probe_policy_runner import runtime
 from werewolf.canonical_collection.call_audit import AuditedBackend, CanonicalCallAudit
-from werewolf.phase2_online_preflight import assess_pilot_preflight
+from werewolf.interventions.online.preflight import assess_pilot_preflight
 
 
 class PreflightRecorder:
@@ -26,10 +26,10 @@ def assess_bound_ledger(runtime, monkeypatch, tmp_path, f, ledger, *,
                         publication_only=False, online_plan=None, head=SOURCE_COMMIT,
                         expected_ledger_path=None):
     """Stub unrelated capability gates, retaining real preflight and ledger checks."""
-    import werewolf.phase2_mapper_runtime as mapper_runtime
-    import werewolf.phase2_online_preflight as preflight
+    import werewolf.interventions.mapper.runtime as mapper_runtime
+    import werewolf.interventions.online.preflight as preflight
 
-    monkeypatch.setitem(sys.modules, "werewolf.phase2_online_runner", runtime)
+    monkeypatch.setitem(sys.modules, "werewolf.interventions.online.runner", runtime)
     monkeypatch.setitem(sys.modules, "werewolf.canonical_collection.runtime",
                         SimpleNamespace(CanonicalGameRecorder=PreflightRecorder))
     monkeypatch.setattr(preflight, "_git", lambda *args:

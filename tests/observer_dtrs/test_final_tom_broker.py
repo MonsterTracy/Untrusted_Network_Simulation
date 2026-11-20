@@ -164,8 +164,8 @@ def capsule_client(artificial,tmp_path,monkeypatch):
 
 
 def test_capsule_predict_interface_Q_identity_duplicate_and_close(capsule_client):
-    from werewolf.phase2_online_preflight import _frozen_q_runtime_ready
-    from werewolf.phase2_online_runner import predict_q,predictor_source_digest
+    from werewolf.interventions.online.preflight import _frozen_q_runtime_ready
+    from werewolf.interventions.online.runner import predict_q,predictor_source_digest
     make,model=capsule_client;c=make()
     assert not _frozen_q_runtime_ready(c,controlled=True)
     with c:
@@ -178,7 +178,7 @@ def test_capsule_predict_interface_Q_identity_duplicate_and_close(capsule_client
         assert q[2][1]>0 and predictor_source_digest(c)!=c.identity['model_origin']['seal_digest']
         assert c.identity['execution']['capsule']['origin']==c.identity['model_origin']
         assert c.identity['scope']=='CAPSULE_CPU_QUALIFICATION_ONLY'
-        from werewolf.phase2_online_runner import OnlineTerminalPilotRunnerV1
+        from werewolf.interventions.online.runner import OnlineTerminalPilotRunnerV1
         runner=object.__new__(OnlineTerminalPilotRunnerV1);runner.predictor=c
         with pytest.raises(ValueError,match='SCOPE_NOT_QUALIFIED'):runner.start_game('blocked')
         with pytest.raises(ValueError,match='duplicate PRE'):c.predict(p)
@@ -190,7 +190,7 @@ def test_capsule_predict_interface_Q_identity_duplicate_and_close(capsule_client
 
 def test_controlled_preflight_rejects_duck_typed_provider():
     from types import SimpleNamespace
-    from werewolf.phase2_online_preflight import assess_capsule_q_interface,_frozen_q_runtime_ready
+    from werewolf.interventions.online.preflight import assess_capsule_q_interface,_frozen_q_runtime_ready
     fake=SimpleNamespace(predict=lambda p:(),require_ready=lambda **kw:None,seal_digest='a'*64)
     assert not _frozen_q_runtime_ready(fake,controlled=True)
     with pytest.raises(ValueError):assess_capsule_q_interface(fake,prefix_for())
@@ -210,7 +210,8 @@ def test_capsule_interface_never_retries_uncertain_request(capsule_client,monkey
 def test_real_server_Q_interface_branch_never_builds_gameplay(capsule_client,tmp_path,monkeypatch,capsys,lane):
     from types import SimpleNamespace
     from werewolf.observer_dtrs.final_tom_wire import ROOT
-    from werewolf import phase2_gameplay_server as gameplay,phase2_online_server as phase2
+    from werewolf.interventions import gameplay_server as gameplay
+    from werewolf.interventions.online import server as phase2
     make,model=capsule_client
     def forbidden(*args,**kwargs):pytest.fail('full campaign must not be entered')
     monkeypatch.setattr(gameplay,'server_inputs',forbidden)
@@ -218,13 +219,20 @@ def test_real_server_Q_interface_branch_never_builds_gameplay(capsule_client,tmp
     with make() as c:
         p=prefix_for(game_id=lane)
         if lane=='gameplay':
+            with pytest.raises(ValueError, match='controlled capsule check requires'):
+                gameplay.execute_server(
+                    None, repo=tmp_path, work=tmp_path / 'unused', destination=tmp_path / 'unused-pub',
+                    runtime_check_only=True, predictor=c, public_pre=p)
             r=gameplay.execute_server(None,repo=ROOT,work=tmp_path/'unused',destination=tmp_path/'unused-pub',
                 runtime_check_only=True,predictor=c,public_pre=p)
             with pytest.raises(ValueError):
                 gameplay.execute_server(None,repo=ROOT,work=tmp_path/'unused',destination=tmp_path/'unused-pub',
                     allow_gpu=True,predictor=c,public_pre=p)
         else:
-            args=SimpleNamespace(repo=ROOT,preflight_only=True,resume=False)
+            args = SimpleNamespace(repo=tmp_path, preflight_only=True, resume=False)
+            with pytest.raises(ValueError, match='controlled capsule check requires'):
+                phase2.execute_server_campaign(args, predictor=c, public_pre=p)
+            args.repo = ROOT
             assert phase2.execute_server_campaign(args,predictor=c,public_pre=p)==0
             r=json.loads(capsys.readouterr().out)['q_interface']
             args.preflight_only=False

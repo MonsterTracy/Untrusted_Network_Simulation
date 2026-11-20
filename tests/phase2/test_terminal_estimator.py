@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from werewolf import phase2_terminal_estimator as estimator
+from werewolf.interventions import terminal_estimator as estimator
 from terminal_estimator_test_support import synthetic_rows
 
 

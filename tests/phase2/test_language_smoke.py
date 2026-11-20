@@ -10,9 +10,9 @@ import pytest
 
 from scripts import run_phase2_language_smoke as smoke
 from werewolf.artifact_io import verify_artifact
-from werewolf.phase2_actions import Action, ActionContextV1, InformationRequestV1
-from werewolf.phase2_language import Phase2SpeechSemanticV1, PublicLanguageContextV1
-from werewolf.phase2_language import LANGUAGE_VERSION
+from werewolf.interventions.actions import Action, ActionContextV1, InformationRequestV1
+from werewolf.interventions.language.semantics import Phase2SpeechSemanticV1, PublicLanguageContextV1
+from werewolf.interventions.language.semantics import LANGUAGE_VERSION
 
 
 ALIVE = tuple(f"player{i}" for i in range(1, 8))
@@ -353,7 +353,7 @@ def test_formal_run_freezes_source_once_before_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "collect_eligible", lambda publication, sidecar: eligible_cases())
     monkeypatch.setattr(smoke, "selected_oof_q", lambda publication, selected, root: {})
     monkeypatch.setattr(smoke, "make_plan", lambda case, q, mapper: object())
-    import werewolf.phase2_mapper_runtime as runtime
+    import werewolf.interventions.mapper.runtime as runtime
     monkeypatch.setattr(runtime, "load_runtime_mapper", lambda path, expected_manifest_digest: Mapper())
     fake_runtime = tmp_path / "runtime.yaml"
     fake_runtime.write_text("{}\n")

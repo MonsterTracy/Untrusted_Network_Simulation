@@ -21,15 +21,15 @@ from tests.phase2.test_probe_policy_runner import canonical_pre, fixture, next_p
 from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes,
 )
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.phase2_actions import context_from_pre
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.actions import context_from_pre
+from werewolf.interventions.online.plan import (
     PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
     ProbeStrategy, assign_probe_strategy, select_probe_candidate,
 )
-from werewolf.phase2_online_preflight import SOURCE_FILES
-from werewolf.phase2_online_preflight import PilotPreflightV1
-from werewolf.phase2_pilot_dataset import (
+from werewolf.interventions.online.preflight import SOURCE_FILES
+from werewolf.interventions.online.preflight import PilotPreflightV1
+from werewolf.interventions.online.pilot_dataset import (
     analyze_phase2_online_support_record, build_phase2_online_dataset_from_ledger,
 )
 
@@ -42,19 +42,19 @@ PROTOCOL_DIGEST = sha256_bytes(b"immutable fixture protocol")
 @pytest.fixture
 def admission():
     scope = dict(campaign.__dict__)
-    server = ast.parse(Path("werewolf/phase2_online_server.py").read_text())
+    server = ast.parse(Path("werewolf/interventions/online/server.py").read_text())
     definitions = [node for node in server.body if isinstance(node, ast.FunctionDef)
                    and node.name in ("_read_json", "load_online_plan")]
     scope.update(re=re, PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
                  Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
                  Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1)
     exec(compile(ast.Module(body=definitions, type_ignores=[]),
-                 "werewolf/phase2_online_server.py", "exec"), scope)
+                 "werewolf/interventions/online/server.py", "exec"), scope)
     source = ast.parse(Path("scripts/phase2_online_campaign.py").read_text())
     definition = next(node for node in source.body if isinstance(node, ast.FunctionDef)
                       and node.name == "probe_qualification_inputs")
     definition.body = [node for node in definition.body if not (
-        isinstance(node, ast.ImportFrom) and node.module == "werewolf.phase2_online_server")]
+        isinstance(node, ast.ImportFrom) and node.module == "werewolf.interventions.online.server")]
     exec(compile(ast.Module(body=[definition], type_ignores=[]),
                  "scripts/phase2_online_campaign.py", "exec"), scope)
     return scope["probe_qualification_inputs"]
@@ -223,7 +223,7 @@ def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
         "artifact": str(destination), "run_inputs": str(run_inputs),
         "manifest_digest": artifact.manifest_digest, "inputs_digest": bound["inputs_digest"],
     }}
-    import werewolf.phase2_online_preflight as preflight
+    import werewolf.interventions.online.preflight as preflight
     monkeypatch.setattr(preflight, "freeze_online_source_provenance", lambda repo: source)
     return SimpleNamespace(f=f, profile=profile, bound=bound, artifact=artifact,
                            source=source, run_inputs=run_inputs)
@@ -295,7 +295,7 @@ def test_admission_fails_closed_on_artifact_inputs_source_protocol_and_journal_d
     elif mutation == "inputs_pin":
         evidence.profile["probe_qualification"]["inputs_digest"] = "0" * 64
     elif mutation == "source_bytes":
-        evidence.source["source_sha256"]["werewolf/phase2_online_runner.py"] = "0" * 64
+        evidence.source["source_sha256"]["werewolf/interventions/online/runner.py"] = "0" * 64
     elif mutation == "protocol_pin":
         evidence.profile["probe_protocol_digest"] = "0" * 64
     elif mutation == "incomplete_ledger":

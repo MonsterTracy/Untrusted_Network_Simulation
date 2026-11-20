@@ -4,11 +4,11 @@ import pytest
 
 from test_probe_policy_ledger import LiteralRecord, literal_snapshots, public_opportunity
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.online.plan import (
     Phase2OnlineProbePilotPlanV1, ProbeStrategy, assign_probe_strategy, select_probe_candidate,
 )
-from werewolf.phase2_pilot_dataset import (
+from werewolf.interventions.online.pilot_dataset import (
     PROBE_ONLINE_VERSION, Phase2OnlineConsequenceDatasetV1, PilotDatasetError,
     analyze_phase2_online_support_record, build_phase2_online_dataset_from_ledger,
     require_online_dataset_access,

@@ -9,11 +9,11 @@ from pathlib import Path
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact, read_artifact_file, verify_artifact
 from werewolf.artifact_io.canonical import _load_canonical_json, _reject_duplicate_keys, _reject_json_constant
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record, construct_collection_plan
-from werewolf.phase2_gameplay import (
+from werewolf.interventions.gameplay import (
     NAMES, VERSION, GameplayLedger, digest, freeze_source, make_plan, safe_path,
     validate_plan, validate_publication, validate_profile, load_campaign_profile, bind_campaign_profile,
 )
-from werewolf.phase2_gameplay_server import execute_server, verify_router
+from werewolf.interventions.gameplay_server import execute_server, verify_router
 
 
 ROOT = Path(__file__).resolve().parents[1]

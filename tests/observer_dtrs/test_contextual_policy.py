@@ -244,7 +244,7 @@ def test_entry_imports_no_restricted_supervision_and_runs_no_service():
     root = Path(__file__).resolve().parents[2]
     code = "import sys; import werewolf.observer_dtrs.contextual_policy; " + \
         "assert not set(('werewolf.observer_dtrs.labels', 'werewolf.observer_dtrs.dataset_offline', " + \
-        "'werewolf.observer_dtrs.estimation_offline', 'werewolf.phase2_gameplay_server')) & set(sys.modules)"
+        "'werewolf.observer_dtrs.estimation_offline', 'werewolf.interventions.gameplay_server')) & set(sys.modules)"
     subprocess.run([sys.executable, "-B", "-c", code], cwd=root, check=True)
 
 

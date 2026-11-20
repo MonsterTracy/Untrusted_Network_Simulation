@@ -2,11 +2,12 @@
 
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
-from werewolf.phase2_online_preflight import (
+from werewolf.interventions.online.preflight import (
     FrozenArtifactRequirement, _frozen_q_runtime_ready, _smoke_v3_gate,
     assess_pilot_preflight,
     freeze_online_source_provenance, tracked_source_clean,
@@ -14,7 +15,7 @@ from werewolf.phase2_online_preflight import (
 from werewolf.artifact_io import publish_artifact
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, sha256_bytes
 from tests.phase2.test_outcome_and_execution import values
-from werewolf.phase2_outcome import reference_tables_digest
+from werewolf.interventions.outcome import reference_tables_digest
 
 
 def _git(repo: Path, *args):
@@ -22,9 +23,24 @@ def _git(repo: Path, *args):
                    capture_output=True, text=True)
 
 
+def test_preflight_cli_defaults_to_checkout_root(monkeypatch, capsys):
+    from werewolf.interventions.online import preflight
+
+    repo = Path(__file__).resolve().parents[2]
+
+    def assess(candidate, **kwargs):
+        assert candidate == repo
+        return SimpleNamespace(ready=False, to_record=lambda: {"tracked_clean": False})
+
+    monkeypatch.setattr(sys, "argv", ["preflight"])
+    monkeypatch.setattr(preflight, "assess_pilot_preflight", assess)
+    assert preflight.main() == 1
+    assert capsys.readouterr().out.strip() == '{"tracked_clean": false}'
+
+
 def test_preflight_ignores_untracked_but_rejects_staged_and_tracked_dirty(tmp_path,
                                                                          monkeypatch):
-    import werewolf.phase2_online_preflight as preflight
+    import werewolf.interventions.online.preflight as preflight
     monkeypatch.setattr(preflight, "SOURCE_FILES", ("tracked.txt",))
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
@@ -97,7 +113,7 @@ def test_q_seal_string_on_duck_typed_predictor_is_not_frozen_runtime():
 
 def test_untracked_pilot_source_is_blocked_without_blocking_unrelated_untracked(tmp_path,
                                                                                monkeypatch):
-    import werewolf.phase2_online_preflight as preflight
+    import werewolf.interventions.online.preflight as preflight
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
@@ -116,8 +132,8 @@ def test_untracked_pilot_source_is_blocked_without_blocking_unrelated_untracked(
 def test_online_smoke_preflight_requires_real_passed_gate_and_mapper_lineage(tmp_path,
                                                                               monkeypatch):
     import scripts.run_phase2_language_smoke as smoke
-    from werewolf.phase2_language import LANGUAGE_VERSION
-    from werewolf.phase2_actions import CONTRACT_VERSION
+    from werewolf.interventions.language.semantics import LANGUAGE_VERSION
+    from werewolf.interventions.actions import CONTRACT_VERSION
     mapper_digest = "a" * 64
     cases = [{"game_id": f"g{i}", "boundary_id": f"b{i}"} for i in range(58)]
     selection_digest = sha256_bytes(canonical_json_bytes(cases))
@@ -152,10 +168,10 @@ def preflight_artifacts(tmp_path, monkeypatch):
     from tests.phase2.test_mapper_final import (
         oof_provenance, source_record, synthetic_study,
     )
-    from werewolf import phase2_mapper_final as final, phase2_mapper_runtime as runtime
-    from werewolf import phase2_online_preflight as preflight
-    from werewolf.phase2_actions import CONTRACT_VERSION
-    from werewolf.phase2_language import LANGUAGE_VERSION
+    from werewolf.interventions.mapper import final_fit as final, runtime
+    from werewolf.interventions.online import preflight
+    from werewolf.interventions.actions import CONTRACT_VERSION
+    from werewolf.interventions.language.semantics import LANGUAGE_VERSION
     from scripts import run_phase2_language_smoke as smoke
 
     study, examples = synthetic_study(tmp_path, monkeypatch)

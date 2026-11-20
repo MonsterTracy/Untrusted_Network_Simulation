@@ -20,7 +20,7 @@ from werewolf.canonical_collection.production_runtime import (
 from werewolf.canonical_collection.runtime import make_classic7_replay_executor
 from werewolf.canonical_collection.trajectory_evidence import construct_private_replay_evidence
 from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
-from werewolf.phase2_gameplay import publish_campaign, validate_publication, verify_results
+from werewolf.interventions.gameplay import publish_campaign, validate_publication, verify_results
 
 
 def native_evidence(game, claim, game_id, *, winner):

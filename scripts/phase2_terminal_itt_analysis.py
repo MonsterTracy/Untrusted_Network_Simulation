@@ -22,8 +22,8 @@ from werewolf.canonical_collection.attempt_ledger import _claim_from_record, col
 from werewolf.canonical_collection.failure_evidence import validate_canonical_partial_evidence
 from werewolf.canonical_collection.game_bundle import _prefix_from_record
 from werewolf.canonical_collection.public_history import freeze_public_event_history
-from werewolf.phase2_offline import build_development_layer, classify_outcome
-from werewolf.phase2_outcome import reference_tables_digest
+from werewolf.interventions.offline import build_development_layer, classify_outcome
+from werewolf.interventions.outcome import reference_tables_digest
 
 
 FORMAL_NAME = "paper-phase2-online-terminal-pilot-v1"

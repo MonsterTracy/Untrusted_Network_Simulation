@@ -12,8 +12,9 @@ from tests.phase2.test_mapper_study import configure_synthetic
 from scripts import run_phase2_mapper_study as study
 from werewolf.artifact_io import canonical_jsonl_bytes, publish_artifact
 from werewolf.canonical_collection.public_history import PLAYER_IDS as P
-from werewolf import phase2_offline as offline, phase2_mapper as mapper
-from werewolf.phase2_q_representation import transform_q, condition_id, REPRESENTATION_VERSION
+from werewolf.interventions import offline
+from werewolf.interventions.mapper import model as mapper
+from werewolf.interventions.mapper.q_representation import transform_q, condition_id, REPRESENTATION_VERSION
 from werewolf.tom import backbone_evaluation as evaluation
 
 PAIR = "b" * 64

@@ -6,12 +6,13 @@ private paths deliberately do not exist and are never followed by the adapter.
 
 from copy import deepcopy
 import json
+from pathlib import Path
 
 import pytest
 
 from scripts import phase2_terminal_estimator as cli
-from werewolf import phase2_terminal_estimator as stats
-from werewolf import phase2_terminal_estimator_io as io
+from werewolf.interventions import terminal_estimator as stats
+from werewolf.interventions import terminal_estimator_io as io
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes
 from werewolf.artifact_io import publish_artifact, read_artifact_file, sha256_bytes, verify_artifact
 from tests.phase2.terminal_estimator_test_support import synthetic_rows
@@ -250,6 +251,26 @@ def test_corrupt_staged_payload_never_becomes_destination(tmp_path, monkeypatch)
     assert list(tmp_path.glob(".corrupt-output.staging-*")) == []
 
 
+def test_source_provenance_hashes_current_repository_inventory():
+    root = Path(__file__).resolve().parents[2]
+    assert io.ROOT == root
+    assert Path(io._git("rev-parse", "--show-toplevel")).resolve() == root
+    paths = (
+        "werewolf/interventions/terminal_estimator.py",
+        "werewolf/interventions/terminal_estimator_io.py",
+        "scripts/phase2_terminal_estimator.py",
+        "scripts/phase2_terminal_itt_analysis.py",
+        "werewolf/artifact_io/canonical.py",
+        io.PROTOCOL,
+        io.SUPPORT_REVIEW,
+    )
+    source = io.source_provenance()
+    assert source["commit"] == io._git("rev-parse", "HEAD")
+    assert source["files"] == {
+        name: sha256_bytes((root / name).read_bytes()) for name in paths
+    }
+
+
 def test_source_drift_stops_publication(tmp_path, monkeypatch):
     formal, itt = inputs(tmp_path, monkeypatch)
     real = io._source_files
@@ -319,6 +340,44 @@ def test_estimator_bytes_tamper_rejected_before_prediction(tmp_path, monkeypatch
     with pytest.raises(ValueError):
         io.load_estimator(tmp_path / "output", expected_digest=summary["manifest_digest"])
     assert before == (snapshot(formal.path), snapshot(itt.path))
+
+
+def test_estimator_rejects_historical_source_with_valid_manifest_digest(tmp_path, monkeypatch):
+    formal, itt = inputs(tmp_path, monkeypatch)
+    output = tmp_path / "current-estimator"
+    io.analyze(formal.path, itt.path, output)
+    current = verify_artifact(output, expected_artifact_type="phase2_terminal_estimator",
+                              expected_schema_version=io.VERSION)
+    fields = {name: value for name, value in current.manifest.items()
+              if name not in ("file_table", "manifest_digest")}
+    # 只在合成产物中复用历史登记的路径和摘要，验证新读取器拒绝该来源。
+    fields["source_provenance"] = {
+        **fields["source_provenance"],
+        "commit": "56588c1d075c5b97511d84ceb4ed3c68215d8cc0",
+        "files": {
+            "docs/research/phase2-terminal-estimator-protocol-v1.md":
+                "d6dd3dc34b49f5ea6479a1e13e024008b5c0ea6539e6be3e540b9a6bfb3cfde0",
+            "docs/research/phase2-terminal-estimator-support-review-v1.md":
+                "e82d789352cb14b0f368597bf9a844da8d8b3d373325ff494baa817d3088ea8d",
+            "scripts/phase2_terminal_estimator.py":
+                "018ef11e4ebe644a1f5fcec09590e185120c402313a48815aa59e8a3fd412bc2",
+            "scripts/phase2_terminal_itt_analysis.py":
+                "6717f9ca40b7992a97779fb3712927952685e5d75f501801c172b97d0cb58647",
+            "werewolf/artifact_io/canonical.py":
+                "5063a6f47906fa7beb3183abc8d85faaa277d42173402e472d05d879b9a0f3f6",
+            "werewolf/phase2_terminal_estimator.py":
+                "478c0e684212a759ec4c219a1e1726303fb201d39a9585a07e420a06ebd938eb",
+            "werewolf/phase2_terminal_estimator_io.py":
+                "c6bda6aab6c38e7d784417b5d84c748ab71bdb5022202eb0a2007dfab6db79d5",
+        },
+    }
+    fields["synthetic_test_fixture"] = True
+    historical_fixture = publish_artifact(
+        tmp_path / "historical-source-fixture", manifest_fields=fields,
+        files={name: read_artifact_file(current, name) for name in current.manifest["file_table"]},
+    )
+    with pytest.raises(ValueError, match="estimator lineage mismatch"):
+        io.load_estimator(historical_fixture.path, expected_digest=historical_fixture.manifest_digest)
 
 
 def test_failed_M2_keeps_primary_and_all_models_cli_nonzero(tmp_path, monkeypatch):

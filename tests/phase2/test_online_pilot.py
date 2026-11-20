@@ -7,20 +7,20 @@ import pytest
 
 from tests.phase2.test_decision_opportunity import Mapper, context, opportunity, q_matrix
 from tests.phase2.test_outcome_and_execution import values
-from werewolf.phase2_actions import Action
-from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.actions import Action
+from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity
+from werewolf.interventions.online.plan import (
     FROZEN, OnlinePilotGameStateV1, OnlinePilotPlanError,
     Phase2OnlineTerminalPilotPlanV1, assign_terminal_action, select_candidate,
 )
-from werewolf.phase2_online_records import (
+from werewolf.interventions.online.records import (
     OnlinePilotRecordError, Phase2OnlineInterventionRecordV1,
     record_online_day_outcome, record_online_execution,
 )
-from werewolf.phase2_outcome import (
+from werewolf.interventions.outcome import (
     extract_phase2_day_outcome, reference_tables_digest,
 )
-from werewolf.phase2_pilot_dataset import (
+from werewolf.interventions.online.pilot_dataset import (
     PilotDatasetError, analyze_phase2_online_support_record,
     build_phase2_consequence_dataset,
 )

@@ -81,8 +81,8 @@ def read_profile(*, policy="terminal", qualification=False):
                 raise ValueError("invalid Probe qualification pointers")
         expected_name = PROBE_NAMES[purpose]
     else:
-        from werewolf.phase2_online_plan import TARGET_ASSIGNMENTS
-        from werewolf.phase2_online_runner import ARTIFACT_NAME
+        from werewolf.interventions.online.plan import TARGET_ASSIGNMENTS
+        from werewolf.interventions.online.runner import ARTIFACT_NAME
         if (set(profile) != fields or profile["schema_version"] != PROFILE_VERSION
             or profile["campaign_purpose"] != "pilot"
             or profile["pilot_id"] != ARTIFACT_NAME
@@ -106,7 +106,7 @@ def read_profile(*, policy="terminal", qualification=False):
 
 
 def pilot_plan(profile):
-    from werewolf.phase2_online_plan import Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1
+    from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1
     if profile["schema_version"] == PROBE_PROFILE_VERSION:
         if profile["planning_status"] != "FROZEN" or any(profile[k] is None for k in (
                 "assignment_seed", "target_assignment_count", "max_games_attempted")):
@@ -127,8 +127,8 @@ def qualification_inputs():
     """Pins are pointers to verified completed evidence, not copied runtime artifacts."""
     from werewolf.artifact_io import read_artifact_file, verify_artifact
     from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
-    from werewolf.phase2_online_plan import Phase2OnlineTerminalPilotPlanV1
-    from werewolf.phase2_online_runner import ARTIFACT_VERSION, QUALIFICATION_NAME
+    from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1
+    from werewolf.interventions.online.runner import ARTIFACT_VERSION, QUALIFICATION_NAME
     pins = read_json(PINS)
     if pins["schema_version"] != "phase2_online_campaign_runtime_pins_v1":
         raise ValueError("invalid runtime pins schema")
@@ -186,9 +186,9 @@ def probe_qualification_gate(records, *, complete):
 def probe_qualification_inputs(profile):
     """Formal admission requires immutable, completed Probe qualification evidence."""
     from werewolf.artifact_io import read_artifact_file, verify_artifact
-    from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-    from werewolf.phase2_online_server import load_online_plan
-    from werewolf.phase2_online_preflight import freeze_online_source_provenance
+    from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+    from werewolf.interventions.online.server import load_online_plan
+    from werewolf.interventions.online.preflight import freeze_online_source_provenance
     pins = profile["probe_qualification"]
     if any(pins[k] is None for k in ("manifest_digest", "inputs_digest")):
         raise ValueError("Probe qualification digests are not frozen")
@@ -260,7 +260,7 @@ def probe_qualification_inputs(profile):
 
 
 def clean_source(*, probe=False):
-    from werewolf.phase2_online_preflight import _git, freeze_online_source_provenance
+    from werewolf.interventions.online.preflight import _git, freeze_online_source_provenance
     source = freeze_online_source_provenance(REPO)
     if source is None:
         raise ValueError("tracked source and staged index must be clean")
@@ -394,7 +394,7 @@ def prepare(profile, *, source_commit=None):
     if (clean_source(probe=True) if probe else clean_source()) != source:
         raise ValueError("source changed during prepare")
     from scripts.collect_games import publish_plan
-    from werewolf.phase2_online_server import _publish_json
+    from werewolf.interventions.online.server import _publish_json
     # Both are exclusive publications. A partial failure is retained, never silently regenerated.
     _publish_json(Path(profile["plan"]), plan.to_record())
     publish_plan(Path(profile["game_plan"]), game)
@@ -408,7 +408,7 @@ def server_args(profile, command):
     plan = pilot_plan(profile)
     from scripts.run_phase2_online_intervention_pilot import build_parser
     from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
-    from werewolf.phase2_online_server import load_online_plan
+    from werewolf.interventions.online.server import load_online_plan
     probe = profile["schema_version"] == PROBE_PROFILE_VERSION
     source = clean_source(probe=True) if probe else clean_source()
     frozen = load_online_plan(Path(profile["plan"]), profile["campaign_purpose"])
@@ -442,11 +442,11 @@ def server_args(profile, command):
 
 def status(profile, *, qualification=False):
     """Use the existing ledger validator without its write-on-missing constructor."""
-    from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
+    from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
     from werewolf.artifact_io import verify_artifact
     probe = profile is not None and profile["schema_version"] == PROBE_PROFILE_VERSION
     if not probe:
-        from werewolf.phase2_online_runner import ARTIFACT_VERSION
+        from werewolf.interventions.online.runner import ARTIFACT_VERSION
     else:
         ARTIFACT_VERSION = "phase2_online_probe_pilot_v1"
     artifact_type = "phase2_online_probe_pilot" if probe else "phase2_online_terminal_pilot"
@@ -471,7 +471,7 @@ def status(profile, *, qualification=False):
               "source_commit": source, "ledger_terminal_digest": None}
     if not work.exists() and not destination.exists():
         return result
-    from werewolf.phase2_online_server import load_online_plan
+    from werewolf.interventions.online.server import load_online_plan
     bound = read_json(work / "run_inputs.json")
     plan = load_online_plan(plan_path, profile["campaign_purpose"])
     if (bound["source_commit"] != source or bound["pilot_plan"] != plan.to_record()
@@ -546,7 +546,7 @@ def main(argv=None):
                     output = prepare(profile, source_commit=args.source_commit) if args.policy == "probe" else prepare(profile)
                 else:
                     server = server_args(profile, args.command)
-                    from werewolf.phase2_online_server import execute_server_campaign
+                    from werewolf.interventions.online.server import execute_server_campaign
                     print(json.dumps({"source_commit": server.source_commit,
                         "pilot_plan_digest": digest(read_json(server.plan)),
                         "game_plan_digest": read_json(server.game_plan)["plan_digest"],

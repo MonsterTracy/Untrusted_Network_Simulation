@@ -20,9 +20,9 @@ from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact,
     read_artifact_file, sha256_bytes, verify_artifact,
 )
-from werewolf.phase2_offline import _transition, classify_outcome
-from werewolf.phase2_online_plan import Phase2OnlineProbePilotPlanV1, probe_assignment_from_record
-from werewolf.phase2_pilot_dataset import PROBE_ONLINE_VERSION, analyze_phase2_online_support_record
+from werewolf.interventions.offline import _transition, classify_outcome
+from werewolf.interventions.online.plan import Phase2OnlineProbePilotPlanV1, probe_assignment_from_record
+from werewolf.interventions.online.pilot_dataset import PROBE_ONLINE_VERSION, analyze_phase2_online_support_record
 
 
 FORMAL_NAME = "paper-phase2-online-probe-pilot-v1"
@@ -39,11 +39,11 @@ TABLE_FILES = ("assignments.jsonl", "executions.jsonl", "consequences.jsonl",
                "backend_calls.jsonl", "strategy_stages.jsonl")
 SOURCE_FILES = (
     "scripts/phase2_probe_itt_analysis.py", "werewolf/artifact_io/canonical.py",
-    "werewolf/phase2_online_plan.py", "werewolf/phase2_online_records.py",
-    "werewolf/phase2_pilot_dataset.py", "werewolf/phase2_offline.py",
-    "werewolf/phase2_actions.py", "werewolf/phase2_decision_opportunity.py",
-    "werewolf/phase2_treatment.py", "werewolf/phase2_pilot_records.py",
-    "werewolf/phase2_outcome.py", "werewolf/phase2_backend_audit.py",
+    "werewolf/interventions/online/plan.py", "werewolf/interventions/online/records.py",
+    "werewolf/interventions/online/pilot_dataset.py", "werewolf/interventions/offline.py",
+    "werewolf/interventions/actions.py", "werewolf/interventions/decision_opportunity.py",
+    "werewolf/interventions/treatment.py", "werewolf/interventions/online/pilot_records.py",
+    "werewolf/interventions/outcome.py", "werewolf/interventions/online/backend_audit.py",
     "werewolf/canonical_collection/pre.py", "werewolf/canonical_collection/public_history.py",
     "werewolf/development_publication.py", PROTOCOL,
 )

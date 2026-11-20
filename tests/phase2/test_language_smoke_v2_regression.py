@@ -10,7 +10,7 @@ from scripts import run_phase2_language_smoke as smoke
 from tests.phase2.test_language_smoke_v1_regression import (
     ScriptedBackend, fixture_contract,
 )
-from werewolf.phase2_language import (
+from werewolf.interventions.language.semantics import (
     Phase2SemanticPerceiverV1, verify_language_execution,
 )
 

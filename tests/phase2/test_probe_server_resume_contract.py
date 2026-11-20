@@ -28,9 +28,9 @@ from tests.phase2.test_probe_policy_runner import (
 )
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.attempt_ledger import construct_collection_plan
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1, OnlinePilotLedgerError
-from werewolf.phase2_online_plan import ProbeStrategy
-from werewolf.phase2_outcome import reference_tables_digest
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1, OnlinePilotLedgerError
+from werewolf.interventions.online.plan import ProbeStrategy
+from werewolf.interventions.outcome import reference_tables_digest
 from werewolf.runtime_config import normalize_runtime_config
 
 
@@ -123,11 +123,11 @@ def resumed_inputs(server_input_scope, tmp_path, monkeypatch):
     smoke_source = {"commit": SOURCE_COMMIT, "tracked_worktree_clean": True,
         "staged_tracked_changes": False,
         "source_sha256": {"tracked.py": sha256_bytes(tracked.read_bytes())}}
-    definitions = [node for node in ast.parse((ROOT / "werewolf/phase2_online_server.py").read_text()).body
+    definitions = [node for node in ast.parse((ROOT / "werewolf/interventions/online/server.py").read_text()).body
                    if isinstance(node, ast.FunctionDef) and node.name == "_verify_smoke_source"]
-    scope.update(__file__=str(repo / "werewolf/phase2_online_server.py"), yaml=yaml,
+    scope.update(__file__=str(repo / "werewolf/interventions/online/server.py"), yaml=yaml,
         canonical_json_bytes=canonical_json_bytes, sha256_bytes=sha256_bytes,
-        INPUT_VERSION=literal_constants("werewolf/phase2_online_server.py", ("INPUT_VERSION",))["INPUT_VERSION"],
+        INPUT_VERSION=literal_constants("werewolf/interventions/online/server.py", ("INPUT_VERSION",))["INPUT_VERSION"],
         FIT_DIGEST=FIT_DIGEST, SEAL_DIGEST=SEAL_DIGEST,
         normalize_runtime_config=normalize_runtime_config,
         freeze_online_source_provenance=lambda path: {"commit": SOURCE_COMMIT},
@@ -141,7 +141,7 @@ def resumed_inputs(server_input_scope, tmp_path, monkeypatch):
             manifest={"source": smoke_source}),
     )
     exec(compile(ast.Module(body=definitions, type_ignores=[]),
-                 "werewolf/phase2_online_server.py", "exec"), scope)
+                 "werewolf/interventions/online/server.py", "exec"), scope)
 
     # Produce run_inputs with the complete production loader, never a handcrafted
     # or permissive replacement for the record compared by its resume guard.

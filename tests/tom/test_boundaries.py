@@ -157,7 +157,7 @@ def test_terminal_estimator_is_reachable_from_its_real_command_entrypoint():
     root = Path(__file__).resolve().parents[2]
     production, reached, entrypoints = _production_import_closure(root)
     assert "scripts.phase2_terminal_estimator" in entrypoints
-    estimator_modules = {"werewolf.phase2_terminal_estimator", "werewolf.phase2_terminal_estimator_io"}
+    estimator_modules = {"werewolf.interventions.terminal_estimator", "werewolf.interventions.terminal_estimator_io"}
     assert estimator_modules <= production & reached
 
 

@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from werewolf.phase2_actions import Action, ActionContextV1, ObservationWindowV1
-from werewolf.phase2_decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.actions import Action, ActionContextV1, ObservationWindowV1
+from werewolf.interventions.decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
+from werewolf.interventions.online.plan import (
     PROBE_SELECTION_RULE, SELECTION_RULE, OnlinePilotGameStateV1, OnlinePilotPlanError,
     OnlineTerminalAssignmentV1, Phase2OnlineProbePilotPlanV1,
     Phase2OnlineTerminalPilotPlanV1, ProbeStrategy,
@@ -16,7 +16,7 @@ from werewolf.phase2_online_plan import (
     probe_opportunity_from_record, select_probe_candidate,
     select_candidate,
 )
-from werewolf.phase2_treatment import build_phase2_treatment
+from werewolf.interventions.treatment import build_phase2_treatment
 
 
 def public_context(*, phase="speech", singleton=False, game_id="game-1"):

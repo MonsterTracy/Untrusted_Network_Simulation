@@ -13,17 +13,17 @@ from tests.canonical_collection.test_final_capacity import _night
 from tests.canonical_collection.test_runtime_game_evidence import _runtime, ROLES
 from tests.phase2.test_decision_opportunity import Mapper, q_matrix
 from tests.phase2.test_language import ControlledActor, ControlledPerceiver
-from werewolf.phase2_actions import Action, InformationRequestV1
-from werewolf.phase2_canonical_commit import (
+from werewolf.interventions.actions import Action, InformationRequestV1
+from werewolf.interventions.language.canonical_commit import (
     Phase2CanonicalCommitError, commit_phase2_verified_speech,
 )
-from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity_from_pre
-from werewolf.phase2_intervention import assess_phase2_checkpoint_closure
-from werewolf.phase2_language import (
+from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity_from_pre
+from werewolf.interventions.intervention import assess_phase2_checkpoint_closure
+from werewolf.interventions.language.semantics import (
     Phase2SpeechSemanticV1, public_language_context_from_pre,
 )
-from werewolf.phase2_treatment import build_phase2_treatment
-from werewolf.phase2_verified_speech import verified_phase2_speech
+from werewolf.interventions.treatment import build_phase2_treatment
+from werewolf.interventions.language.verified_speech import verified_phase2_speech
 
 
 def _prepare(action):

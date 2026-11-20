@@ -296,7 +296,7 @@ class Block(importlib.abc.MetaPathFinder):
    'werewolf.tom.dataset','werewolf.tom.backbone_model','werewolf.tom.model',
    'werewolf.tom.qwen3_final','werewolf.tom.experiment','werewolf.tom.training',
    'werewolf.observer_dtrs.dataset_offline','werewolf.observer_dtrs.offline',
-   'werewolf.observer_dtrs.training_audit','werewolf.phase2_mapper','werewolf.envs','werewolf.agents')
+   'werewolf.observer_dtrs.training_audit','werewolf.interventions.mapper','werewolf.envs','werewolf.agents')
   if fullname.startswith(blocked): raise AssertionError('forbidden import '+fullname)
 sys.meta_path.insert(0,Block())
 from werewolf.observer_dtrs.final_tom_capsule import CapsulePredictor,loader_source

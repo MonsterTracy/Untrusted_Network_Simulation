@@ -13,10 +13,10 @@ import pytest
 from tests.phase2.test_probe_policy_runner import (
     canonical_pre, fixture, next_pre, observe, pre, runtime,
 )
-from werewolf.phase2_online_ledger import (
+from werewolf.interventions.online.ledger import (
     OnlinePilotAssignmentLedgerV1, OnlinePilotLedgerError,
 )
-from werewolf.phase2_online_plan import Phase2OnlineProbePilotPlanV1, ProbeStrategy
+from werewolf.interventions.online.plan import Phase2OnlineProbePilotPlanV1, ProbeStrategy
 
 
 SOURCE_COMMIT = "a" * 40

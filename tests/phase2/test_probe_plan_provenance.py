@@ -16,11 +16,11 @@ import pytest
 from tests.canonical_collection.test_attempt_ledger import _plan
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.online.plan import (
     PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
 )
-from werewolf.phase2_online_preflight import verify_probe_plan_provenance
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.online.preflight import verify_probe_plan_provenance
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
 
 
 SOURCE_COMMIT = "a" * 40
@@ -112,7 +112,7 @@ def test_probe_provenance_rejects_drift_and_unfrozen_registration(tmp_path, muta
 def server_input_scope():
     # Execute the production definitions unchanged, excluding only optional
     # server import assembly. All tests terminate before runtime construction.
-    source = ast.parse(Path("werewolf/phase2_online_server.py").read_text())
+    source = ast.parse(Path("werewolf/interventions/online/server.py").read_text())
     definitions = [node for node in source.body if isinstance(node, ast.FunctionDef)
                    and node.name in ("_read_json", "load_online_plan", "_require_package_source",
                                      "load_server_inputs", "execute_server_campaign")]
@@ -125,7 +125,7 @@ def server_input_scope():
         verify_probe_plan_provenance=verify_probe_plan_provenance,
     )
     # Use the actual production constants, never a second test-only identity.
-    runner = ast.parse(Path("werewolf/phase2_online_runner.py").read_text())
+    runner = ast.parse(Path("werewolf/interventions/online/runner.py").read_text())
     for node in runner.body:
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -133,7 +133,7 @@ def server_input_scope():
                         "PROBE_QUALIFICATION_NAME", "PROBE_ARTIFACT_NAME"):
                     scope[target.id] = ast.literal_eval(node.value)
     exec(compile(ast.Module(body=definitions, type_ignores=[]),
-                 "werewolf/phase2_online_server.py", "exec"), scope)
+                 "werewolf/interventions/online/server.py", "exec"), scope)
     return scope
 
 
@@ -209,7 +209,7 @@ def test_actual_server_entry_rejects_changed_pins_before_worker_or_backend(
     repo, plan, game_plan, profile = probe_inputs(tmp_path)
     args = server_args(tmp_path, repo, plan, game_plan, profile)
     scope = server_input_scope
-    scope["__file__"] = str(repo / "werewolf/phase2_online_server.py")
+    scope["__file__"] = str(repo / "werewolf/interventions/online/server.py")
     scope["freeze_online_source_provenance"] = lambda path: {
         "commit": "b" * 40 if mutation == "source" else SOURCE_COMMIT,
     }
@@ -246,7 +246,7 @@ def test_actual_input_loader_reaches_config_only_after_valid_probe_guard(
     repo, plan, game_plan, profile = probe_inputs(tmp_path)
     args = server_args(tmp_path, repo, plan, game_plan, profile)
     scope = server_input_scope
-    scope["__file__"] = str(repo / "werewolf/phase2_online_server.py")
+    scope["__file__"] = str(repo / "werewolf/interventions/online/server.py")
     scope["freeze_online_source_provenance"] = lambda path: {"commit": SOURCE_COMMIT}
     calls = []
 
@@ -276,7 +276,7 @@ def test_raw_server_cli_cannot_bypass_shared_admission_or_qualified_pins(
     repo, plan, game_plan, profile = probe_inputs(tmp_path, purpose=purpose)
     args = server_args(tmp_path, repo, plan, game_plan, profile)
     scope = server_input_scope
-    scope["__file__"] = str(repo / "werewolf/phase2_online_server.py")
+    scope["__file__"] = str(repo / "werewolf/interventions/online/server.py")
     scope["freeze_online_source_provenance"] = lambda path: {"commit": SOURCE_COMMIT}
     calls = []
     qualified = shared_admission_fixture(monkeypatch, args, profile, calls=calls,
@@ -323,7 +323,7 @@ def test_raw_server_cli_paths_must_equal_frozen_profile(
     calls = []
     shared_admission_fixture(monkeypatch, args, profile, calls=calls)
     scope = server_input_scope
-    scope["__file__"] = str(repo / "werewolf/phase2_online_server.py")
+    scope["__file__"] = str(repo / "werewolf/interventions/online/server.py")
     scope["freeze_online_source_provenance"] = lambda path: {"commit": SOURCE_COMMIT}
     with pytest.raises(ValueError, match="server paths differ from frozen profile"):
         scope["execute_server_campaign"](args)
@@ -339,7 +339,7 @@ def test_old_v1_resume_is_rejected_before_worker_or_durable_write(server_input_s
     args.work_directory.mkdir()
     sentinel = args.work_directory / "assignment-ledger.jsonl"
     sentinel.write_bytes(b"immutable failed V1 evidence\n")
-    server_input_scope["__file__"] = str(repo / "werewolf/phase2_online_server.py")
+    server_input_scope["__file__"] = str(repo / "werewolf/interventions/online/server.py")
     server_input_scope["Qwen3GameplayPredictorClient"] = lambda **kw: pytest.fail("must reject before worker")
     with pytest.raises(ValueError, match="distinct fixed artifact names"):
         server_input_scope["execute_server_campaign"](args)

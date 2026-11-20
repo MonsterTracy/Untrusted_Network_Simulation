@@ -12,8 +12,8 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from scripts import phase2_gameplay_campaign as cli
-from werewolf import phase2_gameplay_server as server
-from werewolf.phase2_gameplay import digest, bind_campaign_profile, validate_profile, VERSION, qualification_diagnostics, freeze_source
+from werewolf.interventions import gameplay_server as server
+from werewolf.interventions.gameplay import digest, bind_campaign_profile, validate_profile, VERSION, qualification_diagnostics, freeze_source
 from werewolf.artifact_io import publish_artifact, canonical_json_bytes
 from tests.phase2.test_gameplay_campaign import plan, GameplayLedger, endpoint_replay
 from tests.phase2.test_probe_policy_runner import runtime
@@ -67,7 +67,7 @@ def assembly(monkeypatch, runtime):
         "scripts.qwen3_gameplay_predictor": {"Qwen3GameplayPredictorClient": Client},
         "werewolf.canonical_collection.production_runtime": {"Classic7RuntimeFactory": forbidden,
             "classic7_full_game_replay_executor": lambda config: endpoint_replay(), "run_game": runtime.run_canonical_game},
-        "werewolf.phase2_online_runner": {"OnlineTerminalPilotRunnerV1": forbidden},
+        "werewolf.interventions.online.runner": {"OnlineTerminalPilotRunnerV1": forbidden},
     }.items():
         module = ModuleType(name)
         module.__dict__.update(fields)
@@ -84,12 +84,16 @@ def test_runtime_check_uses_actual_loader_and_keeps_transport_zero(tmp_path, mon
     config = normalize_runtime_config(config)
     original = deepcopy(config)
     p = plan(paths={"plan": str(tmp_path / "plan"), "work": str(tmp_path / "work"), "destination": str(tmp_path / "pub")})
-    monkeypatch.setattr("werewolf.phase2_gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
+    monkeypatch.setattr("werewolf.interventions.gameplay.load_campaign_profile", lambda *a: p["campaign_profile"])
     p["runtime_inputs"]["q_python"] = "/fixture/python"
     p["plan_digest"] = digest({k: v for k, v in p.items() if k != "plan_digest"})
     monkeypatch.setattr(server, "server_inputs", lambda *a: ({"q_checkout": tmp_path / "q", "q_fit": tmp_path / "fit"}, config, 10, None, None))
     monkeypatch.setattr(server, "verify_runtime_service", lambda *a: effects.append("service"))
     monkeypatch.setattr(server, "freeze_source", lambda *a: p["source"])
+    with pytest.raises(ValueError, match="gameplay imports must originate"):
+        server.execute_server(p, repo=tmp_path, work=tmp_path / "work",
+                              destination=tmp_path / "pub", preflight_only=True)
+    assert not effects and not calls
     result = server.execute_server(p, repo=Path(__file__).resolve().parents[2], work=tmp_path / "work",
         destination=tmp_path / "pub", runtime_check_only=True, allow_gpu=True)
     assert result["status"] == "RUNTIME_CHECK_PASSED" and result["runtime_check_passed"] is True
@@ -206,7 +210,7 @@ def test_clean_old_source_cannot_admit_untracked_gameplay_implementation(tmp_pat
     git("add", "run_random.py")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "old fixture")
     old = git("rev-parse", "HEAD")
-    for name in ("werewolf/phase2_gameplay.py", "werewolf/phase2_gameplay_server.py", "scripts/phase2_gameplay_campaign.py",
+    for name in ("werewolf/interventions/gameplay.py", "werewolf/interventions/gameplay_server.py", "scripts/phase2_gameplay_campaign.py",
                  "docs/research/phase2-router-v1-contract.md", "configs/phase2/router-gameplay-qualification-v1.json",
                  "configs/phase2/router-gameplay-formal-v1.json"):
         file = repo / name
@@ -325,7 +329,7 @@ def test_pinned_profile_bytes_are_part_of_real_git_source_provenance(tmp_path):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
     git("init", "-q", "-b", "twd/mainline")
-    required = ("werewolf/phase2_gameplay.py", "werewolf/phase2_gameplay_server.py", "scripts/phase2_gameplay_campaign.py",
+    required = ("werewolf/interventions/gameplay.py", "werewolf/interventions/gameplay_server.py", "scripts/phase2_gameplay_campaign.py",
                 "docs/research/phase2-router-v1-contract.md", "configs/phase2/router-gameplay-qualification-v1.json",
                 "configs/phase2/router-gameplay-formal-v1.json")
     for name in required:

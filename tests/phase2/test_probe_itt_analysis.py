@@ -22,11 +22,11 @@ from tests.phase2.test_probe_policy_ledger import literal_snapshots
 from tests.phase2.test_probe_policy_plan import public_opportunity
 from tests.phase2.test_probe_policy_runner import canonical_pre
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, read_artifact_file
-from werewolf.phase2_actions import Action, context_from_pre
-from werewolf.phase2_online_plan import Phase2OnlineProbePilotPlanV1, assign_probe_strategy, select_probe_candidate
-from werewolf.phase2_online_records import Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1
-from werewolf.phase2_pilot_dataset import PROBE_ONLINE_VERSION, analyze_phase2_online_support_record
-from werewolf.phase2_treatment import build_phase2_treatment
+from werewolf.interventions.actions import Action, context_from_pre
+from werewolf.interventions.online.plan import Phase2OnlineProbePilotPlanV1, assign_probe_strategy, select_probe_candidate
+from werewolf.interventions.online.records import Phase2OnlineProbeRecordV1, Phase2StrategyStageExecutionV1
+from werewolf.interventions.online.pilot_dataset import PROBE_ONLINE_VERSION, analyze_phase2_online_support_record
+from werewolf.interventions.treatment import build_phase2_treatment
 
 
 def successful_probe_trace(assignment):
@@ -46,7 +46,7 @@ def successful_probe_trace(assignment):
     advance("T1_ATTEMPTED")
     advance("T1_COMMITTED", t1_execution=execution(assignment.opportunity, assignment.treatment, "T1"))
     advance("T3_SCHEDULED")
-    from werewolf.phase2_pilot_records import PublicProbeObservationV1
+    from werewolf.interventions.online.pilot_records import PublicProbeObservationV1
     record = replace(record, observations=(PublicProbeObservationV1("reply-speech", "player2", "我怀疑 player6。"),))
     advance("T3_REACHED")
     initial = assignment.opportunity
@@ -304,7 +304,7 @@ def test_source_drift_prevents_publication(formal, tmp_path, monkeypatch):
 
 def test_analysis_import_has_no_gameplay_model_or_server_assembly():
     result = subprocess.run([sys.executable, "-c", "import sys; import scripts.phase2_probe_itt_analysis; "
-        "assert not any(name in sys.modules for name in ('run_random', 'werewolf.phase2_online_runner', "
-        "'werewolf.phase2_online_server', 'transformers', 'torch', 'openai', 'gymnasium'))"],
+        "assert not any(name in sys.modules for name in ('run_random', 'werewolf.interventions.online.runner', "
+        "'werewolf.interventions.online.server', 'transformers', 'torch', 'openai', 'gymnasium'))"],
         cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

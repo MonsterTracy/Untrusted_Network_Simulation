@@ -10,8 +10,8 @@ import pytest
 
 from scripts import run_phase2_mapper_study as study
 from werewolf.artifact_io import verify_artifact
-from werewolf.phase2_offline import CandidateRow, OOF_SEAL_DIGEST, R2Input, ResolvedOutcome
-from werewolf.phase2_mapper import OOFProvenance
+from werewolf.interventions.offline import CandidateRow, OOF_SEAL_DIGEST, R2Input, ResolvedOutcome
+from werewolf.interventions.mapper.model import OOFProvenance
 
 
 def synthetic_rows():
@@ -151,7 +151,7 @@ def test_attestation_rejects_tracked_dirty_source(monkeypatch):
         if arguments == ("branch", "--show-current"):
             return b"twd/mainline\n"
         if arguments[0] == "status" and "--untracked-files=no" in arguments:
-            return b" M werewolf/phase2_mapper.py\n"
+            return b" M werewolf/interventions/mapper/model.py\n"
         pytest.fail("source attestation proceeded after dirty tracked file")
 
     monkeypatch.setattr(study, "_git", fake_git)

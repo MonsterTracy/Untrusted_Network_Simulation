@@ -9,7 +9,7 @@ import os
 import pytest
 
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from werewolf.phase2_offline import (
+from werewolf.interventions.offline import (
     Phase2DataError, PostDayState, ResolvedOutcome,
     UnsupportedStateError, _Opportunity, build_candidate_rows,
     build_development_layer, build_value_tables, candidate_opportunities,

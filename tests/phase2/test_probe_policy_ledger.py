@@ -8,12 +8,12 @@ import json
 import pytest
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
-from werewolf.phase2_actions import Action, ActionContextV1, ObservationWindowV1
-from werewolf.phase2_decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
-from werewolf.phase2_online_ledger import (
+from werewolf.interventions.actions import Action, ActionContextV1, ObservationWindowV1
+from werewolf.interventions.decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
+from werewolf.interventions.online.ledger import (
     OnlinePilotAssignmentLedgerV1, OnlinePilotLedgerError, PROBE_LEDGER_VERSION,
 )
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.online.plan import (
     Phase2OnlineProbePilotPlanV1, ProbeStrategy, assign_probe_strategy,
     select_probe_candidate,
 )

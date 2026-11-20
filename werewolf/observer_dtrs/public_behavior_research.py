@@ -12,7 +12,7 @@ from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.pre import validate_authoritative_pre_prefix
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.canonical_collection.game_bundle import _history_from_records, _annotation_from_record
-from werewolf.phase2_offline import _resolved_exiles, _vote_winner, Phase2DataError
+from werewolf.interventions.offline import _resolved_exiles, _vote_winner, Phase2DataError
 from werewolf.canonical_collection.speech import validate_v1_annotation_binding
 from werewolf.observer_dtrs.baselines import objective, sigmoid, SOLVER
 

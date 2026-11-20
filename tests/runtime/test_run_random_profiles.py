@@ -119,7 +119,7 @@ class RunRandomProfileTest(unittest.TestCase):
 import sys
 from werewolf import game_runtime
 from werewolf.canonical_collection import production_runtime
-from werewolf import phase2_online_runner
+from werewolf.interventions.online import runner as phase2_online_runner
 assert production_runtime.build_runtime is game_runtime.build_runtime
 assert production_runtime.run_game is game_runtime.eval
 assert phase2_online_runner.run_canonical_game is game_runtime.eval
@@ -133,7 +133,7 @@ assert 'run_random' not in sys.modules
         from werewolf import game_runtime
         from werewolf.artifact_io import sha256_bytes
         from werewolf.observer_dtrs.shadow_worker import _implementation
-        from werewolf.phase2_online_preflight import SOURCE_FILES
+        from werewolf.interventions.online.preflight import SOURCE_FILES
 
         name = 'werewolf/game_runtime.py'
         self.assertIn(name, SOURCE_FILES)

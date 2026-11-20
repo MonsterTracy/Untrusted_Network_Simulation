@@ -10,20 +10,20 @@ import pytest
 from tests.phase2.test_decision_opportunity import opportunity
 from tests.phase2.test_outcome_and_execution import values
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
-from werewolf.phase2_actions import Action
-from werewolf.phase2_outcome import extract_phase2_day_outcome
-from werewolf.phase2_pilot_dataset import (
+from werewolf.interventions.actions import Action
+from werewolf.interventions.outcome import extract_phase2_day_outcome
+from werewolf.interventions.online.pilot_dataset import (
     PilotDatasetError, analyze_phase2_consequence_support,
     analyze_phase2_consequence_support_record,
     build_phase2_consequence_dataset,
 )
-from werewolf.phase2_pilot_records import (
+from werewolf.interventions.online.pilot_records import (
     Phase2ActionConsequenceRecordV1, Phase2ProbeSequenceRecordV1,
     PilotRecordError, PublicProbeObservationV1,
     record_probe_day_outcome, record_probe_execution, record_probe_observation,
     record_probe_reconsideration,
 )
-from werewolf.phase2_treatment import build_phase2_treatment
+from werewolf.interventions.treatment import build_phase2_treatment
 
 
 def treatment(opp, action):

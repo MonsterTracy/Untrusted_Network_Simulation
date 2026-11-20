@@ -8,15 +8,15 @@ import pytest
 
 from tests.phase2.test_decision_opportunity import opportunity
 from tests.phase2.test_language import contexts
-from werewolf.phase2_actions import Action
-from werewolf.phase2_backend_audit import (
+from werewolf.interventions.actions import Action
+from werewolf.interventions.online.backend_audit import (
     Phase2BackendAuditError, Phase2BackendCallAuditV1,
 )
-from werewolf.phase2_language import (
+from werewolf.interventions.language.semantics import (
     Phase2LanguageActorV1, Phase2SemanticPerceiverV1,
     build_perception_prompt, perception_response_format,
 )
-from werewolf.phase2_treatment import build_phase2_treatment
+from werewolf.interventions.treatment import build_phase2_treatment
 from werewolf.canonical_collection.trajectory_evidence import BackendCallPurpose
 
 

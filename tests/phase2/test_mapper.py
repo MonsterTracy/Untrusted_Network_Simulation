@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from werewolf.phase2_offline import CandidateRow, OOF_SEAL_DIGEST, R2Input, ResolvedOutcome
-from werewolf.phase2_mapper import (
+from werewolf.interventions.offline import CandidateRow, OOF_SEAL_DIGEST, R2Input, ResolvedOutcome
+from werewolf.interventions.mapper.model import (
     CONTEXT_NUMERIC, EVIDENCE, FEATURE_CONTRACT_VERSION, MODEL_SPECS,
     FoldPreprocessor, MapperPrediction, MapperProtocolError, OOFProvenance,
     evaluate_predictions, fit_full_development, run_mapper_cv,
@@ -168,7 +168,7 @@ def test_calibration_diagnostics_have_no_deployment_calibrator():
 
 
 def test_calibration_diagnostic_receives_saved_raw_score_not_clipped_logit(monkeypatch):
-    import werewolf.phase2_mapper as mapper
+    import werewolf.interventions.mapper.model as mapper
 
     seen = []
 

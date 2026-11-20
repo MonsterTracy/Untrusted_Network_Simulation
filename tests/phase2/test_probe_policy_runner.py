@@ -19,21 +19,21 @@ from werewolf.canonical_collection.pre import (
 )
 from werewolf.canonical_collection.public_history import freeze_public_event_history
 from werewolf.canonical_collection.speech import V1AnnotationStatus, construct_v1_speech_annotation
-from werewolf.phase2_actions import Action, context_from_pre
-from werewolf.phase2_decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.actions import Action, context_from_pre
+from werewolf.interventions.decision_opportunity import CandidateEvidenceV1, Phase2DecisionOpportunityV1
+from werewolf.interventions.online.plan import (
     Phase2OnlineProbePilotPlanV1, ProbeStrategy, assign_probe_strategy, select_probe_candidate,
 )
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.phase2_online_records import validate_probe_lifecycle_record
-from werewolf.phase2_outcome import reference_tables_digest
-from werewolf.phase2_offline import ValueEstimate
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.online.records import validate_probe_lifecycle_record
+from werewolf.interventions.outcome import reference_tables_digest
+from werewolf.interventions.offline import ValueEstimate
 
 
 @pytest.fixture
 def runtime(monkeypatch):
     root = Path(__file__).resolve().parents[2]
-    source = ast.parse((root / "werewolf/phase2_online_runner.py").read_text())
+    source = ast.parse((root / "werewolf/interventions/online/runner.py").read_text())
     source.body = [node for node in source.body if not
                    (isinstance(node, ast.ImportFrom) and node.module == "werewolf.game_runtime")]
     scope = {"__name__": "probe_runner_test_source"}
@@ -41,7 +41,7 @@ def runtime(monkeypatch):
     import sys
     from types import ModuleType
     module = ModuleType(scope["__name__"])
-    module.__file__ = str(root / "werewolf/phase2_online_runner.py")
+    module.__file__ = str(root / "werewolf/interventions/online/runner.py")
     monkeypatch.setitem(sys.modules, module.__name__, module)
     production = ast.parse((root / "werewolf/game_runtime.py").read_text())
     definitions = [node for node in production.body if isinstance(node, ast.FunctionDef)
@@ -50,7 +50,7 @@ def runtime(monkeypatch):
                   "PUBLIC_SPEECH_RUNTIME_PHASES": frozenset(("speech", "speech_pk"))}
     exec(compile(ast.Module(body=definitions, type_ignores=[]), "werewolf/game_runtime.py", "exec"), game_scope)
     module.__dict__["run_canonical_game"] = game_scope["eval"]
-    exec(compile(source, "werewolf/phase2_online_runner.py", "exec"), module.__dict__)
+    exec(compile(source, "werewolf/interventions/online/runner.py", "exec"), module.__dict__)
     return module
 
 
@@ -302,8 +302,8 @@ def test_real_production_callable_signature_accepts_same_hook(runtime):
 
 
 def test_probe_path_has_no_terminal_risk_lambda_or_router_import(runtime):
-    source = Path("werewolf/phase2_online_runner.py").read_text()
-    assert not any(name in source for name in ("phase2_terminal_estimator", "phase2_risk", "phase2_probe_value", "ThreeWayRouter"))
+    source = Path("werewolf/interventions/online/runner.py").read_text()
+    assert not any(name in source for name in ("terminal_estimator", "phase2_risk", "phase2_probe_value", "ThreeWayRouter"))
 
 
 def test_t3_language_invalid_stays_itt_without_further_control(runtime, monkeypatch, tmp_path):
@@ -400,8 +400,8 @@ def test_actual_eval_body_installs_pre_hook_and_preserves_baseline_vote(runtime)
 
 def test_t3_backend_sequences_continue_original_assignment(runtime):
     from tests.phase2.test_online_backend_audit import FakeCanonicalAudit, FakeAuditedBackend
-    from werewolf.phase2_backend_audit import Phase2BackendCallAuditV1
-    from werewolf.phase2_treatment import build_phase2_treatment
+    from werewolf.interventions.online.backend_audit import Phase2BackendCallAuditV1
+    from werewolf.interventions.treatment import build_phase2_treatment
     op = public_opportunity()
     treatment = build_phase2_treatment(op, Action.REDIRECT, assignment_source="strategy_continuation",
                                       assignment_probability=1, randomization_key="parent-bound-fixture")

@@ -22,9 +22,9 @@ from werewolf.artifact_io import canonical_json_bytes
 from werewolf.artifact_io.canonical import ensure_durable_directory
 from werewolf.canonical_collection import attempt_ledger as canonical
 from werewolf.canonical_collection import game_bundle, pre, public_history, speech, trajectory_evidence
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.phase2_online_plan import PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1
-from werewolf.phase2_online_preflight import SOURCE_FILES
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.online.plan import PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1
+from werewolf.interventions.online.preflight import SOURCE_FILES
 from tests.phase2.test_probe_policy_ledger import frozen_assignment, LiteralRecord, literal_snapshots
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -82,18 +82,18 @@ def assembly(monkeypatch):
         V1_SPEECH_PARSER_VERSION=speech.V1_SPEECH_PARSER_VERSION,
         V1_SPEECH_PROMPT_VERSION=speech.V1_SPEECH_PROMPT_VERSION,
         CANONICAL_GAME_BUNDLE_SCHEMA_VERSION=game_bundle.CANONICAL_GAME_BUNDLE_SCHEMA_VERSION)
-    server = definitions(ROOT / "werewolf/phase2_online_server.py", {
+    server = definitions(ROOT / "werewolf/interventions/online/server.py", {
         "_read_json", "_publish_json", "load_online_plan"},
         json=json, re=re, Path=Path, ensure_durable_directory=ensure_durable_directory,
         _publish_bytes_noreplace=canonical._publish_bytes_noreplace,
         canonical_json_bytes=canonical_json_bytes, PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
         Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
         Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1)
-    runner = definitions(ROOT / "werewolf/phase2_online_runner.py", {
+    runner = definitions(ROOT / "werewolf/interventions/online/runner.py", {
         "ARTIFACT_NAME", "QUALIFICATION_NAME", "ARTIFACT_VERSION"})
     for name, module in (("scripts.collect_games", collection),
-                         ("werewolf.phase2_online_server", server),
-                         ("werewolf.phase2_online_runner", runner)):
+                         ("werewolf.interventions.online.server", server),
+                         ("werewolf.interventions.online.runner", runner)):
         monkeypatch.setitem(sys.modules, name, module)
     return collection, server
 
@@ -409,7 +409,7 @@ def test_status_reads_real_partial_probe_ledger_without_writes_or_rescheduling(o
     _, assignment = frozen_assignment(count=2, cap=5)
     # The authoritative constructor verifies this assignment against this plan;
     # use the same frozen randomization seed but the operator campaign identity.
-    from werewolf.phase2_online_plan import assign_probe_strategy, select_probe_candidate
+    from werewolf.interventions.online.plan import assign_probe_strategy, select_probe_candidate
     assignment = assign_probe_strategy(ledger.plan,
         select_probe_candidate(ledger.plan, assignment.opportunity.legal_context), assignment.opportunity)
     ledger.start_game(assignment.opportunity.legal_context.game_id)

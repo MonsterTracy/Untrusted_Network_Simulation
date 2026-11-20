@@ -12,17 +12,17 @@ if __package__ in (None, ""):
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.cli import _artifact_path, _storage_root
-from werewolf import phase2_offline as offline
-from werewolf.phase2_mapper import OOFProvenance, fit_full_development
-from werewolf import phase2_mapper_final as final
+from werewolf.interventions import offline
+from werewolf.interventions.mapper.model import OOFProvenance, fit_full_development
+from werewolf.interventions.mapper import final_fit as final
 from scripts import run_phase2_mapper_study as development
 
 
 OUTPUT_RELATIVE = Path("paper-studies/mapper-final") / final.FINAL_NAME
 FINAL_SOURCE_FILES = (
     "scripts/run_phase2_mapper_final_fit.py",
-    "werewolf/phase2_mapper_final.py",
-    "werewolf/phase2_mapper_runtime.py",
+    "werewolf/interventions/mapper/final_fit.py",
+    "werewolf/interventions/mapper/runtime.py",
     "docs/research/phase2-mapper-final-runbook.md",
 )
 

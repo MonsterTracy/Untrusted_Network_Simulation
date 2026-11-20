@@ -5,13 +5,13 @@ from dataclasses import replace
 import pytest
 
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from werewolf.phase2_actions import Action, ActionContextV1
-from werewolf.phase2_decision_opportunity import (
+from werewolf.interventions.actions import Action, ActionContextV1
+from werewolf.interventions.decision_opportunity import (
     DecisionOpportunityError, build_phase2_decision_opportunity,
 )
-from werewolf.phase2_mapper_runtime import RuntimeInference
-from werewolf.phase2_offline import R2Input
-from werewolf.phase2_treatment import TreatmentError, build_phase2_treatment
+from werewolf.interventions.mapper.runtime import RuntimeInference
+from werewolf.interventions.offline import R2Input
+from werewolf.interventions.treatment import TreatmentError, build_phase2_treatment
 
 
 def context(*, phase="speech", actor="player1", pk_targets=("player2", "player5")):

@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    from werewolf.phase2_online_server import execute_server_campaign
+    from werewolf.interventions.online.server import execute_server_campaign
     try:
         return execute_server_campaign(args)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
@@ -61,7 +61,7 @@ def __getattr__(name):
     """Preserve library imports while production implementation lives in werewolf."""
     if name.startswith("__"):
         raise AttributeError(name)
-    from werewolf import phase2_online_runner
+    from werewolf.interventions.online import runner as phase2_online_runner
     return getattr(phase2_online_runner, name)
 
 

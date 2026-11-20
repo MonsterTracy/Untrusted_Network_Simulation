@@ -15,7 +15,7 @@ from scripts import experiment_a_mapper_contrasts as analysis
 from werewolf.artifact_io import (
     ArtifactConflictError, canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, verify_artifact,
 )
-from werewolf.phase2_mapper import MODEL_SPECS, OOFProvenance, MapperPrediction
+from werewolf.interventions.mapper.model import MODEL_SPECS, OOFProvenance, MapperPrediction
 from werewolf.tom import backbone_evaluation as evaluation
 
 ANALYSIS_SOURCE = analysis._analysis_source

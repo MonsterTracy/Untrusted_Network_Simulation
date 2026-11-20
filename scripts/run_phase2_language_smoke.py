@@ -22,19 +22,19 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.phase2_language_realization import realize_verify_action
-from werewolf import phase2_offline as offline
+from werewolf.interventions import offline
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.development_publication import open_publication, open_role_sidecar
-from werewolf.phase2_actions import (
+from werewolf.interventions.actions import (
     Action, ActionContextV1, CONTRACT_VERSION, context_from_pre,
     probe_continuation, probe_plan, push_plan, redirect_plan,
 )
-from werewolf.phase2_language import (
+from werewolf.interventions.language.semantics import (
     LANGUAGE_VERSION, Phase2LanguageActorV1, Phase2SemanticPerceiverV1,
     public_language_context_from_pre,
 )
-from werewolf.phase2_language_audit import LANGUAGE_AUDIT_VERSION
+from werewolf.interventions.language.audit import LANGUAGE_AUDIT_VERSION
 
 
 NAME = "paper-phase2-language-smoke-v3"
@@ -51,9 +51,9 @@ MAPPER = Path("/data/yuxiao/Untrusted_Network_Simulation/paper-studies/mapper-fi
 MAPPER_DIGEST = "8ab529972a5722e61e0a81ec37f089677d1276c21cb83921aa842b2ce33995c3"
 REPOSITORY = Path(__file__).resolve().parents[1]
 SOURCE_FILES = ("scripts/run_phase2_language_smoke.py", "scripts/phase2_language_realization.py",
-                "werewolf/phase2_actions.py", "werewolf/phase2_language.py",
-                "werewolf/phase2_language_audit.py", "werewolf/phase2_mapper_runtime.py",
-                "werewolf/phase2_offline.py")
+                "werewolf/interventions/actions.py", "werewolf/interventions/language/semantics.py",
+                "werewolf/interventions/language/audit.py", "werewolf/interventions/mapper/runtime.py",
+                "werewolf/interventions/offline.py")
 
 
 class SmokeStudyError(ValueError):
@@ -336,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     selected_digest = selection_digest(cases)
     if selected_digest != EXPECTED_CASE_SELECTION_DIGEST:
         raise SmokeStudyError("smoke-v3 cases differ from the sealed smoke-v1/v2 selection")
-    from werewolf.phase2_mapper_runtime import load_runtime_mapper
+    from werewolf.interventions.mapper.runtime import load_runtime_mapper
     runtime_mapper = load_runtime_mapper(args.mapper, expected_manifest_digest=MAPPER_DIGEST)
     q_by_pre = selected_oof_q(publication, cases, args.evaluation_root)
     # Construct every plan before a first LLM call; any Q/mapper error cannot create a partial run.

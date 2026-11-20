@@ -8,13 +8,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from werewolf.artifact_io import sha256_bytes
-from werewolf.phase2_action_audit import audit_structured_plan
-from werewolf.phase2_actions import ActionContextV1, Phase2SemanticPlanV1
-from werewolf.phase2_language import (
+from werewolf.interventions.action_audit import audit_structured_plan
+from werewolf.interventions.actions import ActionContextV1, Phase2SemanticPlanV1
+from werewolf.interventions.language.semantics import (
     Phase2LanguageError, Phase2SpeechSemanticV1, PublicLanguageContextV1,
     verify_language_execution,
 )
-from werewolf.phase2_language_audit import (
+from werewolf.interventions.language.audit import (
     LanguageAttemptV1, Phase2LanguageAuditV1, plan_digest, semantic_digest,
 )
 

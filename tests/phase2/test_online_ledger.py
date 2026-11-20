@@ -6,18 +6,18 @@ from types import SimpleNamespace
 import pytest
 
 from tests.phase2.test_decision_opportunity import Mapper, opportunity, q_matrix
-from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
-from werewolf.phase2_online_ledger import (
+from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity
+from werewolf.interventions.online.ledger import (
     OnlinePilotAssignmentLedgerV1, OnlinePilotLedgerError,
 )
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.online.plan import (
     FORMAL_PILOT, QUALIFICATION, OnlinePilotGameStateV1,
     Phase2OnlineTerminalPilotPlanV1, assign_terminal_action, select_candidate,
 )
-from werewolf.phase2_online_records import (
+from werewolf.interventions.online.records import (
     Phase2OnlineInterventionRecordV1, record_online_execution,
 )
-from werewolf.phase2_pilot_dataset import (
+from werewolf.interventions.online.pilot_dataset import (
     PilotDatasetError, analyze_phase2_online_support_record,
     build_phase2_online_dataset_from_ledger, require_online_dataset_access,
 )

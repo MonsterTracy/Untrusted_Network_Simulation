@@ -11,9 +11,9 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from werewolf import phase2_offline as offline
+from werewolf.interventions import offline
 from werewolf.development_publication import open_publication, open_role_sidecar
-from werewolf.phase2_actions import ActionContextV1, context_from_pre, probe_continuation
+from werewolf.interventions.actions import ActionContextV1, context_from_pre, probe_continuation
 
 
 DEFAULT_PUBLICATION = Path(

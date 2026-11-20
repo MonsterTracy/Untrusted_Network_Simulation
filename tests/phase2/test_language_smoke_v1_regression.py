@@ -8,11 +8,11 @@ import pytest
 
 from scripts import run_phase2_language_smoke as smoke
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from werewolf.phase2_actions import (
+from werewolf.interventions.actions import (
     Action, ActionContextV1, InformationRequestV1, ObservationWindowV1,
     Phase2SemanticPlanV1, verify_plan,
 )
-from werewolf.phase2_language import (
+from werewolf.interventions.language.semantics import (
     Phase2SemanticPerceiverV1, PublicLanguageContextV1, verify_language_execution,
 )
 

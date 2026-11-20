@@ -4,12 +4,12 @@
 def __getattr__(name):
     if name.startswith("__"):
         raise AttributeError(name)
-    from werewolf import phase2_online_preflight
+    from werewolf.interventions.online import preflight as phase2_online_preflight
     return getattr(phase2_online_preflight, name)
 
 
 def main():
-    from werewolf.phase2_online_preflight import main as static_main
+    from werewolf.interventions.online.preflight import main as static_main
     return static_main()
 
 

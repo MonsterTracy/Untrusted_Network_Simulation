@@ -25,18 +25,64 @@ from tests.phase2.test_outcome_and_execution import values
 from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
 from werewolf.canonical_collection.attempt_ledger import construct_collection_plan
-from werewolf.phase2_mapper_final import FINAL_VERSION
-from werewolf.phase2_online_plan import Phase2OnlineTerminalPilotPlanV1
-from werewolf.phase2_online_records import Phase2OnlineInterventionRecordV1, record_online_execution
-from werewolf.phase2_outcome import reference_tables_digest
-import werewolf.phase2_mapper_runtime as mapper_module
-import werewolf.phase2_online_preflight as preflight
-import werewolf.phase2_online_runner as runner
-import werewolf.phase2_online_server as server
+from werewolf.interventions.mapper.final_fit import FINAL_VERSION
+from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1
+from werewolf.interventions.online.records import Phase2OnlineInterventionRecordV1, record_online_execution
+from werewolf.interventions.outcome import reference_tables_digest
+import werewolf.interventions.mapper.runtime as mapper_module
+import werewolf.interventions.online.preflight as preflight
+import werewolf.interventions.online.runner as runner
+import werewolf.interventions.online.server as server
 from werewolf.game_runtime import eval as production_eval
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("fault", [None, "language", "offline", "reader", "historical", "anchor"])
+def test_smoke_source_matches_current_layout_and_rejects_old_source(tmp_path, fault):
+    sources = {}
+    for name in smoke.SOURCE_FILES:
+        raw = (ROOT / name).read_bytes()
+        sources[name] = sha256_bytes(raw)
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    source = {"commit": "f" * 40, "tracked_worktree_clean": True,
+              "staged_tracked_changes": False, "source_sha256": sources}
+    if fault == "historical":
+        historical = "da0cf3a5b00ba73c33ef5227eec1789358876923"
+        historical_files = (
+            "scripts/run_phase2_language_smoke.py",
+            "scripts/phase2_language_realization.py",
+            "werewolf/phase2_actions.py",
+            "werewolf/phase2_language.py",
+            "werewolf/phase2_language_audit.py",
+            "werewolf/phase2_mapper_runtime.py",
+            "werewolf/phase2_offline.py",
+        )
+        source["commit"] = historical
+        source["source_sha256"] = {
+            name: sha256_bytes(subprocess.check_output(
+                ["git", "-C", str(ROOT), "show", f"{historical}:{name}"]))
+            for name in historical_files
+        }
+    elif fault == "anchor":
+        sources["werewolf/interventions/offline.py"] = "f" * 64
+    elif fault is not None:
+        relative = {"language": "werewolf/interventions/language/semantics.py",
+                    "offline": "werewolf/interventions/offline.py",
+                    "reader": "werewolf/interventions/mapper/runtime.py"}[fault]
+        path = tmp_path / relative
+        path.write_bytes(path.read_bytes() + b"\n# unknown source\n")
+    original = deepcopy(source)
+    artifact = SimpleNamespace(manifest={"source": source})
+    if fault is None:
+        assert server._verify_smoke_source(tmp_path, artifact) == original
+    else:
+        with pytest.raises(ValueError, match="Smoke-V3 source"):
+            server._verify_smoke_source(tmp_path, artifact)
+    assert artifact.manifest["source"] == original
 
 
 def _git(path, *args):
@@ -96,8 +142,8 @@ def _setup(tmp_path, monkeypatch, purpose="qualification"):
     cases = [{"game_id": f"g{i}", "boundary_id": f"b{i}"} for i in range(58)]
     selection_digest = sha256_bytes(canonical_json_bytes(cases))
     monkeypatch.setattr(smoke, "EXPECTED_CASE_SELECTION_DIGEST", selection_digest)
-    from werewolf.phase2_actions import CONTRACT_VERSION
-    from werewolf.phase2_language import LANGUAGE_VERSION
+    from werewolf.interventions.actions import CONTRACT_VERSION
+    from werewolf.interventions.language.semantics import LANGUAGE_VERSION
     smoke_fields = {"artifact_type": "phase2_language_execution_smoke", "schema_version": smoke.VERSION,
         "study_name": smoke.NAME, "action_contract_version": CONTRACT_VERSION,
         "language_semantic_version": LANGUAGE_VERSION, "final_mapper_manifest_digest": mapper.artifact_digest,
@@ -198,9 +244,9 @@ def test_wrong_frozen_input_fails_before_worker_or_language(tmp_path, monkeypatc
     elif fault == "mapper":
         args.mapper_manifest_digest = "0" * 64
     elif fault == "smoke_source":
-        path = args.repo / "werewolf/phase2_language.py"
+        path = args.repo / "werewolf/interventions/language/semantics.py"
         path.write_bytes(path.read_bytes() + b"\n# changed source\n")
-        _git(args.repo, "add", "werewolf/phase2_language.py")
+        _git(args.repo, "add", "werewolf/interventions/language/semantics.py")
         _git(args.repo, "commit", "-qm", "changed language bytes")
         args.source_commit = _git(args.repo, "rev-parse", "HEAD")
         game = server._read_json(args.game_plan)

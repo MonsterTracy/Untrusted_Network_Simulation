@@ -2,16 +2,16 @@
 
 import pytest
 
-from werewolf.phase2_execution import prepare_phase2_intervention_speech
+from werewolf.interventions.language.execution import prepare_phase2_intervention_speech
 from tests.phase2.test_decision_opportunity import opportunity
-from werewolf.phase2_actions import Action, push_plan
-from werewolf.phase2_language import Phase2SpeechSemanticV1, PublicLanguageContextV1
-from werewolf.phase2_offline import (
+from werewolf.interventions.actions import Action, push_plan
+from werewolf.interventions.language.semantics import Phase2SpeechSemanticV1, PublicLanguageContextV1
+from werewolf.interventions.offline import (
     ReferenceTables, ResolvedOutcome, ValueEstimate, ValueTable,
 )
-from werewolf.phase2_outcome import OutcomeError, extract_phase2_day_outcome
-from werewolf.phase2_treatment import build_phase2_treatment
-from werewolf.phase2_verified_speech import verified_phase2_speech
+from werewolf.interventions.outcome import OutcomeError, extract_phase2_day_outcome
+from werewolf.interventions.treatment import build_phase2_treatment
+from werewolf.interventions.language.verified_speech import verified_phase2_speech
 
 
 def values():

@@ -6,8 +6,8 @@ import pytest
 
 from scripts.analyze_phase2_action_availability import analyze_contexts
 from werewolf.artifact_io import canonical_json_bytes
-from werewolf.phase2_action_audit import audit_structured_plan
-from werewolf.phase2_actions import (
+from werewolf.interventions.action_audit import audit_structured_plan
+from werewolf.interventions.actions import (
     Action, ActionContextV1, ActionContractError, InformationRequestV1,
     NO_STANCE, Phase2SemanticPlanV1, probe_continuation, probe_plan,
     push_plan, redirect_plan, select_redirect_target, verify_plan,

@@ -17,22 +17,22 @@ from tests.canonical_collection.test_final_capacity import _night
 from tests.canonical_collection.test_runtime_game_evidence import _runtime, ROLES
 from tests.phase2.test_decision_opportunity import Mapper, q_matrix
 from tests.phase2.test_outcome_and_execution import values
-from werewolf.phase2_actions import Action, context_from_pre
-from werewolf.phase2_decision_opportunity import build_phase2_decision_opportunity
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.actions import Action, context_from_pre
+from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity
+from werewolf.interventions.online.plan import (
     Phase2OnlinePilotPlanV1, assign_terminal_action, select_candidate,
 )
 from scripts.run_phase2_online_intervention_pilot import (
     OnlineTerminalPilotRunnerV1, OnlinePilotRuntimeBundleV1,
     run_online_game, run_online_campaign, publish_online_pilot,
 )
-from werewolf.phase2_online_preflight import PilotPreflightV1
+from werewolf.interventions.online.preflight import PilotPreflightV1
 from tests.phase2.test_online_ledger import _game_assignment
-from werewolf.phase2_pilot_dataset import build_phase2_online_dataset_from_ledger
+from werewolf.interventions.online.pilot_dataset import build_phase2_online_dataset_from_ledger
 from werewolf.game_runtime import eval as run_game
 from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
-from werewolf.phase2_outcome import reference_tables_digest
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.outcome import reference_tables_digest
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
 
 
 class _StopAfterFirstDayEnv(WerewolfTextEnvV0):
@@ -173,7 +173,7 @@ def test_uncertain_post_commit_error_is_interrupted_not_false_failure(tmp_path,
         model_name="fixture-model-v1", reference_tables=values(),
         reference_artifact_digest=reference_tables_digest(values()), ledger=ledger)
     pilot.start_game(recorder.game_id)
-    import werewolf.phase2_online_runner as runner_module
+    import werewolf.interventions.online.runner as runner_module
     def uncertain_commit(**kwargs):
         env.public_events.append({"event_type": "public_speech", "raw_text": "partial"})
         raise RuntimeError("after public event")
@@ -337,7 +337,7 @@ def test_campaign_resume_skips_prior_games_and_stops_at_assignment_target(tmp_pa
     def execute(env, agents, roles, *, recorder, call_audit, pilot, preflight):
         ledger.start_game(recorder.game_id)
         ledger.persist_assignment(_game_assignment(plan, recorder.game_id))
-    import werewolf.phase2_online_runner as runner_module
+    import werewolf.interventions.online.runner as runner_module
     monkeypatch.setattr(runner_module, "run_online_game", execute)
     result = run_online_campaign(tuple(f"g{i}" for i in range(12)), factory,
                                  ledger=ledger)
@@ -449,7 +449,7 @@ def test_full_canonical_game_accepts_phase2_runtime_call_audit():
 
 @pytest.mark.parametrize("success", (True, False))
 def test_server_canonical_stage_verifier_reads_real_execution_and_day_evidence(tmp_path, success):
-    from werewolf.phase2_online_server import ServerRuntimeFactory, _publish_json
+    from werewolf.interventions.online.server import ServerRuntimeFactory, _publish_json
     env, _, audit, recorder, raw, observation, handoff, opp = _speech_pre()
     proof = object.__new__(ServerRuntimeFactory)
     proof.work_directory = tmp_path

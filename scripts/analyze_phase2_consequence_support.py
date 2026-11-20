@@ -10,7 +10,7 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from werewolf.phase2_pilot_dataset import (
+from werewolf.interventions.online.pilot_dataset import (
     ONLINE_VERSION, analyze_phase2_consequence_support_record,
     analyze_phase2_online_support_record,
 )

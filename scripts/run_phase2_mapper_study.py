@@ -22,12 +22,12 @@ from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes,
 )
 from werewolf.cli import _artifact_path, _storage_root
-from werewolf import phase2_offline as offline
-from werewolf.phase2_mapper import (
+from werewolf.interventions import offline
+from werewolf.interventions.mapper.model import (
     FEATURE_CONTRACT_VERSION, FOLDS, MODEL_SPECS, OOFProvenance,
     run_mapper_cv, validate_rows,
 )
-from werewolf.phase2_mapper_selection import (
+from werewolf.interventions.mapper.selection import (
     CI_LEVEL, DEFAULT_REPLICATES, DEFAULT_SEED, MODEL_ORDER,
     bootstrap_compare, select_from_comparison,
 )
@@ -45,9 +45,9 @@ OUTPUT_RELATIVE = Path("paper-studies/mapper-development") / STUDY_NAME
 EXPECTED_POSITIVES = 5412
 SOURCE_FILES = (
     "scripts/run_phase2_mapper_study.py",
-    "werewolf/phase2_offline.py",
-    "werewolf/phase2_mapper.py",
-    "werewolf/phase2_mapper_selection.py",
+    "werewolf/interventions/offline.py",
+    "werewolf/interventions/mapper/model.py",
+    "werewolf/interventions/mapper/selection.py",
     "docs/research/phase2-offline-data-contract.md",
     "docs/research/phase2-mapper-protocol.md",
     "docs/research/phase2-mapper-study-runbook.md",
@@ -80,7 +80,7 @@ def attest_source(*, experiment_a=False) -> dict:
                           "--ignore-submodules=none").decode().splitlines()
     if tracked_status:
         raise MapperStudyError("tracked Git files must be clean before formal study")
-    files = SOURCE_FILES + (("werewolf/phase2_q_representation.py",) if experiment_a else ())
+    files = SOURCE_FILES + (("werewolf/interventions/mapper/q_representation.py",) if experiment_a else ())
     _git(root, "ls-files", "--error-unmatch", "--", *files)
     source_hashes = {}
     for relative in files:
@@ -97,7 +97,7 @@ def attest_source(*, experiment_a=False) -> dict:
 
 def preflight(storage_profile: Path | str, *, paired_experiment_digest=None,
               temporal_condition="explicit_day_phase", q_representation="continuous") -> tuple[Path, dict]:
-    from werewolf.phase2_q_representation import condition_id
+    from werewolf.interventions.mapper.q_representation import condition_id
     if paired_experiment_digest is None:
         if temporal_condition != "explicit_day_phase" or q_representation != "continuous":
             raise MapperStudyError("Experiment A requires a paired experiment identity")
@@ -316,12 +316,12 @@ def run_study(storage_profile: Path | str, *, evaluation_root=None, paired_exper
                    "storage_profile_sha256": sha256_bytes(Path(storage_profile).read_bytes()),
                    "oof_evaluation_path": str(evaluation_root),
                    "oof": oof.record()},
-        "protocol": {"offline_contract_source_sha256": source["source_sha256"]["werewolf/phase2_offline.py"],
+        "protocol": {"offline_contract_source_sha256": source["source_sha256"]["werewolf/interventions/offline.py"],
                      "offline_contract_document_sha256": source["source_sha256"]["docs/research/phase2-offline-data-contract.md"],
                      "feature_contract_version": FEATURE_CONTRACT_VERSION,
                      "mapper_protocol_document_sha256": source["source_sha256"]["docs/research/phase2-mapper-protocol.md"],
-                     "mapper_source_sha256": source["source_sha256"]["werewolf/phase2_mapper.py"],
-                     "selection_source_sha256": source["source_sha256"]["werewolf/phase2_mapper_selection.py"],
+                     "mapper_source_sha256": source["source_sha256"]["werewolf/interventions/mapper/model.py"],
+                     "selection_source_sha256": source["source_sha256"]["werewolf/interventions/mapper/selection.py"],
                      "model_specs": [spec.record() for spec in ((MODEL_SPECS[3],) if paired else MODEL_SPECS)],
                      "bootstrap": None if paired else {"replicates": DEFAULT_REPLICATES,
                                    "seed": DEFAULT_SEED, "ci_level": CI_LEVEL,

@@ -18,10 +18,10 @@ from tests.phase2.test_online_server import _setup, _git
 from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
-from werewolf.phase2_online_ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.phase2_online_plan import Phase2OnlineTerminalPilotPlanV1
-from werewolf.phase2_online_runner import ARTIFACT_NAME, QUALIFICATION_NAME, ARTIFACT_VERSION
-from werewolf import phase2_online_server as server
+from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
+from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1
+from werewolf.interventions.online.runner import ARTIFACT_NAME, QUALIFICATION_NAME, ARTIFACT_VERSION
+from werewolf.interventions.online import server
 
 
 def write(path, value):

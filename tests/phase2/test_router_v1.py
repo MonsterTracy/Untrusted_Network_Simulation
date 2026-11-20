@@ -16,14 +16,14 @@ from werewolf.canonical_collection.pre import AuthoritativePREPrefix, construct_
 from werewolf.canonical_collection.public_history import freeze_public_event_history
 from werewolf.canonical_collection.speech import V1AnnotationStatus, construct_v1_speech_annotation
 from tests.canonical_collection.test_pre_prefix import _attempt
-from werewolf.phase2_actions import Action, context_from_pre
-from werewolf.phase2_online_plan import (
+from werewolf.interventions.actions import Action, context_from_pre
+from werewolf.interventions.online.plan import (
     Phase2RouterPolicyV1, ProbeStrategy, OnlinePilotPlanError, assign_router_policy,
     select_probe_candidate, probe_candidate_pool, router_assignment_from_record,
     probe_assignment_from_record, Phase2OnlineProbePilotPlanV1,
 )
-from werewolf.phase2_online_records import validate_probe_lifecycle_record, Phase2OnlineProbeRecordV1
-import werewolf.phase2_online_plan as plans
+from werewolf.interventions.online.records import validate_probe_lifecycle_record, Phase2OnlineProbeRecordV1
+import werewolf.interventions.online.plan as plans
 
 
 def policy(strategy=ProbeStrategy.PROBE_THEN_REDIRECT, **changes):

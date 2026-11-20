@@ -18,7 +18,7 @@ from werewolf.canonical_collection.attempt_ledger import construct_attempt_claim
 from werewolf.canonical_collection.failure_evidence import construct_canonical_partial_evidence
 from werewolf.canonical_collection.pre import construct_authoritative_pre_prefix
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
-from werewolf.phase2_offline import ReferenceTables, ValueEstimate, ValueTable
+from werewolf.interventions.offline import ReferenceTables, ValueEstimate, ValueTable
 
 
 FIXTURE = Path(__file__).parent / "fixtures/phase2-terminal-itt-recorded-arm-losses.json"

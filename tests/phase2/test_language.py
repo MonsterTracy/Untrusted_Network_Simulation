@@ -7,10 +7,10 @@ import pytest
 
 from scripts.phase2_language_realization import realize_verify_action
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
-from werewolf.phase2_actions import (
+from werewolf.interventions.actions import (
     ActionContextV1, InformationRequestV1, probe_plan, push_plan, redirect_plan,
 )
-from werewolf.phase2_language import (
+from werewolf.interventions.language.semantics import (
     OTHER_REQUEST, Phase2LanguageActorV1, Phase2LanguageError,
     Phase2SemanticPerceiverV1, Phase2SpeechSemanticV1, PublicLanguageContextV1,
     build_perception_prompt, build_realization_prompt, parse_perceived_semantics,

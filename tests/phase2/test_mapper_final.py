@@ -5,6 +5,7 @@ from hashlib import sha256
 import inspect
 import json
 import math
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,15 +14,15 @@ import pytest
 
 from scripts import run_phase2_mapper_final_fit as runner
 from scripts import run_phase2_mapper_study as development
-from werewolf import phase2_offline as offline
-from werewolf import phase2_mapper_final as final
-from werewolf import phase2_mapper_runtime as runtime
+from werewolf.interventions import offline
+from werewolf.interventions.mapper import final_fit as final
+from werewolf.interventions.mapper import runtime
 from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes,
     verify_artifact,
 )
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from werewolf.phase2_mapper import MODEL_SPECS, OOFProvenance, fit_full_development
+from werewolf.interventions.mapper.model import MODEL_SPECS, OOFProvenance, fit_full_development
 
 
 def rows():
@@ -103,9 +104,9 @@ def uniform_q():
 
 def source_record():
     return {"commit": "b" * 40, "source_sha256": {
-        "werewolf/phase2_offline.py": sha256_bytes(Path(offline.__file__).read_bytes()),
-        "werewolf/phase2_mapper.py": sha256_bytes(Path(final.mapper.__file__).read_bytes()),
-        "werewolf/phase2_mapper_runtime.py": sha256_bytes(Path(runtime.__file__).read_bytes()),
+        "werewolf/interventions/offline.py": sha256_bytes(Path(offline.__file__).read_bytes()),
+        "werewolf/interventions/mapper/model.py": sha256_bytes(Path(final.mapper.__file__).read_bytes()),
+        "werewolf/interventions/mapper/runtime.py": sha256_bytes(Path(runtime.__file__).read_bytes()),
     }}
 
 
@@ -357,3 +358,56 @@ def test_runtime_rejects_illegal_queue_and_candidate():
         runtime.build_runtime_z(q, **{**kwargs, "public_speaker_queue": alive[:-1]})
     with pytest.raises(runtime.RuntimeMapperError):
         runtime.build_runtime_z(q, **{**kwargs, "candidate_j": "player2"})
+
+
+HISTORICAL_SOURCE = "74049b2939fa1887be2d02fe592b3c0555bd0518"
+HISTORICAL_RUNTIME_FILES = (
+    "werewolf/phase2_offline.py",
+    "werewolf/phase2_mapper.py",
+    "werewolf/phase2_mapper_runtime.py",
+)
+
+
+def _source_blob(root, revision, relative):
+    return subprocess.check_output(["git", "-C", str(root), "show", f"{revision}:{relative}"])
+
+
+@pytest.mark.parametrize(("fault", "error"), [
+    (None, None),
+    ("historical", "runtime feature implementation differs"),
+    ("source", "runtime feature implementation differs"),
+    ("semantics", "semantics or study binding mismatch"),
+    ("oof", "semantics or study binding mismatch"),
+    ("model", "invalid frozen feature order"),
+])
+def test_mapper_loader_checks_current_source_and_frozen_model_lineage(monkeypatch, tmp_path, fault, error):
+    study, examples = synthetic_study(tmp_path, monkeypatch)
+    monkeypatch.setattr(final, "STUDY_DIGEST", study.manifest_digest)
+    monkeypatch.setattr(runtime, "STUDY_DIGEST", study.manifest_digest)
+    fitted = fit_full_development(examples, final.SELECTED_SPEC, oof_provenance())
+    original = final.publish_full_mapper(tmp_path / "exact", fitted=fitted, rows=examples, study=study,
+        source=source_record(), candidate_digest=final.candidate_identity_digest(examples))
+    manifest = {k: v for k, v in original.manifest.items() if k not in ("manifest_digest", "file_table")}
+    if fault == "historical":
+        root = Path(__file__).resolve().parents[2]
+        manifest["source"] = {"commit": HISTORICAL_SOURCE, "source_sha256": {
+            name: sha256_bytes(_source_blob(root, HISTORICAL_SOURCE, name))
+            for name in HISTORICAL_RUNTIME_FILES
+        }}
+    elif fault == "source":
+        manifest["source"]["source_sha256"]["werewolf/interventions/mapper/runtime.py"] = "0" * 64
+    elif fault == "semantics": manifest["calibration"] = "new-calibration"
+    elif fault == "oof": manifest["inputs"]["qwen3_oof_evaluation_seal_digest"] = "0" * 64
+    elif fault == "model": manifest["model"]["coefficient"][0] += 1
+    artifact = publish_artifact(tmp_path / "mapper-source-fixture", manifest_fields=manifest,
+        files={n: (original.path / n).read_bytes() for n in original.manifest["file_table"]})
+    if error is not None:
+        with pytest.raises(runtime.RuntimeMapperError, match=error):
+            runtime.load_runtime_mapper(artifact.path, expected_manifest_digest=artifact.manifest_digest)
+        return
+    loaded = runtime.load_runtime_mapper(artifact.path, expected_manifest_digest=artifact.manifest_digest)
+    assert loaded.model_digest == fitted.manifest["model_digest"]
+    result = loaded.infer(uniform_q(), alive=PLAYER_IDS[:5], known_wolves=frozenset(PLAYER_IDS[:2]),
+        acting_wolf="player1", candidate_j="player3", phase="speech", public_speaker_queue=PLAYER_IDS[:5],
+        competition=PLAYER_IDS[:5], audit=True)
+    assert result.feature_order == fitted.preprocessor.columns() and 0 < result.p_tilde < 1
