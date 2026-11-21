@@ -14,13 +14,16 @@ from pathlib import Path
 import sys
 import unicodedata
 
-from scripts import visualize_tom_single_game as viz
+from werewolf.artifact_io import sha256_bytes
+from werewolf.artifact_io.canonical import _load_canonical_json
 from werewolf.canonical_collection.game_bundle import (
     _backend_call_from_record, _history_from_records, _private_replay_from_record,
 )
+from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.canonical_collection.trajectory_evidence import BackendCallPurpose, BackendCallStatus
+from werewolf.tom import single_game_review
+from werewolf.tom.single_game_review import EXPORT_TYPE, require
 
-EXPORT_TYPE = "tom_one_game_all_pre_matrices"
 CANONICAL_TYPE = "canonical_game_bundle"
 ROLE_NAMES = {"Werewolf": "狼人", "Villager": "村民", "Seer": "预言家", "Witch": "女巫"}
 PHASE_NAMES = {"discussion": "普通发言", "pk_discussion": "PK发言", "vote": "普通投票", "pk_vote": "PK投票"}
@@ -34,7 +37,7 @@ class Game:
     canonicals: tuple[Path, ...]
     status: str = "INVALID"
     reason: str = ""
-    review: viz.Review | None = None
+    review: single_game_review.Review | None = None
     roles: dict | None = None
     online_tom: str = "无法确定（离线矩阵不证明在线使用）"
     evidence_files: int = 0
@@ -45,18 +48,18 @@ def _present_bound_files(root, manifest):
     result = {}
     for name, expected in manifest["file_table"].items():
         rel = Path(name)
-        viz.require(bool(rel.parts) and not rel.is_absolute() and ".." not in rel.parts, "unsafe canonical file path")
+        require(bool(rel.parts) and not rel.is_absolute() and ".." not in rel.parts, "unsafe canonical file path")
         candidates = [root / rel]
         if rel.parts[0] == "public":
             candidates.append(root / rel.name)  # Documented flattened public snapshot.
         present = [p for p in candidates if os.path.lexists(p)]
-        viz.require(len(present) <= 1, f"ambiguous canonical payload: {name}")
+        require(len(present) <= 1, f"ambiguous canonical payload: {name}")
         if not present:
             continue
         p = present[0]
-        viz.require(p.is_file() and not p.is_symlink(), f"not a regular canonical payload: {name}")
+        require(p.is_file() and not p.is_symlink(), f"not a regular canonical payload: {name}")
         payload = p.read_bytes()
-        viz.require(expected == {"byte_size": len(payload), "sha256": viz.sha256_bytes(payload)},
+        require(expected == {"byte_size": len(payload), "sha256": sha256_bytes(payload)},
                     f"canonical payload digest mismatch: {name}")
         result[name] = payload
     return result
@@ -66,23 +69,23 @@ def _extra_evidence(review, roots):
     files = {}
     for root in roots:
         for name, payload in _present_bound_files(root, review.bundle_manifest).items():
-            viz.require(name not in files or files[name] == payload, f"canonical copy conflict: {name}")
+            require(name not in files or files[name] == payload, f"canonical copy conflict: {name}")
             files[name] = payload
     roles = None
     if "private/private_replay_evidence.json" in files:
-        record = viz._load_canonical_json(files["private/private_replay_evidence.json"])
+        record = _load_canonical_json(files["private/private_replay_evidence.json"])
         evidence = _private_replay_from_record(record)
-        viz.require(evidence.game_id == review.summary["game_id"] and evidence.seed == review.bundle_manifest["seed"],
+        require(evidence.game_id == review.summary["game_id"] and evidence.seed == review.bundle_manifest["seed"],
                     "private replay game/seed mismatch")
-        viz.require(evidence.expected_public_event_digest == _history_from_records(review.events).digest,
+        require(evidence.expected_public_event_digest == _history_from_records(review.events).digest,
                     "private replay public-history mismatch")
-        viz.require(viz.sha256_bytes(evidence.runtime_configuration.canonical_bytes)
+        require(sha256_bytes(evidence.runtime_configuration.canonical_bytes)
                     == review.bundle_manifest["runtime_configuration_digest"], "runtime configuration mismatch")
         roles = dict(evidence.role_assignment)
     online = "无法确定（未提供完整在线ToM使用证据；离线矩阵不证明在线使用）"
     if "private/backend_call_evidence.jsonl" in files:
-        calls = [_backend_call_from_record(r) for r in viz.read_jsonl(files["private/backend_call_evidence.jsonl"])]
-        viz.require(len({c.call_id for c in calls}) == len(calls), "duplicate backend call identity")
+        calls = [_backend_call_from_record(r) for r in single_game_review.read_jsonl(files["private/backend_call_evidence.jsonl"])]
+        require(len({c.call_id for c in calls}) == len(calls), "duplicate backend call identity")
         prefixes = {p.boundary_id: p for p in review.prefixes}
         confirmed = []
         for call in calls:
@@ -147,7 +150,7 @@ def discover(roots):
                 if kind not in {EXPORT_TYPE, CANONICAL_TYPE}:
                     continue
                 gid = m.get("game_id")
-                viz.require(isinstance(gid, str) and bool(gid), "missing game_id")
+                require(isinstance(gid, str) and bool(gid), "missing game_id")
                 (exports if kind == EXPORT_TYPE else canonicals)[gid].append((path.parent, m))
             except (OSError, ValueError, TypeError) as error:
                 issues.append(f"manifest无法识别：{path}：{error}")
@@ -162,13 +165,13 @@ def discover(roots):
             if len(digests) != 1 or len(canonical_digests) > 1:
                 game.status = "CONFLICT"
                 raise ValueError("相同game_id存在不同产物内容或canonical来源；禁止静默选择")
-            viz.require(bool(linked), "missing matching canonical public evidence")
+            require(bool(linked), "missing matching canonical public evidence")
             loaded = []
             for export, manifest in copies:
                 candidates = [(p, m) for p, m in linked if m.get("manifest_digest") == manifest.get("source_bundle_manifest_digest")]
-                viz.require(bool(candidates), "export/canonical source digest mismatch")
+                require(bool(candidates), "export/canonical source digest mismatch")
                 for canonical, _ in candidates:
-                    loaded.append(viz.load_review(export.parent, export_dir=export, canonical_dir=canonical))
+                    loaded.append(single_game_review.load_review(export.parent, export_dir=export, canonical_dir=canonical))
             game.review = loaded[0]
             game.roles, game.online_tom, game.evidence_files = _extra_evidence(game.review, game.canonicals)
             game.status = "VERIFIED_PUBLIC"
@@ -195,7 +198,7 @@ def display_width(text, ambiguous_width=1):
 
 def pad(text, width, ambiguous_width=1, *, center=False):
     gap = width - display_width(text, ambiguous_width)
-    viz.require(gap >= 0, "table cell exceeds display width")
+    require(gap >= 0, "table cell exceeds display width")
     left = gap // 2 if center else 0
     return " " * left + text + " " * (gap - left)
 
@@ -228,7 +231,7 @@ def matrix_lines(game, game_number, index, *, precision=3, tolerance=1e-8, ambig
     column_width = (width - row_width) // 7
     ordinal_in_day = sum(record["day"] == r["day"] for record in game.review.records[:index + 1])
     labels = [f"P{k + 1}" + ("狼" if game.roles and game.roles[p] == "Werewolf" else "")
-              + ("亡" if p not in r["alive_observer_ids"] else "") for k, p in enumerate(viz.PLAYER_IDS)]
+              + ("亡" if p not in r["alive_observer_ids"] else "") for k, p in enumerate(PLAYER_IDS)]
     title = [f"游戏{game_number}｜第{r['day']}天｜当天第{ordinal_in_day}个发言前时点",
              f"全局PRE {index + 1}｜{PHASE_NAMES[r['phase']]}｜当前发言玩家{r['current_speaker'].replace('player', 'P')}",
              "存活：" + " ".join(p.replace("player", "P") for p in r["alive_observer_ids"])]
@@ -236,9 +239,9 @@ def matrix_lines(game, game_number, index, *, precision=3, tolerance=1e-8, ambig
     lines += [_rule("━", width, ambiguous_width), pad("观察者", row_width, ambiguous_width)
               + "".join(pad(label, column_width, ambiguous_width, center=True) for label in labels),
               _rule("─", width, ambiguous_width)]
-    for i, observer in enumerate(viz.PLAYER_IDS):
+    for i, observer in enumerate(PLAYER_IDS):
         cells = []
-        for k, target in enumerate(viz.PLAYER_IDS):
+        for k, target in enumerate(PLAYER_IDS):
             value = f"{q[index, i, k]:.{precision}f}"
             if i != k and game.roles and game.roles[target] == "Werewolf":
                 delta = q[index, i, k] - q[index - 1, i, k] if index else None
@@ -287,7 +290,7 @@ def game_description(game, number):
     if game.roles is None:
         lines.append("角色信息未提供；不猜测狼人，不展示狼人列标记或箭头。")
     else:
-        lines.append("真实角色（仅离线展示）：" + "；".join(f"P{i + 1}={ROLE_NAMES[game.roles[p]]}" for i, p in enumerate(viz.PLAYER_IDS)))
+        lines.append("真实角色（仅离线展示）：" + "；".join(f"P{i + 1}={ROLE_NAMES[game.roles[p]]}" for i, p in enumerate(PLAYER_IDS)))
     lines.append("已记录公开发言顺序：")
     speeches = defaultdict(list)
     for e in review.events:
@@ -297,7 +300,7 @@ def game_description(game, number):
     lines.append("实际投票结算（不是发言中的投票意图）：")
     for ordinal, row in enumerate(vote_rounds(review.events), 1):
         e = row["event"]
-        counts = "，".join(f"{p.replace('player', 'P')}={row['counts'][p]}票" for p in viz.PLAYER_IDS if p in row["counts"]) or "无目标票"
+        counts = "，".join(f"{p.replace('player', 'P')}={row['counts'][p]}票" for p in PLAYER_IDS if p in row["counts"]) or "无目标票"
         exile = "未提供" if row["exiles"] is None else "、".join(p.replace("player", "P") for p in row["exiles"]) or "无人放逐"
         lines.append(f"  轮{ordinal} 第{e['day']}天 {PHASE_NAMES[e['phase']]}：{counts}；弃票={row['abstain']}；放逐={exile}（event {e['event_index']}）")
     return "\n".join(lines)
@@ -306,23 +309,23 @@ def game_description(game, number):
 def select_games(games, *, game=None, selected=None, game_id=None, all_games=False):
     if game_id is not None:
         indices = [i for i, g in enumerate(games) if g.game_id == game_id]
-        viz.require(len(indices) == 1, f"game_id未找到：{game_id}")
+        require(len(indices) == 1, f"game_id未找到：{game_id}")
     elif all_games:
         indices = list(range(len(games)))
     else:
         numbers = [game] if game is not None else selected
-        viz.require(numbers and len(set(numbers)) == len(numbers), "请选择不重复的游戏序号")
-        viz.require(all(1 <= n <= len(games) for n in numbers), "游戏序号超出列表范围")
+        require(numbers and len(set(numbers)) == len(numbers), "请选择不重复的游戏序号")
+        require(all(1 <= n <= len(games) for n in numbers), "游戏序号超出列表范围")
         indices = [n - 1 for n in numbers]
-    viz.require(bool(indices), "没有可展示的ToM游戏")
+    require(bool(indices), "没有可展示的ToM游戏")
     for i in indices:
-        viz.require(games[i].status == "VERIFIED_PUBLIC", f"游戏{i + 1}禁止输出：{games[i].status}：{games[i].reason}")
+        require(games[i].status == "VERIFIED_PUBLIC", f"游戏{i + 1}禁止输出：{games[i].status}：{games[i].reason}")
     return indices
 
 
 def render_game(game, number, *, indices=None, per_row=2, precision=3, tolerance=1e-8, ambiguous_width=1):
     selected = list(range(1, len(game.review.records) + 1)) if indices is None else indices
-    viz.require(selected and len(set(selected)) == len(selected) and all(1 <= n <= len(game.review.records) for n in selected),
+    require(selected and len(set(selected)) == len(selected) and all(1 <= n <= len(game.review.records) for n in selected),
                 f"游戏{number}的PRE序号无效或重复")
     lines = [game_description(game, number),
              f"展示：每行{per_row}矩阵；精度={precision}；箭头容差={tolerance:g}；箭头对比上一实际PRE（含未选中的PRE）。",
@@ -375,19 +378,19 @@ def main(argv=None):
                 width = os.get_terminal_size(sys.stdout.fileno()).columns
             columns = min(args.per_row, max(len(args.pre_indices) if args.pre_indices else len(games[i].review.records) for i in selected))
             needed = columns * table_width(args.precision, args.ambiguous_width) + (columns - 1) * 4
-            viz.require(width is None or width >= needed,
+            require(width is None or width >= needed,
                         f"布局需要{needed}列，当前{width}列；请扩大终端或改用--per-row {2 if args.per_row == 3 else 1}。不会截断第七列。")
             text = f"所需表格列宽：{needed}；东亚模糊字符宽度：{args.ambiguous_width}\n"
-            text += f"展示脚本SHA256：{viz.sha256_bytes(Path(__file__).read_bytes())}\n"
-            text += f"数据读取脚本SHA256：{viz.sha256_bytes(Path(viz.__file__).read_bytes())}\n\n"
+            text += f"展示脚本SHA256：{sha256_bytes(Path(__file__).read_bytes())}\n"
+            text += f"数据读取脚本SHA256：{sha256_bytes(Path(single_game_review.__file__).read_bytes())}\n\n"
             text += "\n\n".join(render_game(games[i], i + 1, indices=args.pre_indices, per_row=args.per_row,
                 precision=args.precision, tolerance=args.delta_tolerance, ambiguous_width=args.ambiguous_width) for i in selected)
         text = "\n".join(safe_text(line) for line in text.split("\n"))
         if args.output_dir is not None:
             # Search roots may be broad /data directories; protect actual input trees.
-            viz.require(bool(input_dirs), "没有已识别输入，不创建输出目录")
+            require(bool(input_dirs), "没有已识别输入，不创建输出目录")
             for root in input_dirs:
-                viz.check_output_path(root, args.output_dir)
+                single_game_review.check_output_path(root, args.output_dir)
             destination = args.output_dir.expanduser().resolve()
             destination.mkdir(parents=True, exist_ok=False)
             (destination / "tom-game-matrices.txt").write_text(text + "\n", encoding="utf-8")

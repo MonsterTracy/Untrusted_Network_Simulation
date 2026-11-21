@@ -63,7 +63,7 @@ TXT 不含 ANSI 控制序列，不使用 less/more。PPT 仍需等宽字体并�
 `--game-id`。
 
 通过 game_id 与 source_bundle_manifest_digest 关联 canonical manifest。
-复用 `visualize_tom_single_game.load_review` 的矩阵、CSV、冻结模型 pins、
+与单局绘图 CLI 共用 `werewolf.tom.single_game_review.load_review`。该读取器负责矩阵、CSV、冻结模型 pins、
 manifest、PRE、座位、存活状态和公共前缀校验。读取器现在允许显式导出/证据路径，
 支持标准 bundle 的 `public/` 以及同步公开快照的扁平布局；不依赖导出目录名。
 同一路径或同内容副本去重；相同 game_id 的不同 manifest 内容或来源报告 CONFLICT，

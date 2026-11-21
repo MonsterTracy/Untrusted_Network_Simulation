@@ -17,6 +17,13 @@ import numpy as np
 import pytest
 
 from scripts import visualize_tom_single_game as viz
+from scripts.qwen3_gameplay_predictor import FIT_DIGEST, SEAL_DIGEST, SOURCE_REVISION
+from werewolf.artifact_io import (
+    canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes, verify_artifact,
+)
+from werewolf.canonical_collection.game_bundle import _prefix_from_record
+from werewolf.canonical_collection.public_history import PLAYER_IDS
+from werewolf.tom import single_game_review
 
 
 def uniform():
@@ -36,14 +43,14 @@ def test_matrix_rejects_invalid_raw_values(damage):
         if damage == "self":
             values[0][0] = .01
     with pytest.raises(ValueError):
-        viz.validate_matrix(values)
+        single_game_review.validate_matrix(values)
 
 
 def test_matrix_readonly_and_export_tolerance():
     values = uniform().tolist()
     before = deepcopy(values)
     values[0][1] += 2e-6
-    result = viz.validate_matrix(values)  # Export v1 permits a row error up to 1e-5.
+    result = single_game_review.validate_matrix(values)  # Export v1 permits a row error up to 1e-5.
     assert result[0, 1] == values[0][1] and not result.flags.writeable
     assert before[1:] == values[1:]
 
@@ -79,17 +86,17 @@ def test_output_must_be_new_and_disjoint(tmp_path):
     inputs.mkdir()
     for output in (inputs / "plots", tmp_path):
         with pytest.raises(ValueError, match="disjoint"):
-            viz.check_output_path(inputs, output)
+            single_game_review.check_output_path(inputs, output)
     occupied = tmp_path / "occupied"
     occupied.mkdir()
     sentinel = occupied / "keep"
     sentinel.write_text("unchanged")
     with pytest.raises(FileExistsError):
-        viz.check_output_path(inputs, occupied)
+        single_game_review.check_output_path(inputs, occupied)
     linked = tmp_path / "linked"
     linked.symlink_to(tmp_path / "absent")
     with pytest.raises(ValueError, match="symlink"):
-        viz.check_output_path(inputs, linked)
+        single_game_review.check_output_path(inputs, linked)
     assert sentinel.read_text() == "unchanged"
 
 
@@ -109,18 +116,18 @@ def copied_root(real_root, tmp_path):
 
 
 def rehash_export(root):
-    folder = root / viz.EXPORT_FOLDER
+    folder = root / single_game_review.EXPORT_FOLDER
     manifest = json.loads((folder / "manifest.json").read_bytes())
     for name in manifest["file_table"]:
         payload = (folder / name).read_bytes()
-        manifest["file_table"][name] = {"byte_size": len(payload), "sha256": viz.sha256_bytes(payload)}
-    manifest["manifest_digest"] = viz.sha256_bytes(viz.canonical_json_bytes(
+        manifest["file_table"][name] = {"byte_size": len(payload), "sha256": sha256_bytes(payload)}
+    manifest["manifest_digest"] = sha256_bytes(canonical_json_bytes(
         {k: v for k, v in manifest.items() if k != "manifest_digest"}))
-    (folder / "manifest.json").write_bytes(viz.canonical_json_bytes(manifest))
+    (folder / "manifest.json").write_bytes(canonical_json_bytes(manifest))
 
 
 def test_real_schema_provenance_and_pre_alignment(real_root):
-    data = viz.load_review(real_root)
+    data = single_game_review.load_review(real_root)
     assert data.manifest["manifest_digest"] == "32e22a7825d5b2bb54f1127bbe6f37888020ae385906d84fba4609f44c5e119d"
     assert data.bundle_manifest["seed"] == 4464547787855486986
     assert data.summary["gameplay_source_revision"] == "57fd2d716eff8ac83477a17298e160c04b7e98b5"
@@ -141,8 +148,8 @@ def test_real_schema_provenance_and_pre_alignment(real_root):
     "step_order", "coverage", "q_self", "q_nan", "fields",
 ])
 def test_rehashed_export_still_rejects_semantic_corruption(copied_root, damage):
-    path = copied_root / viz.EXPORT_FOLDER / "all_tom_matrices.jsonl"
-    rows = viz.read_jsonl(path.read_bytes())
+    path = copied_root / single_game_review.EXPORT_FOLDER / "all_tom_matrices.jsonl"
+    rows = single_game_review.read_jsonl(path.read_bytes())
     if damage == "seat_order":
         rows[0]["observer_ids"].reverse()
     elif damage == "prefix_digest":
@@ -165,15 +172,15 @@ def test_rehashed_export_still_rejects_semantic_corruption(copied_root, damage):
     elif damage == "fields":
         rows[0]["unexpected"] = True
     if damage != "q_nan":
-        path.write_bytes(viz.canonical_jsonl_bytes(rows))
+        path.write_bytes(canonical_jsonl_bytes(rows))
     rehash_export(copied_root)
     with pytest.raises(ValueError):
-        viz.load_review(copied_root)
+        single_game_review.load_review(copied_root)
 
 
 @pytest.mark.parametrize("damage", ["value", "alive", "duplicate", "columns"])
 def test_rehashed_csv_disagreement_rejected(copied_root, damage):
-    path = copied_root / viz.EXPORT_FOLDER / "tom_cells.csv"
+    path = copied_root / single_game_review.EXPORT_FOLDER / "tom_cells.csv"
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
         fields, rows = reader.fieldnames, list(reader)
@@ -188,35 +195,35 @@ def test_rehashed_csv_disagreement_rejected(copied_root, damage):
     path.write_bytes(viz.csv_bytes(rows, fields))
     rehash_export(copied_root)
     with pytest.raises(ValueError, match="CSV"):
-        viz.load_review(copied_root)
+        single_game_review.load_review(copied_root)
 
 
 def test_public_snapshot_hash_and_lineage_reject_tampering(copied_root):
     path = copied_root / "canonical_public/public_event_stream.jsonl"
     path.write_bytes(path.read_bytes() + b"\n")
     with pytest.raises(ValueError, match="digest"):
-        viz.load_review(copied_root)
+        single_game_review.load_review(copied_root)
 
 
 def test_rehashed_public_manifest_does_not_break_source_binding(copied_root):
     path = copied_root / "canonical_public/manifest.json"
     value = json.loads(path.read_bytes())
     value["source_revision"] = "0" * 40
-    value["manifest_digest"] = viz.sha256_bytes(viz.canonical_json_bytes(
+    value["manifest_digest"] = sha256_bytes(canonical_json_bytes(
         {k: v for k, v in value.items() if k != "manifest_digest"}))
-    path.write_bytes(viz.canonical_json_bytes(value))
+    path.write_bytes(canonical_json_bytes(value))
     with pytest.raises(ValueError, match="source mismatch"):
-        viz.load_review(copied_root)
+        single_game_review.load_review(copied_root)
 
 
 def test_rehashed_model_pin_mismatch_rejected(copied_root):
-    path = copied_root / viz.EXPORT_FOLDER / "summary.json"
+    path = copied_root / single_game_review.EXPORT_FOLDER / "summary.json"
     value = json.loads(path.read_bytes())
     value["fit_digest"] = "0" * 64
-    path.write_bytes(viz.canonical_json_bytes(value))
+    path.write_bytes(canonical_json_bytes(value))
     rehash_export(copied_root)
     with pytest.raises(ValueError, match="fit_digest"):
-        viz.load_review(copied_root)
+        single_game_review.load_review(copied_root)
 
 
 def test_real_render_all_formats_preserves_inputs_and_is_reproducible(real_root, tmp_path, monkeypatch):
@@ -226,8 +233,8 @@ def test_real_render_all_formats_preserves_inputs_and_is_reproducible(real_root,
     monkeypatch.setattr(qwen3_gameplay_predictor, "Qwen3GameplayPredictorClient",
                         lambda **_: pytest.fail("no predictor construction allowed"))
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mpl-cache"))
-    before = viz.input_hashes(real_root)
-    data = viz.load_review(real_root)
+    before = single_game_review.input_hashes(real_root)
+    data = single_game_review.load_review(real_root)
     original = data.q.tobytes()
     outputs = []
     for name in ("a", "b"):
@@ -240,7 +247,7 @@ def test_real_render_all_formats_preserves_inputs_and_is_reproducible(real_root,
         assert len(list(output.glob("*.svg"))) == 7
         assert all(b"<image" not in p.read_bytes() for p in output.glob("*.svg"))
         assert all(b"/Subtype /Image" not in p.read_bytes() for p in output.glob("*.pdf"))
-        viz.verify_artifact(output, expected_artifact_type="tom_single_game_visualization",
+        verify_artifact(output, expected_artifact_type="tom_single_game_visualization",
                             expected_schema_version=viz.ANALYSIS_VERSION)
         report = json.loads((output / "analysis.json").read_bytes())
         assert report["model_provenance"]["gameplay_source_revision"] == "57fd2d716eff8ac83477a17298e160c04b7e98b5"
@@ -251,7 +258,7 @@ def test_real_render_all_formats_preserves_inputs_and_is_reproducible(real_root,
     for path in outputs[0].iterdir():
         assert path.read_bytes() == (outputs[1] / path.name).read_bytes(), path.name
     assert data.q.tobytes() == original
-    assert viz.input_hashes(real_root) == before
+    assert single_game_review.input_hashes(real_root) == before
     with pytest.raises(FileExistsError):
         viz.generate(data, outputs[0], dpi=72)
     runtime_modules_after = {name for name in sys.modules
@@ -262,7 +269,7 @@ def test_real_render_all_formats_preserves_inputs_and_is_reproducible(real_root,
 def test_cli_help_does_not_import_inference_runtime():
     code = (
         "import sys; from scripts.visualize_tom_single_game import main; "
-        "assert 'torch' not in sys.modules and 'run_random' not in sys.modules; "
+        "assert not {'torch', 'run_random', 'scripts.qwen3_gameplay_predictor'} & set(sys.modules); "
         "main(['--help'])"
     )
     result = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True)
@@ -274,7 +281,7 @@ def paper_figures(real_root):
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
-    data = viz.load_review(real_root)
+    data = single_game_review.load_review(real_root)
     original = data.q.tobytes()
     stats = viz.tv_statistics(data.q, data.alive)
     pairs = ((9, 10), (14, 15))
@@ -388,7 +395,7 @@ def test_paper_text_stays_inside_canvas_and_headers_do_not_overlap(paper_figures
 @pytest.mark.parametrize("pairs", [((9, 11), (14, 15)), ((9, 10),), ((9, 10), (9, 10)), ((0, 1), (14, 15))])
 def test_comparison_pairs_reject_nonadjacent_duplicate_or_out_of_range(real_root, tmp_path, pairs):
     with pytest.raises(ValueError, match="comparison pairs"):
-        viz.generate(viz.load_review(real_root), tmp_path / "not-published", comparison_pairs=pairs)
+        viz.generate(single_game_review.load_review(real_root), tmp_path / "not-published", comparison_pairs=pairs)
     assert not (tmp_path / "not-published").exists()
 
 
@@ -413,7 +420,7 @@ def synthetic_root(tmp_path):
 
     def speech(speaker):
         event("turn_start", speaker=speaker)
-        alive = tuple(p for p in viz.PLAYER_IDS if not (len(prefixes) >= 3 and p == "player7"))
+        alive = tuple(p for p in PLAYER_IDS if not (len(prefixes) >= 3 and p == "player7"))
         prefix = construct_authoritative_pre_prefix(game_id=game_id,
             boundary_id=f"synthetic-pre-{len(prefixes) + 1}", step_index=len(events),
             report_trigger_id=f"synthetic-trigger-{len(prefixes) + 1}", current_speaker=speaker,
@@ -447,19 +454,19 @@ def synthetic_root(tmp_path):
     event("phase_change", day=2, phase="discussion")
     speech("player4")
     speech("player5")
-    payloads = {"public/authoritative_pre_prefixes.jsonl": viz.canonical_jsonl_bytes(
+    payloads = {"public/authoritative_pre_prefixes.jsonl": canonical_jsonl_bytes(
                     [p.to_record() for p in prefixes]),
-                "public/public_event_stream.jsonl": viz.canonical_jsonl_bytes(
+                "public/public_event_stream.jsonl": canonical_jsonl_bytes(
                     freeze_public_event_history(events).to_records())}
-    table = {name: dict(byte_size=len(b), sha256=viz.sha256_bytes(b)) for name, b in payloads.items()}
+    table = {name: dict(byte_size=len(b), sha256=sha256_bytes(b)) for name, b in payloads.items()}
     # Absent private payloads prove that a public snapshot does not require them.
-    table.update({name: dict(byte_size=0, sha256=viz.sha256_bytes(b"")) for name in (
+    table.update({name: dict(byte_size=0, sha256=sha256_bytes(b"")) for name in (
         "private/private_replay_evidence.json", "private/backend_call_evidence.jsonl")})
     bundle = dict(artifact_type="canonical_game_bundle", schema_version="classic7-canonical-game-bundle-v1",
         canonical_eligibility=True, source_revision="a" * 40, game_id=game_id, seed=0,
-        runtime_configuration_digest=viz.sha256_bytes(viz.canonical_json_bytes({})), file_table=table)
-    bundle["manifest_digest"] = viz.sha256_bytes(viz.canonical_json_bytes(bundle))
-    (canonical / "manifest.json").write_bytes(viz.canonical_json_bytes(bundle))
+        runtime_configuration_digest=sha256_bytes(canonical_json_bytes({})), file_table=table)
+    bundle["manifest_digest"] = sha256_bytes(canonical_json_bytes(bundle))
+    (canonical / "manifest.json").write_bytes(canonical_json_bytes(bundle))
     for name, b in payloads.items():
         (canonical / Path(name).name).write_bytes(b)
     records, cells = [], []
@@ -467,27 +474,27 @@ def synthetic_root(tmp_path):
         q = uniform()
         q[0, 1] -= index * .01
         q[0, 6] += index * .01  # Keep dead-target mass; no role or model output.
-        record = {k: prefix.to_record()[k] for k in viz.METADATA_FIELDS}
-        record.update(observer_ids=list(viz.PLAYER_IDS), target_ids=list(viz.PLAYER_IDS), q=q.tolist())
+        record = {k: prefix.to_record()[k] for k in single_game_review.METADATA_FIELDS}
+        record.update(observer_ids=list(PLAYER_IDS), target_ids=list(PLAYER_IDS), q=q.tolist())
         records.append(record)
-        for i, observer in enumerate(viz.PLAYER_IDS):
-            for j, target in enumerate(viz.PLAYER_IDS):
-                row = {k: record[k] for k in viz.CSV_COLUMNS[:6]}
+        for i, observer in enumerate(PLAYER_IDS):
+            for j, target in enumerate(PLAYER_IDS):
+                row = {k: record[k] for k in single_game_review.CSV_COLUMNS[:6]}
                 row.update(observer=observer, target=target, observer_alive=observer in prefix.alive_observer_ids,
                            target_alive=target in prefix.alive_observer_ids, value=float(q[i, j]))
                 cells.append(row)
-    summary = dict(schema_version=viz.EXPORT_VERSION, scope="all_authoritative_public_speech_pre_boundaries",
+    summary = dict(schema_version=single_game_review.EXPORT_VERSION, scope="all_authoritative_public_speech_pre_boundaries",
         num_pre=5, num_matrices=5, num_cells=245, shape=[7, 7], game_id=game_id,
-        fit_digest=viz.FIT_DIGEST, seal_digest=viz.SEAL_DIGEST, predictor_source_revision=viz.SOURCE_REVISION,
+        fit_digest=FIT_DIGEST, seal_digest=SEAL_DIGEST, predictor_source_revision=SOURCE_REVISION,
         gameplay_source_revision="a" * 40, source_bundle_manifest_digest=bundle["manifest_digest"],
         interpretation="SYNTHETIC TEST ONLY: no predictor, real game, label or model qualification")
-    viz.publish_artifact(root / viz.EXPORT_FOLDER, manifest_fields=dict(
-        artifact_type="tom_one_game_all_pre_matrices", schema_version=viz.EXPORT_VERSION,
-        num_pre=5, game_id=game_id, fit_digest=viz.FIT_DIGEST, seal_digest=viz.SEAL_DIGEST,
+    publish_artifact(root / single_game_review.EXPORT_FOLDER, manifest_fields=dict(
+        artifact_type="tom_one_game_all_pre_matrices", schema_version=single_game_review.EXPORT_VERSION,
+        num_pre=5, game_id=game_id, fit_digest=FIT_DIGEST, seal_digest=SEAL_DIGEST,
         source_bundle_manifest_digest=bundle["manifest_digest"]), files={
-            "summary.json": viz.canonical_json_bytes(summary),
-            "all_tom_matrices.jsonl": viz.canonical_jsonl_bytes(records),
-            "tom_cells.csv": viz.csv_bytes(cells, viz.CSV_COLUMNS)})
+            "summary.json": canonical_json_bytes(summary),
+            "all_tom_matrices.jsonl": canonical_jsonl_bytes(records),
+            "tom_cells.csv": viz.csv_bytes(cells, single_game_review.CSV_COLUMNS)})
     return root
 
 
@@ -498,18 +505,18 @@ def test_synthetic_roundtrip_without_private_reads(synthetic_root, monkeypatch):
             assert not {"private", "restricted"} & set(path.relative_to(synthetic_root).parts)
         return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, "open", public_only)
-    data = viz.load_review(synthetic_root)
+    data = single_game_review.load_review(synthetic_root)
     assert data.q.shape == (5, 7, 7) and not data.q.flags.writeable
     assert [p.public_temporal_state.phase.value for p in data.prefixes] == [
         "discussion", "discussion", "pk_discussion", "discussion", "discussion"]
     assert not data.alive[3, 6] and data.q[3, 0, 6] > data.q[0, 0, 6]
     assert [r["common_alive_count"] for r in viz.tv_statistics(data.q, data.alive)] == [7, 7, 6, 6]
-    assert all(viz._prefix_from_record(p.to_record()) == p for p in data.prefixes)
+    assert all(_prefix_from_record(p.to_record()) == p for p in data.prefixes)
 
 
 def test_synthetic_cli_all_formats_is_reproducible_and_readonly(synthetic_root, tmp_path):
     pytest.importorskip("matplotlib", minversion="3.8", reason="optional analysis plotting dependency")
-    before = viz.input_hashes(synthetic_root)
+    before = single_game_review.input_hashes(synthetic_root)
     code = ("import sys; from scripts.visualize_tom_single_game import main; "
             "main(sys.argv[1:]); assert not {'torch','run_random','transformers','vllm'} & set(sys.modules)")
     outputs = []
@@ -528,14 +535,14 @@ def test_synthetic_cli_all_formats_is_reproducible_and_readonly(synthetic_root, 
         assert report["population"]["num_pre"] == 5
         assert report["validation"]["role_data_available"] is False
         assert report["validation"]["frozen_model_weights_revalidated"] is False
-        viz.verify_artifact(out, expected_artifact_type="tom_single_game_visualization",
+        verify_artifact(out, expected_artifact_type="tom_single_game_visualization",
                             expected_schema_version=viz.ANALYSIS_VERSION)
         outputs.append(out)
     assert {p.name: p.read_bytes() for p in outputs[0].iterdir()} == {
         p.name: p.read_bytes() for p in outputs[1].iterdir()}
-    assert viz.input_hashes(synthetic_root) == before
+    assert single_game_review.input_hashes(synthetic_root) == before
     with pytest.raises(FileExistsError):
-        viz.generate(viz.load_review(synthetic_root), outputs[0])
+        viz.generate(single_game_review.load_review(synthetic_root), outputs[0])
 
 
 @pytest.mark.parametrize("damage", ["value", "alive", "duplicate", "columns"])

@@ -13,7 +13,10 @@ import numpy as np
 import pytest
 
 from scripts import show_tom_game_matrices as show
-from scripts import visualize_tom_single_game as viz
+from scripts.visualize_tom_single_game import csv_bytes
+from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, sha256_bytes
+from werewolf.canonical_collection.public_history import PLAYER_IDS
+from werewolf.tom import single_game_review
 from werewolf.canonical_collection.pre import construct_authoritative_pre_prefix
 from werewolf.canonical_collection.trajectory_evidence import (
     BackendCallPurpose, BackendCallStatus, construct_backend_call_evidence,
@@ -39,7 +42,7 @@ def copied_root(real_root, tmp_path):
 
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(viz.canonical_json_bytes(value))
+    path.write_bytes(canonical_json_bytes(value))
 
 
 def rebind(root):
@@ -52,10 +55,10 @@ def rebind(root):
             p = canonical / Path(name).name
         if p.is_file():
             b = p.read_bytes()
-            m['file_table'][name] = {'byte_size': len(b), 'sha256': viz.sha256_bytes(b)}
-    m['manifest_digest'] = viz.sha256_bytes(viz.canonical_json_bytes({k:v for k,v in m.items() if k!='manifest_digest'}))
+            m['file_table'][name] = {'byte_size': len(b), 'sha256': sha256_bytes(b)}
+    m['manifest_digest'] = sha256_bytes(canonical_json_bytes({k:v for k,v in m.items() if k!='manifest_digest'}))
     write_json(canonical / 'manifest.json', m)
-    export = root / viz.EXPORT_FOLDER
+    export = root / single_game_review.EXPORT_FOLDER
     summary = json.loads((export / 'summary.json').read_bytes())
     summary['source_bundle_manifest_digest'] = m['manifest_digest']
     write_json(export / 'summary.json', summary)
@@ -63,14 +66,14 @@ def rebind(root):
     manifest['source_bundle_manifest_digest'] = m['manifest_digest']
     for name in manifest['file_table']:
         b = (export / name).read_bytes()
-        manifest['file_table'][name] = {'byte_size':len(b), 'sha256':viz.sha256_bytes(b)}
-    manifest['manifest_digest'] = viz.sha256_bytes(viz.canonical_json_bytes({k:v for k,v in manifest.items() if k!='manifest_digest'}))
+        manifest['file_table'][name] = {'byte_size':len(b), 'sha256':sha256_bytes(b)}
+    manifest['manifest_digest'] = sha256_bytes(canonical_json_bytes({k:v for k,v in manifest.items() if k!='manifest_digest'}))
     write_json(export / 'manifest.json', manifest)
 
 
 def synthetic_second(root):
     """Distinct test identity with copied numeric rows, not a new simulated game."""
-    data = viz.load_review(root)
+    data = single_game_review.load_review(root)
     gid = 'synthetic-test-only-game-000001-seed-1'
     prefixes = []
     for p in data.prefixes:
@@ -80,20 +83,20 @@ def synthetic_second(root):
             alive_observer_ids=p.alive_observer_ids,public_event_history=p.public_event_history,
             v1_annotations=p.v1_annotations,belief_observation_ids_by_observer=links).to_record())
     canonical = root/'canonical_public'
-    (canonical/'authoritative_pre_prefixes.jsonl').write_bytes(viz.canonical_jsonl_bytes(prefixes))
+    (canonical/'authoritative_pre_prefixes.jsonl').write_bytes(canonical_jsonl_bytes(prefixes))
     m=json.loads((canonical/'manifest.json').read_bytes())
     m.update(game_id=gid,artifact_identity=gid,seed=1,collection_id='synthetic-test-only',ordinal=1)
     write_json(canonical/'manifest.json',m)
-    export=root/viz.EXPORT_FOLDER
+    export=root/single_game_review.EXPORT_FOLDER
     rows=deepcopy(list(data.records))
     for r,p in zip(rows,prefixes): r.update(game_id=gid,prefix_digest=p['prefix_digest'])
-    (export/'all_tom_matrices.jsonl').write_bytes(viz.canonical_jsonl_bytes(rows))
+    (export/'all_tom_matrices.jsonl').write_bytes(canonical_jsonl_bytes(rows))
     with (export/'tom_cells.csv').open(newline='') as f:
         reader=csv.DictReader(f);fields=reader.fieldnames;cells=list(reader)
     for r,p in zip(rows,prefixes):
         for c in cells:
             if c['boundary_id']==r['boundary_id']:c['game_id']=gid
-    (export/'tom_cells.csv').write_bytes(viz.csv_bytes(cells,fields))
+    (export/'tom_cells.csv').write_bytes(csv_bytes(cells,fields))
     for name in ('summary.json','manifest.json'):
         v=json.loads((export/name).read_bytes());v['game_id']=gid;write_json(export/name,v)
     rebind(root)
@@ -101,14 +104,14 @@ def synthetic_second(root):
 
 
 def add_private(root, *, with_call=False, request=True, success=True, purpose=BackendCallPurpose.SPEECH_GENERATION):
-    data=viz.load_review(root)
-    roles=dict(zip(viz.PLAYER_IDS,('Werewolf','Werewolf','Villager','Villager','Villager','Seer','Witch')))
+    data=single_game_review.load_review(root)
+    roles=dict(zip(PLAYER_IDS,('Werewolf','Werewolf','Villager','Villager','Villager','Seer','Witch')))
     e=construct_private_replay_evidence(game_id=data.summary['game_id'],seed=data.bundle_manifest['seed'],
         role_assignment=roles,runtime_configuration={},initial_runtime_state={},replay_inputs={},
         expected_public_event_digest=show._history_from_records(data.events).digest)
     write_json(root/'canonical_public/private/private_replay_evidence.json',e.to_record())
     m=json.loads((root/'canonical_public/manifest.json').read_bytes())
-    m['runtime_configuration_digest']=viz.sha256_bytes(e.runtime_configuration.canonical_bytes)
+    m['runtime_configuration_digest']=sha256_bytes(e.runtime_configuration.canonical_bytes)
     write_json(root/'canonical_public/manifest.json',m)
     if with_call:
         payload={'args':[show.TOM_MARKER+'synthetic-test-only ToM information']} if request else {'response':show.TOM_MARKER}
@@ -117,7 +120,7 @@ def add_private(root, *, with_call=False, request=True, success=True, purpose=Ba
             boundary_id=data.prefixes[0].boundary_id,observer_id=data.prefixes[0].current_speaker,attempt_index=1,
             backend_identity='test-backend',model_identity='test-model',parser_identity='test-parser',
             prompt_identity='test-prompt',retry_policy_identity='test-retry',call_budget_identity='test-budget',private_payload=payload)
-        (root/'canonical_public/private/backend_call_evidence.jsonl').write_bytes(viz.canonical_jsonl_bytes([call.to_record()]))
+        (root/'canonical_public/private/backend_call_evidence.jsonl').write_bytes(canonical_jsonl_bytes([call.to_record()]))
     rebind(root)
 
 
@@ -148,7 +151,7 @@ def test_canonical_only_is_not_a_tom_game(real_root,tmp_path):
 
 
 def test_renamed_export_and_full_public_subdirectory_layout(copied_root):
-    (copied_root/viz.EXPORT_FOLDER).rename(copied_root/'arbitrary-export-name')
+    (copied_root/single_game_review.EXPORT_FOLDER).rename(copied_root/'arbitrary-export-name')
     canonical=copied_root/'canonical_public';(canonical/'public').mkdir()
     for name in ('authoritative_pre_prefixes.jsonl','public_event_stream.jsonl'):
         (canonical/name).rename(canonical/'public'/name)
@@ -171,7 +174,7 @@ def test_two_games_and_selectors(copied_root,tmp_path,capsys):
 
 
 def test_different_export_content_same_game_id_is_conflict(real_root,copied_root):
-    p=copied_root/viz.EXPORT_FOLDER/'summary.json';m=json.loads(p.read_bytes());m['interpretation']='synthetic conflict';write_json(p,m);rebind(copied_root)
+    p=copied_root/single_game_review.EXPORT_FOLDER/'summary.json';m=json.loads(p.read_bytes());m['interpretation']='synthetic conflict';write_json(p,m);rebind(copied_root)
     games,_,_=show.discover([real_root,copied_root])
     assert len(games)==1 and games[0].status=='CONFLICT'
     with pytest.raises(ValueError,match='禁止输出'):show.select_games(games,game=1)
@@ -186,14 +189,14 @@ def test_canonical_source_conflict_does_not_silently_pick_valid_copy(real_root,c
 @pytest.mark.parametrize('damage',['csv','missing_csv','missing_canonical','schema','canonical_payload','unreadable_manifest'])
 def test_damaged_inputs_not_printed(copied_root,tmp_path,capsys,damage):
     if damage=='csv':
-        p=copied_root/viz.EXPORT_FOLDER/'tom_cells.csv';p.write_bytes(p.read_bytes()+b'bad\n')
-    elif damage=='missing_csv':(copied_root/viz.EXPORT_FOLDER/'tom_cells.csv').unlink()
+        p=copied_root/single_game_review.EXPORT_FOLDER/'tom_cells.csv';p.write_bytes(p.read_bytes()+b'bad\n')
+    elif damage=='missing_csv':(copied_root/single_game_review.EXPORT_FOLDER/'tom_cells.csv').unlink()
     elif damage=='missing_canonical':shutil.rmtree(copied_root/'canonical_public')
     elif damage=='schema':
-        p=copied_root/viz.EXPORT_FOLDER/'manifest.json';m=json.loads(p.read_bytes());m['schema_version']='unsupported';write_json(p,m)
+        p=copied_root/single_game_review.EXPORT_FOLDER/'manifest.json';m=json.loads(p.read_bytes());m['schema_version']='unsupported';write_json(p,m)
     elif damage=='canonical_payload':
         p=copied_root/'canonical_public/public_event_stream.jsonl';p.write_bytes(p.read_bytes()+b'\n')
-    else:(copied_root/viz.EXPORT_FOLDER/'manifest.json').write_text('{bad')
+    else:(copied_root/single_game_review.EXPORT_FOLDER/'manifest.json').write_text('{bad')
     out=tmp_path/'should-not-exist'
     assert show.main(['--root',str(copied_root),'--all','--output-dir',str(out)])==2
     assert not out.exists() and '━━━━━━━━' not in capsys.readouterr().out
@@ -227,9 +230,9 @@ def numeric_game():
     q[1:,0,1]+=1e-4;q[1:,0,2]-=1e-4
     q[2,0,1]-=5e-9;q[2,0,2]+=5e-9
     q.setflags(write=False)
-    records=[{'day':1,'phase':'discussion','current_speaker':'player1','alive_observer_ids':list(viz.PLAYER_IDS)} for _ in range(3)]
+    records=[{'day':1,'phase':'discussion','current_speaker':'player1','alive_observer_ids':list(PLAYER_IDS)} for _ in range(3)]
     records[2]['alive_observer_ids'].remove('player2')
-    roles=dict(zip(viz.PLAYER_IDS,('Villager','Werewolf','Werewolf','Villager','Villager','Seer','Witch')))
+    roles=dict(zip(PLAYER_IDS,('Villager','Werewolf','Werewolf','Villager','Villager','Seer','Witch')))
     return show.Game('synthetic-unit',(),(),status='VERIFIED_PUBLIC',roles=roles,
                      review=SimpleNamespace(q=q,records=records))
 
@@ -264,7 +267,7 @@ def test_real_parallel_layout_complete_width_and_last_column(real_root,per_row):
 
 def test_selected_pre_compares_previous_actual_not_previous_displayed(real_root):
     g=show.discover([real_root])[0][0]
-    g.roles=dict(zip(viz.PLAYER_IDS,('Villager','Villager','Werewolf','Villager','Seer','Werewolf','Witch')))  # Renderer-only mapping.
+    g.roles=dict(zip(PLAYER_IDS,('Villager','Villager','Werewolf','Villager','Seer','Werewolf','Witch')))  # Renderer-only mapping.
     text=show.render_game(g,1,indices=[1,9],per_row=1)
     current=g.review.q[8,0,5];prior=g.review.q[7,0,5]
     assert current < prior and current > g.review.q[0,0,5]
@@ -282,7 +285,7 @@ def test_output_cannot_enter_canonical_only_artifact(real_root,tmp_path,capsys):
 
 def test_invalid_optional_file_path_is_reported(copied_root):
     p=copied_root/'canonical_public/manifest.json';m=json.loads(p.read_bytes())
-    m['file_table']['']={'byte_size':0,'sha256':viz.sha256_bytes(b'')};write_json(p,m);rebind(copied_root)
+    m['file_table']['']={'byte_size':0,'sha256':sha256_bytes(b'')};write_json(p,m);rebind(copied_root)
     assert show.discover([copied_root])[0][0].status=='INVALID'
 
 
@@ -326,13 +329,17 @@ def test_bad_selectors_or_pres_fail_before_output(real_root,tmp_path,capsys):
 
 
 def test_cli_has_no_predictor_gameplay_or_plotting_import():
-    code="import sys; from scripts.show_tom_game_matrices import main; assert not {'torch','run_random','matplotlib.pyplot'} & set(sys.modules); main(['--help'])"
+    code = (
+        "import sys; from scripts.show_tom_game_matrices import main; "
+        "assert not {'torch', 'run_random', 'matplotlib.pyplot', 'scripts.visualize_tom_single_game', "
+        "'scripts.qwen3_gameplay_predictor'} & set(sys.modules); main(['--help'])"
+    )
     p=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
     assert p.returncode==0 and '--games' in p.stdout and '--ambiguous-width' in p.stdout
 
 
 def test_synthetic_public_discovery_and_cli_preserve_inputs(synthetic_root, tmp_path, monkeypatch, capsys):
-    before = viz.input_hashes(synthetic_root)
+    before = single_game_review.input_hashes(synthetic_root)
     original = Path.open
     def public_only(path, *args, **kwargs):
         if path.is_relative_to(synthetic_root):
@@ -348,13 +355,14 @@ def test_synthetic_public_discovery_and_cli_preserve_inputs(synthetic_root, tmp_
                       '--output-dir', str(out)]) == 0
     text = (out / 'tom-game-matrices.txt').read_text(encoding='utf-8')
     assert '角色信息未提供' in text and '全局PRE 4' in text and 'P7亡' in text
+    assert f'数据读取脚本SHA256：{sha256_bytes(Path(single_game_review.__file__).read_bytes())}' in text
     assert '真实角色（仅离线展示）' not in text
     assert show.main(['--root', str(synthetic_root), '--all', '--output-dir', str(out)]) == 2
     assert (out / 'tom-game-matrices.txt').read_text(encoding='utf-8') == text
     assert show.main(['--root', str(synthetic_root), '--list',
                       '--output-dir', str(synthetic_root / 'canonical_public' / 'nested')]) == 2
     assert not (synthetic_root / 'canonical_public' / 'nested').exists()
-    assert viz.input_hashes(synthetic_root) == before
+    assert single_game_review.input_hashes(synthetic_root) == before
 
 
 def test_synthetic_duplicate_copies_and_multi_game_selectors(synthetic_root, tmp_path, capsys):
