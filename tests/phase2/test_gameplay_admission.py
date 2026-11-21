@@ -12,6 +12,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from scripts import phase2_gameplay_campaign as cli
+from werewolf.interventions import gameplay
 from werewolf.interventions import gameplay_server as server
 from werewolf.interventions.gameplay import digest, bind_campaign_profile, validate_profile, VERSION, qualification_diagnostics, freeze_source
 from werewolf.artifact_io import publish_artifact, canonical_json_bytes
@@ -258,6 +259,30 @@ def test_rehashed_plan_at_correct_location_cannot_replace_work_directory(tmp_pat
     with pytest.raises(ValueError, match="cannot change"):
         cli.open_plan(artifact.path, artifact.manifest_digest)
     assert not (tmp_path / "alternate-work").exists()
+
+
+def test_qualification_plan_read_preserves_runtime_source_pins(tmp_path):
+    router_contract = "docs/research/phase2-router-v1-contract.md"
+    profile_path = "configs/phase2/router-gameplay-qualification-v1.json"
+    qplan = plan(gate="full-games-and-both-mechanisms-v1")
+    source = qplan["source"]
+    source["source_sha256"].update({router_contract: "c" * 64, profile_path: "d" * 64})
+    qplan["plan_digest"] = digest({key: value for key, value in qplan.items() if key != "plan_digest"})
+    artifact = publish_artifact(tmp_path / "qualification", manifest_fields={
+        "artifact_type": "phase2_router_gameplay", "schema_version": VERSION,
+    }, files={"run_plan.json": canonical_json_bytes(qplan)})
+    loaded = gameplay.read_qualification_plan(artifact.path)
+    assert loaded == qplan
+
+    execution = {"source_sha256": {**source["source_sha256"], profile_path: "e" * 64}}
+    assert gameplay.qualification_source_matches(loaded["source"], execution)
+    for name in ("fixture.py", router_contract):
+        missing = {"source_sha256": {key: sha for key, sha in execution["source_sha256"].items() if key != name}}
+        assert not gameplay.qualification_source_matches(loaded["source"], missing)
+
+    (artifact.path / "run_plan.json").write_bytes(b"{}")
+    with pytest.raises(ValueError):
+        gameplay.read_qualification_plan(artifact.path)
 
 
 def test_qualification_budget_allocation_and_gate_ignore_outcome_direction():

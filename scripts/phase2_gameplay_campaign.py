@@ -7,22 +7,19 @@ import os
 from pathlib import Path
 
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact, read_artifact_file, verify_artifact
-from werewolf.artifact_io.canonical import _load_canonical_json, _reject_duplicate_keys, _reject_json_constant
+from werewolf.artifact_io.canonical import _load_canonical_json
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record, construct_collection_plan
 from werewolf.interventions.gameplay import (
     NAMES, VERSION, GameplayLedger, digest, freeze_source, make_plan, safe_path,
+    REQUIRED_PILOT_EXCLUSIONS, TOM_GAMEPLAY_SEED_COUNT, TOM_GAMEPLAY_SEED_SOURCE,
     validate_plan, validate_publication, validate_profile, load_campaign_profile, bind_campaign_profile,
+    collection_plan_inputs, qualification_source_matches, read_json, read_qualification_plan, tom_seed_exclusion,
 )
 from werewolf.interventions.gameplay_server import execute_server, verify_router
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = {p: ROOT / f"configs/phase2/router-gameplay-{p}-v1.json" for p in NAMES}
-
-
-def read_json(path):
-    return json.loads(safe_path(path).read_bytes(), object_pairs_hook=_reject_duplicate_keys,
-                      parse_constant=_reject_json_constant)
 
 
 def check_paths(*paths):
@@ -60,14 +57,12 @@ def prepare(args):
         if game.plan_digest != pin["plan_digest"]:
             raise ValueError("historical excluded plan mismatch")
         excluded.append(game)
-    required = {"paper-phase2-online-terminal-pilot-v1", "paper-phase2-online-probe-pilot-v1",
-                *[f"paper-phase2-online-probe-qualification-v{i}" for i in (1, 2, 3)]}
-    if not required <= {g.collection_id for g in excluded}:
+    if not REQUIRED_PILOT_EXCLUSIONS <= {g.collection_id for g in excluded}:
         raise ValueError("exclude Terminal formal and Probe V1/V2/V3/formal full planned pools")
     seeds = derive_seed_pool(profile["campaign_id"], n)
     seed_overlaps(seeds, pins, bound)
     # The already frozen ToM ablation prederived 100 candidate seeds are excluded.
-    tom_seeds = derive_seed_pool("paper-tom-gameplay-ablation-v1", 100)
+    tom_seeds = derive_seed_pool(TOM_GAMEPLAY_SEED_SOURCE, TOM_GAMEPLAY_SEED_COUNT)
     if set(seeds) & set(tom_seeds):
         raise ValueError("ToM gameplay seed overlap; no reroll")
     development = collection_plan_from_record(read_json(pins["development_game_plan"]))
@@ -79,29 +74,23 @@ def prepare(args):
             raise ValueError("formal requires an explicitly reviewed gameplay qualification")
         from werewolf.canonical_collection.production_runtime import classic7_full_game_replay_executor
         import yaml
-        artifact = verify_artifact(safe_path(admission["path"]), expected_artifact_type="phase2_router_gameplay", expected_schema_version=VERSION)
-        qplan = validate_plan(_load_canonical_json(read_artifact_file(artifact, "run_plan.json")))
+        qplan = validate_plan(read_qualification_plan(admission["path"]))
         replay = classic7_full_game_replay_executor(yaml.safe_load(Path(qplan["runtime_inputs"]["paths"]["runtime_config"]).read_bytes()))
         artifact = validate_publication(admission["path"], admission["manifest_digest"], replay, verify_router,
                                          expected_plan=qplan)
         if artifact.manifest["purpose"] != "qualification" or artifact.manifest["qualification_gate_passed"] is not True:
             raise ValueError("qualification lacks reviewed mechanism gate")
-        for name, sha in qplan["source"]["source_sha256"].items():
-            if name.endswith(".py") or name == "docs/research/phase2-router-v1-contract.md":
-                if source["source_sha256"].get(name) != sha:
-                    raise ValueError("runtime source differs from qualification")
+        if not qualification_source_matches(qplan["source"], source):
+            raise ValueError("runtime source differs from qualification")
         excluded.append(collection_plan_from_record(qplan["game_plan"]))
     provenance = dict(previous.environment_provenance)
-    extra = {k: v for k, v in provenance.items() if k not in (
-        "configured_call_limit", "gameplay_prompt_profile", "seed_pool_size", "target_success_count")}
-    game = construct_collection_plan(ordered_seed_pool=seeds,
-        **plan_fields({"collection_id": profile["campaign_id"], "target_games": n, "seed_pool_size": n,
-                       "call_limit": int(provenance["configured_call_limit"])}, source["commit"], extra))
+    campaign, extra = collection_plan_inputs(profile["campaign_id"], n,
+                                            int(provenance["configured_call_limit"]), provenance)
+    game = construct_collection_plan(ordered_seed_pool=seeds, **plan_fields(campaign, source["commit"], extra))
     runtime = {k: bound[k] for k in ("paths", "q_python", "q_fit_digest", "q_seal_digest",
         "mapper_manifest_digest", "reference_tables_digest", "smoke_v3_manifest_digest",
         "runtime_config_sha256", "deployment_config_sha256")}
-    runtime["additional_seed_exclusions"] = {"tom_gameplay_seed_rule": "paper-tom-gameplay-ablation-v1:100",
-                                            "seeds": list(tom_seeds)}
+    runtime["additional_seed_exclusions"] = tom_seed_exclusion(tom_seeds)
     runtime["qualified_runtime_manifest_digest"] = qualified.manifest_digest
     plan = make_plan(purpose=args.purpose, game_plan=game, source=source, runtime_inputs=runtime,
         exclusions=[g.to_record() for g in excluded], qualification=admission,

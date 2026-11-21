@@ -36,6 +36,12 @@ from werewolf.interventions.online.plan import Phase2RouterPolicyV1, ProbeStrate
 VERSION = "phase2_router_gameplay_v1"
 NAMES = {p: f"paper-phase2-router-gameplay-{p}-v1" for p in ("qualification", "formal")}
 ALLOCATION_RULE = "sha256-ranked-complete-balanced-game-allocation-v1"
+REQUIRED_PILOT_EXCLUSIONS = frozenset({
+    "paper-phase2-online-terminal-pilot-v1", "paper-phase2-online-probe-pilot-v1",
+    *(f"paper-phase2-online-probe-qualification-v{i}" for i in (1, 2, 3)),
+})
+TOM_GAMEPLAY_SEED_SOURCE = "paper-tom-gameplay-ablation-v1"
+TOM_GAMEPLAY_SEED_COUNT = 100
 
 
 def digest(value):
@@ -51,6 +57,11 @@ def safe_path(path):
     if ".." in path.parts or any(p.is_symlink() for p in (path, *path.parents)):
         raise ValueError("campaign paths must not contain symlinks or parent traversal")
     return path
+
+
+def read_json(path):
+    return json.loads(safe_path(path).read_bytes(), object_pairs_hook=_reject_duplicate_keys,
+                      parse_constant=_reject_json_constant)
 
 
 def validate_profile(profile, *, ready=False):
@@ -88,8 +99,7 @@ def validate_profile(profile, *, ready=False):
 
 def load_campaign_profile(repo, purpose):
     path = safe_path(repo) / f"configs/phase2/router-gameplay-{purpose}-v1.json"
-    profile = validate_profile(json.loads(safe_path(path).read_bytes(), object_pairs_hook=_reject_duplicate_keys,
-                                        parse_constant=_reject_json_constant))
+    profile = validate_profile(read_json(path))
     if profile["purpose"] != purpose or (purpose == "qualification" and (
             profile["randomized_games"] != 20 or profile["qualification_gate"] != "full-games-and-both-mechanisms-v1")):
         raise ValueError("canonical qualification requires 20 games and the frozen mechanism gate")
@@ -135,6 +145,27 @@ def freeze_source(repo):
     return {"commit": git("rev-parse", "HEAD"), "branch": "twd/mainline",
             "tracked_worktree_clean": True, "staged_tracked_changes": False,
             "source_sha256": {n: sha256_bytes((repo / n).read_bytes()) for n in selected}}
+
+
+def qualification_source_matches(qualification_source, execution_source):
+    """核对资格冻结的 Python 源码与 Router 合同。"""
+    return all(execution_source["source_sha256"].get(name) == sha
+               for name, sha in qualification_source["source_sha256"].items()
+               if name.endswith(".py") or name == "docs/research/phase2-router-v1-contract.md")
+
+
+def collection_plan_inputs(collection_id, randomized_games, call_limit, provenance):
+    """为计划准备和 Server 核验生成相同的 Canonical Collection 参数。"""
+    campaign = {"collection_id": collection_id, "target_games": randomized_games,
+                "seed_pool_size": randomized_games, "call_limit": call_limit}
+    extra = {k: v for k, v in provenance.items() if k not in (
+        "configured_call_limit", "gameplay_prompt_profile", "seed_pool_size", "target_success_count")}
+    return campaign, extra
+
+
+def tom_seed_exclusion(seeds):
+    return {"tom_gameplay_seed_rule": f"{TOM_GAMEPLAY_SEED_SOURCE}:{TOM_GAMEPLAY_SEED_COUNT}",
+            "seeds": list(seeds)}
 
 
 def allocations(game_plan, candidate_seed):
@@ -431,6 +462,12 @@ def qualification_diagnostics(outcomes):
                 and r["router_process"]["t1_committed"] for r in outcomes),
             "probe_then_redirect_committed": any(r["assigned_policy"] == ProbeStrategy.PROBE_THEN_REDIRECT.value
                 and r["router_process"]["t3_committed"] for r in outcomes)}
+
+
+def read_qualification_plan(path):
+    """核验 Gameplay 发布物的文件完整性并读取其中的冻结 Plan。"""
+    artifact = verify_artifact(safe_path(path), expected_artifact_type="phase2_router_gameplay", expected_schema_version=VERSION)
+    return _load_canonical_json(read_artifact_file(artifact, "run_plan.json"))
 
 
 def validate_publication(path, expected_digest, replay_executor, verify_router, *, expected_plan):

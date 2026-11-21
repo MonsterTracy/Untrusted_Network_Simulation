@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from werewolf.artifact_io import canonical_json_bytes, read_artifact_file, sha256_bytes, verify_artifact
-from werewolf.artifact_io.canonical import _load_canonical_json
+from werewolf.artifact_io import canonical_json_bytes, sha256_bytes, verify_artifact
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
 from werewolf.canonical_collection.failure_evidence import (
     construct_canonical_partial_evidence, publish_canonical_partial_evidence,
@@ -19,6 +18,8 @@ from werewolf.canonical_collection.public_history import freeze_public_event_his
 from werewolf.interventions.actions import context_from_pre
 from werewolf.interventions.gameplay import (
     GameplayLedger, digest, freeze_source, policy_for, publish_campaign, recover,
+    REQUIRED_PILOT_EXCLUSIONS, TOM_GAMEPLAY_SEED_COUNT, TOM_GAMEPLAY_SEED_SOURCE,
+    collection_plan_inputs, qualification_source_matches, read_qualification_plan, tom_seed_exclusion,
     safe_path, verify_results, bind_campaign_profile,
 )
 from werewolf.interventions.online.plan import probe_candidate_pool, router_assignment_from_record
@@ -241,8 +242,7 @@ def server_inputs(plan, repo):
     for key in ("runtime_config", "deployment_config", "publication", "evaluation_root", "mapper", "smoke_v3", "q_checkout", "q_fit"):
         if safe_path(bound["paths"][key]) != safe_path(qualified["paths"][key]):
             raise ValueError(f"qualified runtime path drift: {key}")
-    expected_tom = {"tom_gameplay_seed_rule": "paper-tom-gameplay-ablation-v1:100",
-                    "seeds": list(derive_seed_pool("paper-tom-gameplay-ablation-v1", 100))}
+    expected_tom = tom_seed_exclusion(derive_seed_pool(TOM_GAMEPLAY_SEED_SOURCE, TOM_GAMEPLAY_SEED_COUNT))
     if bound["additional_seed_exclusions"] != expected_tom:
         raise ValueError("ToM planned seed exclusion mismatch")
     paths = {k: safe_path(v) for k, v in bound["paths"].items()}
@@ -261,18 +261,14 @@ def server_inputs(plan, repo):
             any(p["model"] != serve["served-model-name"] for p in config["agent_config"]["all_candidates"])):
         raise ValueError("qualified loopback gameplay configuration mismatch")
     game = collection_plan_from_record(plan["game_plan"])
-    required = {"paper-phase2-online-terminal-pilot-v1", "paper-phase2-online-probe-pilot-v1",
-                *[f"paper-phase2-online-probe-qualification-v{i}" for i in (1, 2, 3)]}
     if (game.ordered_seed_pool != derive_seed_pool(game.collection_id, plan["randomized_games"]) or
-            not required <= {raw["collection_id"] for raw in plan["exclusions"]} or
+            not REQUIRED_PILOT_EXCLUSIONS <= {raw["collection_id"] for raw in plan["exclusions"]} or
             qualified["canonical_game_plan"] not in plan["exclusions"]):
         raise ValueError("gameplay plan or historical planned exclusions mismatch")
     provenance = dict(game.environment_provenance)
     limit = int(provenance["configured_call_limit"])
-    extra = {k: v for k, v in provenance.items() if k not in (
-        "configured_call_limit", "gameplay_prompt_profile", "seed_pool_size", "target_success_count")}
-    expected = plan_fields({"collection_id": game.collection_id, "target_games": plan["randomized_games"],
-        "seed_pool_size": plan["randomized_games"], "call_limit": limit}, plan["source"]["commit"], extra)
+    campaign, extra = collection_plan_inputs(game.collection_id, plan["randomized_games"], limit, provenance)
+    expected = plan_fields(campaign, plan["source"]["commit"], extra)
     if (provenance.get("runtime_config_sha256") != bound["runtime_config_sha256"] or
             provenance.get("serve_config_sha256") != bound["deployment_config_sha256"] or
             game.model_identity != serve["served-model-name"] or limit <= 0 or
@@ -318,15 +314,12 @@ def execute_server(plan, *, repo, work, destination, preflight_only=False, runti
     if plan["purpose"] == "formal":
         from werewolf.interventions.gameplay import validate_publication
         admission = plan["qualification"]
-        qualified = verify_artifact(safe_path(admission["path"]), expected_artifact_type="phase2_router_gameplay",
-                                    expected_schema_version=plan["schema_version"])
-        qplan = _load_canonical_json(read_artifact_file(qualified, "run_plan.json"))
+        qplan = read_qualification_plan(admission["path"])
         qualified = validate_publication(admission["path"], admission["manifest_digest"], replay, verify_router,
                                          expected_plan=qplan)
         if (qualified.manifest["purpose"] != "qualification" or qualified.manifest["qualification_gate_passed"] is not True or
                 qplan["game_plan"] not in plan["exclusions"] or
-                any(plan["source"]["source_sha256"].get(n) != sha for n, sha in qplan["source"]["source_sha256"].items()
-                    if n.endswith(".py") or n == "docs/research/phase2-router-v1-contract.md")):
+                not qualification_source_matches(qplan["source"], plan["source"])):
             raise ValueError("formal qualification/source admission mismatch")
     if resume:
         durable = {a["game_id"] for a, _ in verify_results(ledger, replay, verify_router)}
