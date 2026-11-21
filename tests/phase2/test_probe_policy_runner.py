@@ -1,9 +1,4 @@
-"""确定性公共Hook夹具，不执行环境rollout或Backend调用。
-
-直接编译实际Runner与正式游戏循环定义，仅排除Runtime顶层的可选服务依赖，
-不替代实际游戏循环。
-"""
-import ast
+"""用确定性公共 Hook 夹具验证正式游戏循环与 Runner 的交接。"""
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -33,24 +28,15 @@ from werewolf.interventions.offline import ValueEstimate
 @pytest.fixture
 def runtime(monkeypatch):
     root = Path(__file__).resolve().parents[2]
-    source = ast.parse((root / "werewolf/interventions/online/runner.py").read_text())
-    source.body = [node for node in source.body if not
-                   (isinstance(node, ast.ImportFrom) and node.module == "werewolf.game_runtime")]
+    source_path = root / "werewolf/interventions/online/runner.py"
     scope = {"__name__": "probe_runner_test_source"}
     # Dataclass resolves module globals via sys.modules.
     import sys
     from types import ModuleType
     module = ModuleType(scope["__name__"])
-    module.__file__ = str(root / "werewolf/interventions/online/runner.py")
+    module.__file__ = str(source_path)
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    production = ast.parse((root / "werewolf/game_runtime.py").read_text())
-    definitions = [node for node in production.body if isinstance(node, ast.FunctionDef)
-                   and node.name in ("eval", "_act_at_boundary")]
-    game_scope = {"nullcontext": nullcontext,
-                  "PUBLIC_SPEECH_RUNTIME_PHASES": frozenset(("speech", "speech_pk"))}
-    exec(compile(ast.Module(body=definitions, type_ignores=[]), "werewolf/game_runtime.py", "exec"), game_scope)
-    module.__dict__["run_canonical_game"] = game_scope["eval"]
-    exec(compile(source, "werewolf/interventions/online/runner.py", "exec"), module.__dict__)
+    exec(compile(source_path.read_text(), module.__file__, "exec"), module.__dict__)
     return module
 
 
