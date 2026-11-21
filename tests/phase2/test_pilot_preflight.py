@@ -232,6 +232,24 @@ def test_preflight_reads_each_artifact_and_payload_once(preflight_artifacts, mon
             assert reads[artifact.path/name] == 1
 
 
+def test_preflight_rejects_mapper_source_drift_after_development_load(
+        preflight_artifacts, tmp_path, monkeypatch):
+    from werewolf.interventions.mapper import runtime
+
+    fixture = preflight_artifacts
+    reader = tmp_path / "runtime.py"
+    reader.write_bytes(Path(runtime.__file__).read_bytes() + b"\n# local development edit\n")
+    monkeypatch.setattr(runtime, "__file__", str(reader))
+    loaded = runtime.load_runtime_mapper_for_development(fixture.mapper.path,
+        expected_manifest_digest=fixture.mapper.manifest_digest)
+    assert loaded == fixture.runtime
+
+    result = fixture.assess(mapper_runtime=loaded)
+    assert result.frozen_artifacts_verified
+    assert not result.final_mapper_lineage_verified
+    assert "FINAL_MAPPER_LINEAGE_NOT_VERIFIED" in result.blockers
+
+
 @pytest.mark.parametrize('which', ('mapper', 'smoke'))
 def test_preflight_detects_payload_changes_between_calls(preflight_artifacts, which):
     fixture = preflight_artifacts

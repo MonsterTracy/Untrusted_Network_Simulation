@@ -336,8 +336,11 @@ def main(argv: list[str] | None = None) -> int:
     selected_digest = selection_digest(cases)
     if selected_digest != EXPECTED_CASE_SELECTION_DIGEST:
         raise SmokeStudyError("smoke-v3 cases differ from the sealed smoke-v1/v2 selection")
-    from werewolf.interventions.mapper.runtime import load_runtime_mapper
-    runtime_mapper = load_runtime_mapper(args.mapper, expected_manifest_digest=MAPPER_DIGEST)
+    from werewolf.interventions.mapper.runtime import (
+        load_runtime_mapper, load_runtime_mapper_for_development,
+    )
+    load_mapper = load_runtime_mapper_for_development if args.preflight else load_runtime_mapper
+    runtime_mapper = load_mapper(args.mapper, expected_manifest_digest=MAPPER_DIGEST)
     q_by_pre = selected_oof_q(publication, cases, args.evaluation_root)
     # Construct every plan before a first LLM call; any Q/mapper error cannot create a partial run.
     for case in cases:

@@ -337,6 +337,40 @@ def test_unrelated_untracked_document_does_not_block_formal_run(source_repo, mon
         smoke.main(["--storage-profile", str(source_repo / "missing.json")])
 
 
+def test_read_only_preflight_uses_development_mapper(tmp_path, monkeypatch, capsys):
+    import scripts
+    from werewolf.interventions.mapper import runtime
+
+    eligible = eligible_cases()
+    digest = smoke.selection_digest(smoke.select_cases(eligible))
+    mapper_path = tmp_path / "mapper"
+    monkeypatch.setattr(smoke, "EXPECTED_CASE_SELECTION_DIGEST", digest)
+    monkeypatch.setattr(smoke, "open_publication", lambda path: object())
+    monkeypatch.setattr(smoke, "open_role_sidecar", lambda publication: object())
+    monkeypatch.setattr(smoke, "collect_eligible", lambda publication, sidecar: eligible)
+    monkeypatch.setattr(smoke, "selected_oof_q", lambda publication, cases, evaluation:
+                        {case.pre_identity: object() for case in cases
+                         if case.action is Action.REDIRECT})
+    monkeypatch.setattr(smoke, "source_provenance", lambda: pytest.fail("preflight froze Source"))
+    monkeypatch.setattr(scripts, "collect_games", SimpleNamespace(
+        inspect_inputs=lambda: pytest.fail("preflight inspected the live operator")), raising=False)
+
+    def reject_strict_loader(path, *, expected_manifest_digest):
+        raise runtime.RuntimeMapperError("runtime feature implementation differs from artifact")
+
+    def read_development_mapper(path, *, expected_manifest_digest):
+        assert (path, expected_manifest_digest) == (mapper_path, smoke.MAPPER_DIGEST)
+        return Mapper()
+
+    monkeypatch.setattr(runtime, "load_runtime_mapper", reject_strict_loader)
+    monkeypatch.setattr(runtime, "load_runtime_mapper_for_development", read_development_mapper)
+    assert smoke.main(["--preflight", "--mapper", str(mapper_path)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["case_count"] == 58
+    assert report["case_selection_digest"] == digest
+    assert report["mapper_digest"] == smoke.MAPPER_DIGEST
+
+
 def test_formal_run_freezes_source_once_before_execution(tmp_path, monkeypatch):
     cases = smoke.select_cases(eligible_cases())
     monkeypatch.setattr(smoke, "EXPECTED_CASE_SELECTION_DIGEST", smoke.selection_digest(cases))

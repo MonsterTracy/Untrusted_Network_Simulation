@@ -132,16 +132,45 @@ class RuntimeMapper:
 
 def load_runtime_mapper(path: Path | str, *,
                         expected_manifest_digest: str | None = None) -> RuntimeMapper:
+    """核验冻结模型和当前特征实现的 Source，供正式入口装配。"""
+    artifact, payload = _read_mapper_artifact(path)
+    return _load_verified_mapper(artifact, payload,
+        expected_manifest_digest=expected_manifest_digest)
+
+
+def load_runtime_mapper_for_development(path: Path | str, *,
+                                        expected_manifest_digest: str) -> RuntimeMapper:
+    """按可信 Manifest 摘要读取冻结 Mapper，供本地开发和测试。"""
+    if expected_manifest_digest is None:
+        raise RuntimeMapperError("development mapper requires a trusted manifest digest")
+    artifact, payload = _read_mapper_artifact(path)
+    return _restore_mapper(artifact, payload, expected_manifest_digest=expected_manifest_digest)
+
+
+def _read_mapper_artifact(path: Path | str):
     artifact = verify_artifact(path,
         expected_artifact_type="phase2_full_development_oof_mapper",
         expected_schema_version=FINAL_VERSION)
-    return _load_verified_mapper(artifact, read_artifact_file(artifact, "model.json"),
-        expected_manifest_digest=expected_manifest_digest)
+    return artifact, read_artifact_file(artifact, "model.json")
 
 
 def _load_verified_mapper(artifact, model_payload: bytes, *,
                           expected_manifest_digest: str | None = None) -> RuntimeMapper:
-    """从本次已核验的 Manifest 与模型字节恢复 Mapper，保留全部科研语义检查。"""
+    """复用已核验的模型字节，检查正式运行的特征实现。"""
+    loaded = _restore_mapper(artifact, model_payload,
+        expected_manifest_digest=expected_manifest_digest)
+    sources = artifact.manifest["source"]["source_sha256"]
+    for relative, path in (("werewolf/interventions/offline.py", Path(offline.__file__)),
+                           ("werewolf/interventions/mapper/model.py", Path(mapper.__file__)),
+                           ("werewolf/interventions/mapper/runtime.py", Path(__file__))):
+        if sources.get(relative) != sha256_bytes(path.read_bytes()):
+            raise RuntimeMapperError(f"runtime feature implementation differs from artifact: {relative}")
+    return loaded
+
+
+def _restore_mapper(artifact, model_payload: bytes, *,
+                    expected_manifest_digest: str | None) -> RuntimeMapper:
+    """核验模型的训练来源与参数，并恢复推断所需数据。"""
     manifest = artifact.manifest
     if (expected_manifest_digest is not None
             and artifact.manifest_digest != expected_manifest_digest):
@@ -154,12 +183,6 @@ def _load_verified_mapper(artifact, model_payload: bytes, *,
                 SELECTED_SPEC.record())
             or manifest["inputs"]["qwen3_oof_evaluation_seal_digest"] != offline.OOF_SEAL_DIGEST):
         raise RuntimeMapperError("final mapper semantics or study binding mismatch")
-    sources = manifest["source"]["source_sha256"]
-    for relative, path in (("werewolf/interventions/offline.py", Path(offline.__file__)),
-                           ("werewolf/interventions/mapper/model.py", Path(mapper.__file__)),
-                           ("werewolf/interventions/mapper/runtime.py", Path(__file__))):
-        if sources.get(relative) != sha256_bytes(path.read_bytes()):
-            raise RuntimeMapperError(f"runtime feature implementation differs from artifact: {relative}")
     model = json.loads(model_payload)
     unhashed = dict(model)
     model_digest = unhashed.pop("model_digest")

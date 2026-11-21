@@ -320,7 +320,9 @@ def test_runtime_feature_parity_and_uncalibrated_p_tilde(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "STUDY_DIGEST", study.manifest_digest)
     monkeypatch.setattr(final.mapper, "_fit_mapper",
                         lambda *_args, **_kwargs: pytest.fail("runtime refit a mapper"))
-    loaded = runtime.load_runtime_mapper(artifact.path,
+    loaded = runtime.load_runtime_mapper_for_development(artifact.path,
+        expected_manifest_digest=artifact.manifest_digest)
+    assert loaded == runtime.load_runtime_mapper(artifact.path,
         expected_manifest_digest=artifact.manifest_digest)
     alive = PLAYER_IDS[:5]
     wolves = frozenset(("player1", "player2"))
@@ -377,7 +379,9 @@ def _source_blob(root, revision, relative):
     ("historical", "runtime feature implementation differs"),
     ("source", "runtime feature implementation differs"),
     ("semantics", "semantics or study binding mismatch"),
+    ("study", "semantics or study binding mismatch"),
     ("oof", "semantics or study binding mismatch"),
+    ("model_digest", "final M3 model lineage"),
     ("model", "invalid frozen feature order"),
 ])
 def test_mapper_loader_checks_current_source_and_frozen_model_lineage(monkeypatch, tmp_path, fault, error):
@@ -388,6 +392,7 @@ def test_mapper_loader_checks_current_source_and_frozen_model_lineage(monkeypatc
     original = final.publish_full_mapper(tmp_path / "exact", fitted=fitted, rows=examples, study=study,
         source=source_record(), candidate_digest=final.candidate_identity_digest(examples))
     manifest = {k: v for k, v in original.manifest.items() if k not in ("manifest_digest", "file_table")}
+    files = {n: (original.path / n).read_bytes() for n in original.manifest["file_table"]}
     if fault == "historical":
         root = Path(__file__).resolve().parents[2]
         manifest["source"] = {"commit": HISTORICAL_SOURCE, "source_sha256": {
@@ -397,15 +402,29 @@ def test_mapper_loader_checks_current_source_and_frozen_model_lineage(monkeypatc
     elif fault == "source":
         manifest["source"]["source_sha256"]["werewolf/interventions/mapper/runtime.py"] = "0" * 64
     elif fault == "semantics": manifest["calibration"] = "new-calibration"
+    elif fault == "study": manifest["selected_development_study"]["manifest_digest"] = "0" * 64
     elif fault == "oof": manifest["inputs"]["qwen3_oof_evaluation_seal_digest"] = "0" * 64
+    elif fault == "model_digest":
+        payload = json.loads(files["model.json"])
+        payload["model_digest"] = manifest["model"]["model_digest"] = "0" * 64
+        files["model.json"] = canonical_json_bytes(payload)
     elif fault == "model": manifest["model"]["coefficient"][0] += 1
-    artifact = publish_artifact(tmp_path / "mapper-source-fixture", manifest_fields=manifest,
-        files={n: (original.path / n).read_bytes() for n in original.manifest["file_table"]})
+    artifact = publish_artifact(tmp_path / "mapper-source-fixture", manifest_fields=manifest, files=files)
     if error is not None:
         with pytest.raises(runtime.RuntimeMapperError, match=error):
             runtime.load_runtime_mapper(artifact.path, expected_manifest_digest=artifact.manifest_digest)
+    if fault == "source":
+        with pytest.raises(runtime.RuntimeMapperError, match="artifact digest mismatch"):
+            runtime.load_runtime_mapper_for_development(artifact.path,
+                expected_manifest_digest=original.manifest_digest)
         return
-    loaded = runtime.load_runtime_mapper(artifact.path, expected_manifest_digest=artifact.manifest_digest)
+    if error is not None and fault != "historical":
+        with pytest.raises(runtime.RuntimeMapperError, match=error):
+            runtime.load_runtime_mapper_for_development(artifact.path,
+                expected_manifest_digest=artifact.manifest_digest)
+        return
+    loaded = runtime.load_runtime_mapper_for_development(artifact.path,
+        expected_manifest_digest=artifact.manifest_digest)
     assert loaded.model_digest == fitted.manifest["model_digest"]
     result = loaded.infer(uniform_q(), alive=PLAYER_IDS[:5], known_wolves=frozenset(PLAYER_IDS[:2]),
         acting_wolf="player1", candidate_j="player3", phase="speech", public_speaker_queue=PLAYER_IDS[:5],
