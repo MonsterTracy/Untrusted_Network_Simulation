@@ -25,7 +25,7 @@ SOURCE_FILES = (
     "run_random.py", "werewolf/game_runtime.py", "scripts/run_phase2_online_intervention_pilot.py",
     "scripts/phase2_online_campaign.py",
     "scripts/phase2_intervention_preflight.py", "scripts/phase2_integration_seam.py",
-    "scripts/phase2_language_realization.py", "werewolf/interventions/online/plan.py",
+    "werewolf/interventions/language/verified_speech.py", "werewolf/interventions/online/plan.py",
     "werewolf/interventions/online/records.py", "werewolf/interventions/online/backend_audit.py",
     "werewolf/interventions/online/ledger.py",
     "werewolf/interventions/online/runner.py", "werewolf/interventions/online/preflight.py",

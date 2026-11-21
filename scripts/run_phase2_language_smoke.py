@@ -21,7 +21,6 @@ from types import SimpleNamespace
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.phase2_language_realization import realize_verify_action
 from werewolf.interventions import offline
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS
@@ -35,6 +34,7 @@ from werewolf.interventions.language.semantics import (
     public_language_context_from_pre,
 )
 from werewolf.interventions.language.audit import LANGUAGE_AUDIT_VERSION
+from werewolf.interventions.language.verified_speech import realize_verify_action
 
 
 NAME = "paper-phase2-language-smoke-v3"
@@ -50,7 +50,8 @@ EVALUATION = Path("/data/yuxiao/Untrusted_Network_Simulation/paper-studies/evalu
 MAPPER = Path("/data/yuxiao/Untrusted_Network_Simulation/paper-studies/mapper-final/paper-phase2-mapper-final-v1")
 MAPPER_DIGEST = "8ab529972a5722e61e0a81ec37f089677d1276c21cb83921aa842b2ce33995c3"
 REPOSITORY = Path(__file__).resolve().parents[1]
-SOURCE_FILES = ("scripts/run_phase2_language_smoke.py", "scripts/phase2_language_realization.py",
+SOURCE_FILES = ("scripts/run_phase2_language_smoke.py",
+                "werewolf/interventions/language/verified_speech.py",
                 "werewolf/interventions/actions.py", "werewolf/interventions/language/semantics.py",
                 "werewolf/interventions/language/audit.py", "werewolf/interventions/mapper/runtime.py",
                 "werewolf/interventions/offline.py")

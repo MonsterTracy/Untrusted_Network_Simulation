@@ -38,13 +38,13 @@ experiments. The single installed console entry is `uns=werewolf.cli:main`;
 | Result display | [Matrix tables](../scripts/show_tom_game_matrices.py) and [single-game visualization](../scripts/visualize_tom_single_game.py) consume existing exports. See the [table guide](tom-game-matrices-cli.md) and [visualization guide](tom-single-game-visualization.md); role information is offline display evidence, not model input. |
 | Historical transport adapter | [remote_tom_worker.py](../scripts/remote_tom_worker.py) checks a fixed detached planner Source and its adapter bytes before loading. The [Remote-ToM protocol](research/phase4bi-remote-tom-protocol.md) describes this historical deployment design, not a current-HEAD quick start. |
 
-The nine non-CLI Python files have actual import roles:
+Non-CLI files under `scripts/` have the following current import roles.
 
 | Files | Role and consumers |
 | --- | --- |
 | [__init__.py](../scripts/__init__.py) | Installable operator-package boundary; importing it starts no runtime. |
 | [constrained_speech.py](../scripts/constrained_speech.py), [speech_realization.py](../scripts/speech_realization.py), [verified_speech_commit.py](../scripts/verified_speech_commit.py) | Callable eligibility, realization/verification and commit research logic used by opt-in Runtime and DTRS research paths. These are not standalone command entrypoints. |
-| [phase2_language_realization.py](../scripts/phase2_language_realization.py), [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Existing Language implementation and thin package exports respectively; current Source inventories protect their paths/bytes. |
+| [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Thin exports for Phase-2 speech preparation. [verified_speech.py](../werewolf/interventions/language/verified_speech.py) owns the shared realization workflow. |
 | [remote_tom_protocol.py](../scripts/remote_tom_protocol.py), [remote_tom_provider.py](../scripts/remote_tom_provider.py) | Shared wire validation and injected Gameplay-side provider; neither is a model-service launcher. |
 | [tom_gameplay_ablation.py](../scripts/tom_gameplay_ablation.py) | Callable experiment integration used by the existing paired collection/smoke operators; preserves their original scientific contract. |
 

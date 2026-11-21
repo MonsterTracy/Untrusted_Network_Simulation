@@ -23,7 +23,7 @@ Strategy和Game Runtime归属整理已完成；MCTS保留为人工响应树受�
 
 原 30 个 Phase-2 模块已迁入 `werewolf/interventions/`。共享模块、Terminal Estimator 和 Gameplay 位于包根目录，Mapper、Language 和 Online 位于各自的子包。现行静态预检入口为 `python -m werewolf.interventions.online.preflight`，操作脚本沿用原入口。以下模块继续按现有调用关系工作。
 
-- [语言执行实现](../../scripts/phase2_language_realization.py)不是CLI，仍由 `werewolf.interventions.language.verified_speech` 导入，宜归正式包统一持有。
+- 可复用语言执行流程由 [verified_speech.py](../../werewolf/interventions/language/verified_speech.py) 持有，[Smoke 脚本](../../scripts/run_phase2_language_smoke.py) 继续负责样本准备、执行入口和报告发布。
 - [Campaign脚本](../../scripts/phase2_online_campaign.py)中的共享输入、来源绑定逻辑被Server反向调用；脚本应保留操作入口，共享业务按现有Server/Preflight职责整理。
 - [Terminal ITT脚本](../../scripts/phase2_terminal_itt_analysis.py)的共享Reader被`werewolf.interventions.terminal_estimator_io`调用；需区分可复用读取实现与历史分析/恢复合同。
 

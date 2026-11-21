@@ -39,7 +39,7 @@ from werewolf.game_runtime import eval as production_eval
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("fault", [None, "language", "offline", "reader", "historical", "anchor"])
+@pytest.mark.parametrize("fault", [None, "language", "realization", "offline", "reader", "historical", "anchor"])
 def test_smoke_source_matches_current_layout_and_rejects_old_source(tmp_path, fault):
     sources = {}
     for name in smoke.SOURCE_FILES:
@@ -71,6 +71,7 @@ def test_smoke_source_matches_current_layout_and_rejects_old_source(tmp_path, fa
         sources["werewolf/interventions/offline.py"] = "f" * 64
     elif fault is not None:
         relative = {"language": "werewolf/interventions/language/semantics.py",
+                    "realization": "werewolf/interventions/language/verified_speech.py",
                     "offline": "werewolf/interventions/offline.py",
                     "reader": "werewolf/interventions/mapper/runtime.py"}[fault]
         path = tmp_path / relative

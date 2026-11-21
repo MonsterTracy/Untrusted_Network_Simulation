@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from scripts.phase2_language_realization import realize_verify_action
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.interventions.actions import (
     ActionContextV1, InformationRequestV1, probe_plan, push_plan, redirect_plan,
@@ -16,6 +15,7 @@ from werewolf.interventions.language.semantics import (
     build_perception_prompt, build_realization_prompt, parse_perceived_semantics,
     verify_language_execution,
 )
+from werewolf.interventions.language.verified_speech import realize_verify_action
 
 
 def contexts():
