@@ -6,6 +6,8 @@ import pytest
 
 from werewolf.game_runtime import eval as run_game
 from tests.canonical_collection.test_game_bundle import _claim, _plan
+from tests.runtime.test_runtime_config import new_config
+from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.canonical_collection import (
     BackendCallPurpose,
     CanonicalFailureStage,
@@ -26,6 +28,7 @@ from werewolf.canonical_collection.call_audit import (
     CanonicalCallAudit,
     audited_backends,
 )
+from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory
 from werewolf.canonical_collection.runtime import (
     CanonicalGameRecorder,
     PlayingAgentBeliefObservationCollector,
@@ -231,6 +234,28 @@ def test_real_runtime_constructs_complete_pre_v1_handoff_evidence():
         for action in evidence.submitted_gameplay_actions
         if action.action_type == "public_speech"
     )
+
+
+@pytest.mark.parametrize("method", ("react", "dpins:no", "dpins:llm", "dpins:random"))
+def test_canonical_entry_points_reject_opt_in_before_any_call(method):
+    _, claim, env, agents, audit, recorder, backend = _runtime()
+    config = new_config()
+    Classic7RuntimeFactory(
+        runtime_config=config, backends={"deepseek": backend}, configured_call_limit=100,
+    )
+    config["agent_config"]["all_candidates"][0]["model_params"]["decision_method"] = method
+    with pytest.raises(ValueError, match="decision_method is not supported by Canonical Collection"):
+        Classic7RuntimeFactory(
+            runtime_config=config, backends={"deepseek": backend}, configured_call_limit=100,
+        )
+
+    agents[0] = GPTAgent(backend=backend, model_name="fixture", decision_method=method, game_seed=claim.seed)
+    with pytest.raises(ValueError, match="decision_method is not supported by Canonical Collection"):
+        run_game(env, agents, ROLES, canonical_recorder=recorder, call_audit=audit)
+
+    assert env.game_count == 0
+    assert audit.records == ()
+    assert backend.requests == []
 
 
 def test_production_collector_executes_real_game_to_verified_bundle(tmp_path):

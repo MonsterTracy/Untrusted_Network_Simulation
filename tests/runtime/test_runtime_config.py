@@ -45,6 +45,24 @@ def new_config():
 
 
 class RuntimeConfigNormalizationTest(unittest.TestCase):
+    def test_decision_method_is_explicit_and_strict(self):
+        def normalize_params(config):
+            return normalize_runtime_config(config)["agent_config"]["all_candidates"][0]["model_params"]
+
+        config = new_config()
+        old_params = {"temperature": 1.0, "gameplay_prompt_profile": "strict_classic7"}
+        self.assertEqual(normalize_params(config), old_params)
+        params = config["agent_config"]["all_candidates"][0]["model_params"]
+        for method in ("react", "dpins:no", "dpins:llm", "dpins:random"):
+            with self.subTest(method=method):
+                params["decision_method"] = method
+                self.assertEqual(normalize_params(config), {**old_params, "decision_method": method})
+        for invalid in (None, False, [], {}, "", "ReAct", "dpins:rl"):
+            with self.subTest(invalid=invalid):
+                params["decision_method"] = invalid
+                with self.assertRaisesRegex(ValueError, "unsupported agent decision_method"):
+                    normalize_params(config)
+
     def test_new_schema_normalizes_successfully(self):
         normalized = normalize_runtime_config(new_config())
 

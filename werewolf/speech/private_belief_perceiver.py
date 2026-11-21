@@ -14,6 +14,7 @@ STATUS_PARSE_ERROR = "parse_error"
 STATUS_SEMANTIC_ERROR = "semantic_error"
 STATUS_REPORTER_ERROR = "reporter_error"
 
+from werewolf.backends.openai_compatible import in_gameplay_request, model_request_details
 from werewolf.canonical_collection.pre import AuthoritativePREPrefix
 from werewolf.canonical_collection.call_audit import CollectionCallBudgetExceeded
 from werewolf.speech.validation import (
@@ -228,7 +229,7 @@ class PlayingAgentBeliefReporter:
                     if self.audit_hook is not None
                     else nullcontext()
                 )
-                with audit_context:
+                with audit_context, model_request_details(kind="pre_report", attempt=generation_attempt):
                     raw_response = agent.report_suspected_werewolves_readonly(
                         observation=observation,
                         report_prompt=attempt_prompt,
@@ -238,6 +239,8 @@ class PlayingAgentBeliefReporter:
             except CollectionCallBudgetExceeded:
                 raise
             except Exception as exc:
+                if in_gameplay_request():
+                    raise
                 attempt_record = {
                     "attempt_index": generation_attempt,
                     "call_id": f"{observation_id}-attempt-{generation_attempt:02d}",

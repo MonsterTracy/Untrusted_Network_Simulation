@@ -1,25 +1,249 @@
-"""Classic7环境装配、Agent分配与唯一Canonical游戏执行循环。"""
+"""Classic7 环境装配、Agent 分配与唯一游戏执行循环。"""
 
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import dataclass, replace
+from math import isfinite
 import os
+from pathlib import Path
 import random
+from re import fullmatch
+import subprocess
 from copy import deepcopy
+from time import perf_counter
 from typing import Any
 
 
 from werewolf.agents.gpt_agent import GPTAgent
+from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.artifact_io.canonical import require_sha256
 from werewolf.backends import (
+    OpenAICompatibleBackend,
     load_named_backends,
     resolve_backend,
 )
-from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
+from werewolf.backends.openai_compatible import model_request_context, model_request_details
+from werewolf.envs.werewolf_text_env_v0 import V1SpeechPerceptionExhausted, WerewolfTextEnvV0
+from werewolf.canonical_collection.pre import construct_speaker_pre_belief_handoff
+from werewolf.canonical_collection.public_history import freeze_public_event_history
+from werewolf.canonical_collection.runtime import (
+    classic7_native_winner,
+    freeze_classic7_speech_pre,
+    replay_classic7_actions,
+)
+from werewolf.speech.private_belief_perceiver import PlayingAgentBeliefReporter, STATUS_OK
 from werewolf.speech.speech_perceiver import SpeechPerceiver
 from werewolf.runtime_config import normalize_runtime_config
 
 
 PUBLIC_SPEECH_RUNTIME_PHASES = frozenset({"speech", "speech_pk"})
+_GAMEPLAY_SOURCE_FILES = (
+    "werewolf/game_runtime.py",
+    "werewolf/runtime_config.py",
+    "werewolf/agents/gpt_agent.py",
+    "werewolf/agents/llm_agent.py",
+    "werewolf/agents/prompt_template_v0.py",
+    "werewolf/backends/factory.py",
+    "werewolf/backends/openai_compatible.py",
+    "werewolf/canonical_collection/production_runtime.py",
+    "werewolf/canonical_collection/runtime.py",
+    "werewolf/envs/werewolf_text_env_v0.py",
+    "werewolf/speech/private_belief_perceiver.py",
+    "werewolf/speech/speech_perceiver.py",
+)
+
+
+@dataclass(frozen=True)
+class GameplayOnlyResult:
+    """单局内存结果，包含可独立重放的原生动作。"""
+
+    seed: int
+    roles: tuple[str, ...]
+    seat_profiles: tuple[str, ...]
+    decision_methods: tuple[str | None, ...]
+    source_identity: dict[str, Any]
+    submitted_actions: tuple[tuple[str, int | str], ...] = ()
+    terminal_reached: bool = False
+    winner: str | None = None
+    replay_winner: str | None = None
+    public_event_digest: str | None = None
+    failure_type: str | None = None
+    failure_stage: str | None = None
+    failure_phase: str | None = None
+    failure_message: str | None = None
+    failure_cause_type: str | None = None
+    speech_parser_attempts: int = 0
+    completed_steps: int = 0
+    elapsed_seconds: float | None = None
+    request_timeout_seconds: float | None = None
+    request_records: tuple[dict[str, Any], ...] = ()
+    speech_results: tuple[dict[str, Any], ...] = ()
+    model_requests: int | str = "UNKNOWN"
+    retries: int | str = "UNKNOWN"
+    token_usage: dict[str, int | str] | str = "UNKNOWN"
+
+
+def _gameplay_source_identity(*, include_file_digests=False):
+    repo = Path(__file__).resolve().parents[1]
+    identity = {"commit": "UNKNOWN", "tracked_source_diff_sha256": "UNKNOWN"}
+    try:
+        identity["commit"] = subprocess.check_output(
+            ["git", "--no-optional-locks", "rev-parse", "HEAD"], cwd=repo,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        diff = subprocess.check_output(
+            ["git", "--no-optional-locks", "diff", "--no-ext-diff", "--no-textconv",
+             "--binary", "HEAD", "--", "werewolf"], cwd=repo, stderr=subprocess.DEVNULL,
+        )
+        identity["tracked_source_diff_sha256"] = sha256_bytes(diff)
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    if include_file_digests:
+        files = {}
+        for name in _GAMEPLAY_SOURCE_FILES:
+            try:
+                files[name] = sha256_bytes((repo / name).read_bytes())
+            except OSError:
+                files[name] = "UNKNOWN"
+        identity["file_sha256"] = files
+    return identity
+
+
+def _copy_gameplay_source_identity(snapshot):
+    """核对结果所需的身份字段，并与调用方持有的快照隔离。"""
+    if not isinstance(snapshot, dict):
+        raise TypeError("source_identity must be a dictionary")
+    commit = snapshot.get("commit")
+    if not isinstance(commit, str) or not fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", commit):
+        raise ValueError("source_identity.commit must be a Git object ID")
+    branch = snapshot.get("branch")
+    if not isinstance(branch, str) or not branch.strip():
+        raise ValueError("source_identity.branch must be a non-empty string")
+    require_sha256(snapshot.get("tracked_source_diff_sha256"), "source_identity.tracked_source_diff_sha256")
+    files = snapshot.get("file_sha256")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("source_identity.file_sha256 must be a non-empty dictionary")
+    for path, digest in files.items():
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError("source_identity.file_sha256 requires non-empty path keys")
+        require_sha256(digest, f"source_identity.file_sha256[{path!r}]")
+    return deepcopy(snapshot)
+
+
+def _gameplay_speaker_handoff(env, agent, observation):
+    seat = observation["current_act_idx"]
+    actor = f"player{seat}"
+    prefix = freeze_classic7_speech_pre(env, game_id="gameplay-only", actor=actor)
+    observation_id = prefix.speaker_pre_belief_observation_id
+    known_wolves, known_non_wolves = env.observer_private_knowledge(seat)
+    report = PlayingAgentBeliefReporter().report(
+        agent=agent, observation=observation, observer_id=actor, pre_prefix=prefix,
+        observation_id=observation_id, agent_backend_id=getattr(agent, "backend_id", "UNKNOWN"),
+        known_werewolves=known_wolves, known_non_werewolves=known_non_wolves,
+    )
+    if report["status"] != STATUS_OK:
+        raise RuntimeError(f"speaker PRE report {report['status']}: {report['error']}")
+    # 摘要绑定实际通过验证的报告，只用于本次发言交接。
+    return construct_speaker_pre_belief_handoff(
+        prefix, observation_id=observation_id, observer_id=actor,
+        observation_digest=sha256_bytes(canonical_json_bytes(report)),
+        observation_status="success", suspicion_support=report["suspected_werewolves"],
+    )
+
+
+def _require_legal_gameplay_action(observation, action):
+    if type(action) is not tuple or len(action) != 2 or type(action[0]) is not str:
+        raise ValueError("gameplay action must be an action-type and payload pair")
+    kind, payload = action
+    valid = observation["valid_action"]
+    if isinstance(valid, tuple):
+        legal = kind == valid[0] and isinstance(payload, str) and bool(payload.strip())
+    else:
+        legal = type(payload) is int and action in valid
+    if not legal:
+        raise ValueError(f"action is not legal in phase {observation['phase']}")
+
+
+def verify_gameplay_replay(result: GameplayOnlyResult) -> str:
+    """用同 seed 和座位动作重放完整游戏，核对公开轨迹与原生赢家。"""
+    from werewolf.canonical_collection.production_runtime import build_classic7_replay_environment
+
+    if not result.terminal_reached or result.failure_type is not None:
+        raise ValueError("replay requires a completed gameplay result")
+    replay_env = build_classic7_replay_environment(result.seed)
+    events, winner = replay_classic7_actions(
+        replay_env, result.roles, result.submitted_actions, require_full_game=True,
+        validate_action=_require_legal_gameplay_action,
+    )
+    if winner != result.winner:
+        raise ValueError("recorded winner disagrees with replay terminal winner")
+    if freeze_public_event_history(events).digest != result.public_event_digest:
+        raise ValueError("replay diverged from the live gameplay public history")
+    return winner
+
+
+def _complete_gameplay_result(result, *, env, agents, records, started, step):
+    result = replace(
+        result, completed_steps=step, elapsed_seconds=perf_counter() - started,
+        speech_parser_attempts=sum(len(item.attempts) for item in env.speech_annotations),
+    )
+    if records is None:
+        return result
+
+    # 只有所有实际调用都经同一种已记录的 Backend，才能给出整局合计。
+    complete = all(type(agent.backend) is OpenAICompatibleBackend for agent in agents)
+    complete = complete and type(getattr(env.speech_perceiver, "backend", None)) is OpenAICompatibleBackend
+    model_requests = len(records) if complete else "UNKNOWN"
+    retries = "UNKNOWN"
+    token_usage = "UNKNOWN"
+    if complete:
+        if all(type(record["attempt"]) is int for record in records):
+            retries = sum(record["attempt"] > 1 for record in records)
+        token_usage = {}
+        for field in ("input_tokens", "output_tokens", "total_tokens"):
+            values = [record[field] for record in records]
+            token_usage[field] = sum(values) if values and all(type(value) is int for value in values) else "UNKNOWN"
+
+    speech_requests = {
+        record["step"]: record for record in records if record["kind"] == "speech_realization"
+    }
+    annotations = iter(env.speech_annotations)
+    speech_results = []
+    for index, (kind, _) in enumerate(result.submitted_actions):
+        if kind not in PUBLIC_SPEECH_RUNTIME_PHASES:
+            continue
+        # 原生 step 对每次已解析的提交生成一条标注。解析请求中断只会缺末条。
+        annotation = next(annotations, None)
+        request = speech_requests.get(index, {})
+        speech_results.append({
+            "step": index, "kind": kind,
+            "seat": int(annotation.speaker.removeprefix("player")) if annotation else request.get("seat", "UNKNOWN"),
+            "strategy": request.get("strategy", "UNKNOWN"),
+            "event_id": annotation.event_id if annotation else "UNKNOWN",
+            "v1_status": annotation.status.value if annotation else "UNKNOWN",
+        })
+    return replace(
+        result, request_records=tuple(records), speech_results=tuple(speech_results),
+        model_requests=model_requests, retries=retries, token_usage=token_usage,
+    )
+
+
+def _gameplay_failure(result, actions, *, stage, phase, error, step, **metrics):
+    cause = error.__cause__
+    message = str(error)
+    if isinstance(cause, InterruptedError):
+        message = f"{message} {cause}"
+    keep_winner = result.terminal_reached and (
+        result.replay_winner is not None or isinstance(error, (InterruptedError, KeyboardInterrupt))
+    )
+    result = replace(
+        result, winner=result.winner if keep_winner else None,
+        submitted_actions=tuple(actions),
+        failure_type=type(error).__name__, failure_stage=stage, failure_phase=phase,
+        failure_message=message, failure_cause_type=type(cause).__name__ if cause else None,
+    )
+    return _complete_gameplay_result(result, step=step, **metrics)
 
 
 def _act_at_boundary(
@@ -51,17 +275,72 @@ def _act_at_boundary(
     return belief_aware_act(observation, pre_speech_belief=pre_speech_belief)
 
 
-def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
+def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
          planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
-         wolf_speech_tom=None, online_pilot=None, observer_shadow=None, f0_slice_control=None):
-    """Execute one game exclusively through canonical evidence construction.
-
-    An explicit online_pilot handles the collected speech PRE before baseline
-    action generation. A verified commit consumes that speech step; otherwise
-    baseline gameplay continues. Step/game callbacks only observe outcomes.
-    """
-    if canonical_recorder is None or call_audit is None:
-        raise TypeError("canonical recorder and call audit are required")
+         wolf_speech_tom=None, online_pilot=None, observer_shadow=None, f0_slice_control=None,
+         gameplay_only=False, max_steps=None, record_requests=False, request_timeout=None,
+         source_identity=None, check_gameplay_interrupt=None):
+    """运行原生游戏。默认执行 Canonical，显式 Gameplay-only 返回内存结果。"""
+    if type(gameplay_only) is not bool:
+        raise TypeError("gameplay_only must be a boolean")
+    if type(record_requests) is not bool:
+        raise TypeError("record_requests must be a boolean")
+    if not gameplay_only and (record_requests or request_timeout is not None):
+        raise ValueError("request recording and timeout are only supported for Gameplay-only")
+    if not gameplay_only and source_identity is not None:
+        raise ValueError("source_identity is only supported for Gameplay-only")
+    if check_gameplay_interrupt is not None:
+        if not gameplay_only:
+            raise ValueError("interrupt checkpoints are only supported for Gameplay-only")
+        if not callable(check_gameplay_interrupt):
+            raise TypeError("check_gameplay_interrupt must be callable")
+    if gameplay_only:
+        if planning_mode != "original" or any(value is not None for value in (
+            canonical_recorder, call_audit, plan_provider, speech_treatment, ablation_trace,
+            wolf_speech_tom, online_pilot, observer_shadow, f0_slice_control,
+        )):
+            raise ValueError("Gameplay-only cannot use Canonical recording or research hooks")
+        if not isinstance(env, WerewolfTextEnvV0) or env.game_count != 0:
+            raise ValueError("Gameplay-only requires a fresh Classic7 environment")
+        if type(env.random_seed) is not int:
+            raise ValueError("Gameplay-only requires an explicit game seed")
+        if len(agent_list) != 7 or not all(isinstance(agent, GPTAgent) for agent in agent_list):
+            raise ValueError("Gameplay-only requires seven configured GPTAgents")
+        if any(agent.decision_method == "dpins:random" and agent.game_seed != env.random_seed
+               for agent in agent_list):
+            raise ValueError("Random-Ins agent seed does not match the game seed")
+        if env.log_save_path is not None or any(agent.has_log for agent in agent_list):
+            raise ValueError("Gameplay-only requires log_save_path=None")
+        if max_steps is not None and (type(max_steps) is not int or max_steps <= 0):
+            raise ValueError("max_steps must be a positive integer")
+        if request_timeout is not None and (
+            type(request_timeout) not in (int, float) or not isfinite(request_timeout) or request_timeout <= 0
+        ):
+            raise ValueError("request_timeout must be a positive finite number of seconds")
+        if source_identity is None:
+            source_identity = _gameplay_source_identity(include_file_digests=record_requests)
+        else:
+            source_identity = _copy_gameplay_source_identity(source_identity)
+        result = GameplayOnlyResult(
+            seed=env.random_seed, roles=tuple(roles_),
+            seat_profiles=tuple(getattr(agent, "profile_name", "UNKNOWN") for agent in agent_list),
+            decision_methods=tuple(agent.decision_method for agent in agent_list),
+            source_identity=source_identity,
+            request_timeout_seconds=request_timeout,
+        )
+        request_records = [] if record_requests else None
+        gameplay_metrics = dict(env=env, agents=agent_list, records=request_records, started=perf_counter())
+        submitted_actions = []
+    else:
+        if canonical_recorder is None or call_audit is None:
+            raise TypeError("canonical recorder and call audit are required")
+        if any(
+            isinstance(agent, GPTAgent) and agent.decision_method is not None
+            for agent in agent_list
+        ):
+            raise ValueError("decision_method is not supported by Canonical Collection")
+        if max_steps is not None:
+            raise ValueError("max_steps is only supported for Gameplay-only")
     if observer_shadow is not None:
         from werewolf.observer_dtrs.shadow_hook import ShadowPREHook
         if type(observer_shadow) is not ShadowPREHook:
@@ -89,20 +368,56 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                 or online_pilot is not None or wolf_speech_tom is not None or observer_shadow is not None):
             raise TypeError("F0 slice requires its exclusive original-mode control")
         f0_slice_control.begin_runtime(canonical_recorder)
-    for agent in agent_list:
-        agent.reset()
-    observation = env.reset(roles=roles_)
-    canonical_recorder.start(env, roles=roles_)
+    try:
+        if check_gameplay_interrupt is not None:
+            check_gameplay_interrupt()
+        for agent in agent_list:
+            agent.reset()
+        observation = env.reset(roles=result.roles if gameplay_only else roles_)
+        if not gameplay_only:
+            canonical_recorder.start(env, roles=roles_)
+    except (Exception, KeyboardInterrupt) as error:
+        if not gameplay_only:
+            raise
+        return _gameplay_failure(
+            result, submitted_actions, stage="reset", phase=None, error=error, step=0, **gameplay_metrics,
+        )
     done, step = False, 0
     while not done:
-        actor = observation["current_act_idx"]
-        is_speech = env.phase in PUBLIC_SPEECH_RUNTIME_PHASES
+        stage = "between_steps"
+        phase = None
         try:
-            handoff = canonical_recorder.before_agent_act(
-                env, step_idx=step, acting_player_id=actor, delivered_observation=observation,
-                speech_kind=env.phase if is_speech else None)
-            if is_speech and handoff is None:
-                raise TypeError("public speech requires the collected Speaker PRE Belief Handoff")
+            actor = observation["current_act_idx"]
+            is_speech = env.phase in PUBLIC_SPEECH_RUNTIME_PHASES
+            phase = observation["phase"] if gameplay_only else None
+            if check_gameplay_interrupt is not None:
+                check_gameplay_interrupt()
+            if gameplay_only:
+                stage = "step_limit"
+                if max_steps is not None and step >= max_steps:
+                    raise TimeoutError("Gameplay-only reached max_steps before the native terminal")
+                stage = "speaker_pre"
+                handoff = None
+                acting_agent = agent_list[actor - 1]
+                request_context = dict(
+                    records=request_records, gameplay_only=True, timeout=request_timeout,
+                    game_seed=env.random_seed, step=step, seat=actor,
+                    method=acting_agent.decision_method or "default", phase=phase,
+                )
+                if is_speech and acting_agent.decision_method is None:
+                    pending_check = (model_request_details(kind="speaker_pre")
+                                     if check_gameplay_interrupt is not None else nullcontext())
+                    with model_request_context(**request_context), pending_check:
+                        if check_gameplay_interrupt is not None:
+                            check_gameplay_interrupt()
+                        handoff = _gameplay_speaker_handoff(env, acting_agent, observation)
+            else:
+                stage = "speaker_pre"
+                handoff = canonical_recorder.before_agent_act(
+                    env, step_idx=step, acting_player_id=actor, delivered_observation=observation,
+                    speech_kind=env.phase if is_speech else None)
+                if is_speech and handoff is None:
+                    raise TypeError("public speech requires the collected Speaker PRE Belief Handoff")
             if observer_shadow is not None and is_speech:
                 try:
                     # Only the frozen public PRE and this actor's delivered view cross
@@ -140,8 +455,17 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                     observation, _, done, info = committed
                     step += 1
                     continue
-            with call_audit.action_context(acting_player_id=actor,
-                    boundary_id=handoff.boundary_id if handoff else None, is_public_speech=is_speech):
+            stage = "agent_action"
+            action_context = model_request_context(**request_context) if gameplay_only else call_audit.action_context(
+                acting_player_id=actor, boundary_id=handoff.boundary_id if handoff else None,
+                is_public_speech=is_speech,
+            )
+            pending_check = (model_request_details(kind="agent_action")
+                             if check_gameplay_interrupt is not None else nullcontext())
+            with action_context, pending_check:
+                if check_gameplay_interrupt is not None:
+                    check_gameplay_interrupt()
+                acting_agent = agent_list[actor - 1]
                 if (wolf_speech_tom is not None and is_speech
                         and observation.get("identity") == "Werewolf"
                         and actor in observation["authoritative_public_state"]["alive_players"]):
@@ -155,22 +479,79 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
                     tom_context = wolf_speech_tom(prefix, observation)
                     if not isinstance(tom_context, str) or not tom_context:
                         raise ValueError("wolf speech ToM context must be non-empty text")
-                    action = _act_at_boundary(agent_list[actor - 1], observation, handoff,
+                    action = _act_at_boundary(acting_agent, observation, handoff,
                                               tom_context=tom_context)
                 else:
-                    action = _act_at_boundary(agent_list[actor - 1], observation, handoff)
-            canonical_recorder.after_agent_act(action)
-            context = call_audit.speech_perception_context(
-                event_id=f"event-{len(env.public_events):06d}",
-                boundary_id=handoff.boundary_id, speaker_id=actor) if is_speech else nullcontext()
+                    action = _act_at_boundary(acting_agent, observation, handoff)
+            context = nullcontext()
+            if gameplay_only:
+                _require_legal_gameplay_action(observation, action)
+                if is_speech:
+                    context = model_request_context(**request_context)
+            else:
+                canonical_recorder.after_agent_act(action)
+                if is_speech:
+                    context = call_audit.speech_perception_context(
+                        event_id=f"event-{len(env.public_events):06d}",
+                        boundary_id=handoff.boundary_id, speaker_id=actor,
+                    )
+            stage = "environment_step"
+            if check_gameplay_interrupt is not None:
+                check_gameplay_interrupt()
             with context:
                 observation, _, done, info = env.step(action)
-            canonical_recorder.after_env_step(env, observation_after=observation, terminal_after=done)
+                if gameplay_only:
+                    submitted_actions.append(action)
+            if gameplay_only:
+                stage = "step_commit"
+                step = len(submitted_actions)
+                if not done and check_gameplay_interrupt is not None:
+                    check_gameplay_interrupt()
+            if not gameplay_only:
+                canonical_recorder.after_env_step(env, observation_after=observation, terminal_after=done)
             if online_pilot is not None:
                 online_pilot.after_step(env=env, done=done, info=info)
-        except Exception as error:
+        except (Exception, KeyboardInterrupt) as error:
+            if gameplay_only:
+                completed = len(submitted_actions)
+                if stage == "environment_step" and completed == step and is_speech:
+                    # V1 异常或本步 V1 请求能证明动作已交给环境，不能证明该步完成。
+                    parser_called = request_records and (
+                        request_records[-1]["step"] == step and request_records[-1]["kind"] == "v1_parser"
+                    )
+                    if isinstance(error, V1SpeechPerceptionExhausted) or parser_called:
+                        submitted_actions.append(action)
+                return _gameplay_failure(
+                    result, submitted_actions, stage=stage, phase=phase, error=error,
+                    step=completed, **gameplay_metrics,
+                )
+            if stage == "between_steps" or isinstance(error, KeyboardInterrupt):
+                raise
             raise canonical_recorder.failure_from_exception(error) from error
-        step += 1
+        if not gameplay_only:
+            step += 1
+    if gameplay_only:
+        stage = "native_terminal"
+        try:
+            winner = classic7_native_winner(env, done, info)
+            result = replace(
+                result, winner=winner, terminal_reached=True,
+                submitted_actions=tuple(submitted_actions),
+                public_event_digest=freeze_public_event_history(env.public_events).digest,
+            )
+            if check_gameplay_interrupt is not None:
+                check_gameplay_interrupt()
+            stage = "replay"
+            result = replace(result, replay_winner=verify_gameplay_replay(result))
+            stage = "result_assembly"
+            completed_result = _complete_gameplay_result(result, step=step, **gameplay_metrics)
+            if check_gameplay_interrupt is not None:
+                check_gameplay_interrupt()
+            return completed_result
+        except (Exception, KeyboardInterrupt) as error:
+            return _gameplay_failure(
+                result, submitted_actions, stage=stage, phase=phase, error=error, step=step, **gameplay_metrics,
+            )
     if not isinstance(info, dict) or info.get("Werewolf") not in (1, -1):
         raise RuntimeError("finished game has no recognized winner")
     winner = "Werewolf" if info["Werewolf"] == 1 else "Villager"
@@ -221,6 +602,9 @@ def assign_agents(
     must_include,
     backends,
     allow_cross_team_profiles=False,
+    *,
+    random_seed=None,
+    seat_profiles=None,
 ):
     """Assign configured agent profiles to the fixed role list.
 
@@ -228,9 +612,9 @@ def assign_agents(
     preserves the random-competition behavior used to compare agent
     profiles across Werewolf and village teams.
 
-    Collection-only configurations may explicitly set
-    ``allow_cross_team_profiles=True`` so one API agent profile can
-    control all seven players without duplicating equivalent profiles.
+    ``allow_cross_team_profiles=True`` permits one profile on both factions.
+
+    显式 seat_profiles 按座位选择 Profile，must_include 和权重仅用于抽样。
     """
 
     if not isinstance(
@@ -258,9 +642,18 @@ def assign_agents(
     village_profiles = set()
     werewolf_profiles = set()
 
+    fixed_profiles = None
+    if seat_profiles is not None:
+        if not isinstance(seat_profiles, (list, tuple)) or len(seat_profiles) != len(assigined_roles):
+            raise ValueError("seat_profiles requires one profile name per role")
+        profiles_by_name = {profile["profile_name"]: profile for profile in candidate_profiles}
+        if any(not isinstance(name, str) or name not in profiles_by_name for name in seat_profiles):
+            raise ValueError("seat_profiles contains an unknown profile name")
+        fixed_profiles = [profiles_by_name[name] for name in seat_profiles]
+
     forced_profile = None
 
-    if must_include:
+    if fixed_profiles is None and must_include:
         required_profiles = [
             profile
             for profile in candidate_profiles
@@ -277,7 +670,14 @@ def assign_agents(
     for index, role in enumerate(
         assigined_roles
     ):
-        if (
+        if fixed_profiles is not None:
+            profile = fixed_profiles[index]
+            if role not in werewolf_team and role not in village_team:
+                raise ValueError(f"unsupported role: {role}")
+            opposite_profiles = village_profiles if role in werewolf_team else werewolf_profiles
+            if not allow_cross_team_profiles and profile["profile_name"] in opposite_profiles:
+                raise ValueError("seat_profiles uses the same profile on both factions")
+        elif (
             index == 0
             and forced_profile is not None
         ):
@@ -346,6 +746,8 @@ def assign_agents(
             model_params = dict(
                 profile["model_params"]
             )
+            if model_params.get("decision_method") == "dpins:random":
+                model_params["game_seed"] = random_seed
 
             if profile["agent_type"] != "gpt":
                 raise ValueError("the canonical playing agent type is gpt")
@@ -377,6 +779,7 @@ def assign_agents(
 
         agent = GPTAgent(log_file=log_file, **all_agent_profiles[profile_name])
         agent.backend_id = profile_backend_ids[profile_name]
+        agent.profile_name = profile_name
 
         agent_list.append(
             agent
@@ -394,6 +797,8 @@ def build_runtime(
     roles=None,
     random_seed=None,
     backends=None,
+    *,
+    seat_profiles=None,
 ):
     """Build the game environment and action agents."""
 
@@ -452,7 +857,7 @@ def build_runtime(
             "does not support Hunter."
         )
 
-    if random_seed is not None:
+    if random_seed is not None and (roles is None or seat_profiles is None):
         random.seed(
             random_seed
         )
@@ -511,6 +916,8 @@ def build_runtime(
             allow_cross_team_profiles=(
                 allow_cross_team_profiles
             ),
+            random_seed=random_seed,
+            seat_profiles=seat_profiles,
         )
     )
 

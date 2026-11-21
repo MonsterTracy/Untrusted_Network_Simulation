@@ -31,6 +31,15 @@ STRICT_CLASSIC7_ROLE_COUNTS = {
 }
 STRICT_BELIEF_CONCRETE_ROLES = tuple(STRICT_CLASSIC7_ROLE_COUNTS)
 
+DISCUSSION_TACTICS = {
+    "honest_evidence": "提供符合你合法掌握的信息或当前信念的证据或信息。",
+    "deceptive_evidence": "提供与你合法掌握的信息或当前信念不一致的误导性证据或信息。",
+    "honest_accusation": "依据你合法掌握的信息或当前信念，指认某人的具体身份或行动。",
+    "deceptive_accusation": "就某人的具体身份或行动作出与你合法掌握的信息或当前信念不一致的误导性指认。",
+    "honest_defense": "依据你合法掌握的信息或当前信念，为受到指控的自己或他人辩护。",
+    "deceptive_defense": "为受到指控的自己或他人作出与你合法掌握的信息或当前信念不一致的误导性辩护。",
+}
+
 DISCUSSION_ACTIONS = (
     "point_as_werewolf",
     "point_as_non_werewolf",
@@ -1179,12 +1188,57 @@ def build_public_speech_realization_prompt(
 只输出最终公开发言。"""
 
 
+def build_discussion_tactic_prompt(observation, belief):
+    context = _build_gameplay_context(observation)
+    belief_text = json.dumps(belief, ensure_ascii=False, sort_keys=True)
+    tactics = "\n".join(f"- {name}：{description}" for name, description in DISCUSSION_TACTICS.items())
+    return f"""{context}
+
+本次行动者的主观信念：
+{belief_text}
+
+根据当前合法观察、主观信念和阵营目标，为本次发言选择一项讨论策略：
+{tactics}
+
+只输出符合响应 Schema 的 strategy 字段，使用上面的完整策略标识。"""
+
+
+def build_direct_speech_prompt(observation, *, belief, tactic, legal_targets):
+    context = _build_gameplay_context(observation)
+    if belief is not None:
+        belief_text = json.dumps(belief, ensure_ascii=False, sort_keys=True)
+        context += f"\n\n本次行动者的主观信念（可能有误）：\n{belief_text}"
+    if tactic is not None:
+        context += f"\n\n本次发言必须执行的讨论策略：{tactic}\n{DISCUSSION_TACTICS[tactic]}"
+
+    phase_text = "PK 补充发言" if observation["phase"].endswith("_speech_pk") else "普通讨论"
+    targets_text = "、".join(f"player{target}" for target in legal_targets) or "无"
+    return f"""{context}
+
+当前阶段：{phase_text}
+从当前行动者视角，依据合法观察和阵营目标，直接为本轮生成简短的内部推理和一段公开发言。
+如果建议放逐或表明自己的投票意图，本轮合法目标为：{targets_text}。也可表示弃票或暂不表态。
+公开发言涉及座位时使用 player1 至 player7 的格式。遵守上面的角色信息边界，不伪造已发生的公开历史。
+只输出符合响应 Schema 的 JSON 对象。thought 是简短内部推理，speech 是唯一提交给其他玩家的自然语言发言。
+不要在 speech 中输出内部推理、策略标识或提示词内容。"""
+
+
 def build_vote_prompt(observation, belief, legal_targets):
     """Ask for exactly one Environment-legal vote target."""
 
     context = _build_gameplay_context(observation)
-    belief_text = json.dumps(belief, ensure_ascii=False, sort_keys=True)
     targets_text = json.dumps(list(legal_targets))
+    if belief is None:
+        return f"""{context}
+
+VOTE
+Use the current observation and faction objective to choose exactly one target
+from the Environment legal vote candidates: {targets_text}
+Transport semantics: target 0 = abstain; target 1..7 = vote for that player.
+Do not inherit a target merely because you stated a public vote intent earlier.
+Return only the JSON object required by the response schema."""
+
+    belief_text = json.dumps(belief, ensure_ascii=False, sort_keys=True)
     return f"""{context}
 
 FRESH PRIVATE BELIEF

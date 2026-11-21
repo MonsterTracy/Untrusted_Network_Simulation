@@ -1,9 +1,15 @@
 import inspect
 import json
+import random
 import re
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, call, patch
+
+import httpx
+import openai
 
 from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.agents.llm_agent import (
@@ -37,12 +43,15 @@ from werewolf.agents.prompt_template_v0 import (
     project_discussion_content_indices,
     project_discussion_vote_stances,
 )
-from werewolf.backends import BackendError
+from werewolf.backends import BackendError, OpenAICompatibleBackend
+from werewolf.backends.openai_compatible import model_request_context
+from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
 from werewolf.helper.log_utils import Log
 from werewolf.canonical_collection.pre import (
     SPEAKER_PRE_BELIEF_HANDOFF_SCHEMA_VERSION,
     SpeakerPREBeliefHandoff,
 )
+from werewolf.speech.speech_perceiver import SpeechPerceiver
 
 
 _TEST_REALIZATIONS = {
@@ -297,6 +306,32 @@ def _role_observation(identity, player_id, logs=(), phase="1_day_speech"):
     return observation
 
 
+def _baseline_observation(phase):
+    observation = _observation(phase)
+    observation["observer_id"] = observation["current_act_idx"]
+    if phase.endswith(("_speech", "_speech_pk")):
+        kind = phase.split("_", 2)[2]
+        observation["valid_action"] = (kind, -1)
+        observation["authoritative_public_state"]["phase"] = kind
+    if phase.endswith("_speech_pk"):
+        observation["game_log"].append(
+            Log(
+                viewer=[1, 2, 3, 4, 5, 6, 7], source=None, target=None,
+                content={"vote_outcome": "draw", "speech_queue": [1, 3, 5]},
+                day=1, time="第1天白天", event="end_vote",
+            )
+        )
+    return observation
+
+
+def _direct_speech(text="我怀疑 player3 是狼人。"):
+    return json.dumps({"thought": "这是私下的决策理由。", "speech": text}, ensure_ascii=False)
+
+
+def _schema_names(backend):
+    return [request["response_format"]["json_schema"]["name"] for request in backend.calls]
+
+
 def _parse_belief(raw_response, observation):
     exact_roles, role_options = derive_belief_constraints(observation)
     return parse_belief_response(
@@ -359,6 +394,82 @@ def _validate_role_report(report, observation):
     )
 
 
+class RequestMetadataTest(unittest.TestCase):
+    def test_both_chat_methods_are_observed_without_changing_the_request(self):
+        reply = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="private response"), finish_reason="stop",
+        )], usage={"prompt_tokens": 18, "completion_tokens": 0, "total_tokens": 18})
+        client = Mock()
+        create = client.chat.completions.create
+        create.return_value = reply
+        backend = OpenAICompatibleBackend(client=client, default_model="fixture-model")
+        messages = [{"role": "user", "content": "private prompt"}]
+        self.assertEqual(backend.chat(messages), "private response")
+        records = []
+        with model_request_context(records, game_seed=17, step=3, seat=1, method="react", phase="1_day_speech"):
+            self.assertEqual(backend.chat(messages), "private response")
+            reply.usage = None
+            self.assertEqual(backend.chat_with_metadata(messages), ("private response", {"finish_reason": "stop"}))
+        backend.chat(messages)
+
+        self.assertEqual(create.call_args_list, [create.call_args_list[0]] * 4)
+        client.with_options.assert_not_called()
+        self.assertEqual([row["request_index"] for row in records], [1, 2])
+        self.assertTrue(all(row["status"] == "response_received" and row["dispatched"] for row in records))
+        self.assertEqual(
+            [tuple(row[key] for key in ("input_tokens", "output_tokens", "total_tokens")) for row in records],
+            [(18, 0, 18), ("UNKNOWN", "UNKNOWN", "UNKNOWN")],
+        )
+        self.assertEqual((records[0]["game_seed"], records[0]["step"], records[0]["seat"]), (17, 3, 1))
+        self.assertEqual((records[0]["kind"], records[0]["attempt"], records[0]["sdk_retries"]), ("UNKNOWN",) * 3)
+        self.assertTrue(all(row["elapsed_seconds"] >= 0 and row["finish_reason"] == "stop" for row in records))
+        self.assertNotIn("private", repr(records))
+
+    def test_gameplay_options_prevent_sdk_transport_retries_on_timeout(self):
+        sent = []
+
+        def timeout(request):
+            sent.append(request)
+            raise httpx.ReadTimeout("scripted timeout", request=request)
+
+        http_client = httpx.Client(transport=httpx.MockTransport(timeout))
+        with openai.OpenAI(api_key="fake", base_url="http://127.0.0.1:8000/v1",
+                           http_client=http_client, max_retries=2) as client:
+            backend = OpenAICompatibleBackend(client=client, default_model="fixture-model")
+            records = []
+            with model_request_context(records, gameplay_only=True, timeout=7.5):
+                with self.assertRaises(BackendError) as raised:
+                    backend.chat([{"role": "user", "content": "fixture"}])
+            self.assertEqual(client.max_retries, 2)
+
+        self.assertEqual(len(sent), 1)
+        self.assertIsInstance(raised.exception.__cause__, openai.APITimeoutError)
+        self.assertEqual(sent[0].extensions["timeout"]["read"], 7.5)
+        self.assertEqual(len(records), 1)
+        row = records[0]
+        self.assertEqual((row["status"], row["error_type"], row["response_received"]),
+                         ("request_error", "APITimeoutError", "UNKNOWN"))
+        self.assertEqual(row["sdk_retries"], 0)
+        self.assertEqual((row["input_tokens"], row["output_tokens"], row["total_tokens"]), ("UNKNOWN",) * 3)
+
+    def test_invalid_response_retains_provider_usage_when_observed(self):
+        client = Mock()
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=None), finish_reason="stop")],
+            usage={"prompt_tokens": 12},
+        )
+        backend = OpenAICompatibleBackend(client=client, default_model="fixture-model")
+        records = []
+        with model_request_context(records):
+            with self.assertRaisesRegex(BackendError, "content must be text"):
+                backend.chat([{"role": "user", "content": "fixture"}])
+        self.assertEqual(len(records), 1)
+        row = records[0]
+        self.assertEqual((row["status"], row["response_received"], row["finish_reason"]),
+                         ("invalid_response", True, "stop"))
+        self.assertEqual((row["input_tokens"], row["output_tokens"]), (12, "UNKNOWN"))
+
+
 class GameplayCognitionTest(unittest.TestCase):
     def _agent(self, backend, **kwargs):
         agent = GPTAgent(
@@ -368,6 +479,213 @@ class GameplayCognitionTest(unittest.TestCase):
             **kwargs,
         )
         return agent
+
+    def test_baseline_phase_calls_use_the_current_observation(self):
+        methods = {
+            "react": [],
+            "dpins:no": ["belief_report"],
+            "dpins:llm": ["belief_report", "discussion_tactic"],
+            "dpins:random": ["belief_report"],
+        }
+        speech = "我怀疑 player3 是狼人。"
+        for method, speech_steps in methods.items():
+            cases = [
+                ("1_day_speech", ("speech", speech), speech_steps + ["direct_gameplay_speech"]),
+                ("1_day_speech_pk", ("speech_pk", speech), speech_steps + ["direct_gameplay_speech"]),
+                ("1_day_vote", ("vote", 0), speech_steps[:1] + ["vote"]),
+                ("1_day_vote_pk", ("vote_pk", 3), speech_steps[:1] + ["vote"]),
+            ]
+            replies = {
+                "belief_report": _belief(),
+                "discussion_tactic": '{"strategy":"honest_accusation"}',
+                "direct_gameplay_speech": _direct_speech(speech),
+            }
+            for phase, expected_action, stages in cases:
+                with self.subTest(method=method, phase=phase):
+                    observation = _baseline_observation(phase)
+                    if "vote" in stages:
+                        replies["vote"] = json.dumps({"target": expected_action[1]})
+                    backend = MetadataBackend([replies[stage] for stage in stages])
+                    agent = self._agent(backend, decision_method=method, game_seed=7)
+
+                    self.assertEqual(_act(agent, observation), expected_action)
+                    self.assertEqual(_schema_names(backend), stages)
+                    prompt = backend.calls[-1]["messages"][0]["content"]
+                    self.assertIn("Current player: player1", prompt)
+                    self.assertEqual("当前信息有限。" in prompt, method != "react")
+                    self.assertEqual('"roles":' in prompt, method != "react")
+                    self.assertEqual(
+                        "本次发言必须执行的讨论策略" in prompt,
+                        "speech" in phase and method in {"dpins:llm", "dpins:random"},
+                    )
+                    if phase.endswith("_speech_pk"):
+                        self.assertIn("本轮合法目标为：player3、player5。", prompt)
+                    elif phase.endswith("_speech"):
+                        self.assertIn("本轮合法目标为：player2、player3、player4、player5、player6、player7。", prompt)
+                    if phase.endswith("_vote_pk"):
+                        vote_schema = backend.calls[-1]["response_format"]["json_schema"]["schema"]
+                        self.assertEqual(
+                            vote_schema["properties"]["target"]["enum"],
+                            [0, 3, 5],
+                        )
+
+            for identity, phase, action in (
+                ("Werewolf", "skill_wolf", ("kill", 3)),
+                ("Seer", "skill_seer", ("check", 3)),
+                ("Witch", "skill_witch", ("witch_pass", 0)),
+            ):
+                with self.subTest(method=method, phase=phase):
+                    observation = _baseline_observation(f"1_night_{phase}")
+                    observation.update(identity=identity, valid_action=[action])
+                    backend = MetadataBackend(['{"action_index":0}'])
+                    default_backend = MetadataBackend(['{"action_index":0}'])
+                    agent = self._agent(backend, decision_method=method, game_seed=7)
+
+                    self.assertEqual(agent.act(observation), action)
+                    self.assertEqual(self._agent(default_backend).act(observation), action)
+                    self.assertEqual(_schema_names(backend), ["night_action_selection"])
+                    self.assertEqual(backend.calls, default_backend.calls)
+
+    def test_dpins_regenerates_its_belief_at_the_vote_boundary(self):
+        speech = _baseline_observation("1_day_speech")
+        vote = _baseline_observation("1_day_vote_pk")
+        speech_belief = _belief()
+        vote_belief = speech_belief.replace("当前信息有限。", "投票前重新判断。")
+        backend = MetadataBackend([speech_belief, _direct_speech(), vote_belief, '{"target":5}'])
+        agent = self._agent(backend, decision_method="dpins:no")
+
+        _act(agent, speech)
+        self.assertEqual(agent.act(vote), ("vote_pk", 5))
+        self.assertEqual(_schema_names(backend), ["belief_report", "direct_gameplay_speech", "belief_report", "vote"])
+        prompt = backend.calls[-1]["messages"][0]["content"]
+        self.assertIn("投票前重新判断。", prompt)
+        self.assertNotIn("当前信息有限。", prompt)
+
+    def test_dpins_rejects_an_invalid_role_report_before_decision(self):
+        backend = MetadataBackend([_belief(role="Seer")] * 3)
+        agent = self._agent(backend, decision_method="dpins:no")
+
+        with self.assertRaisesRegex(GameplayGenerationExhausted, "exceeds fixed Seer inventory"):
+            agent.act(_baseline_observation("1_day_vote"))
+        self.assertEqual(_schema_names(backend), ["belief_report"] * 3)
+
+    def test_react_rejects_a_non_pk_target_before_accepting_legal_abstention(self):
+        backend = MetadataBackend(['{"target":2}', '{"target":0}'])
+        agent = self._agent(backend, decision_method="react")
+
+        self.assertEqual(agent.act(_baseline_observation("1_day_vote_pk")), ("vote_pk", 0))
+        self.assertEqual(_schema_names(backend), ["vote", "vote"])
+
+    def test_llm_ins_requires_an_exact_tactic(self):
+        backend = MetadataBackend([_belief()] + ['{"strategy":"honest evidence"}'] * 3)
+        agent = self._agent(backend, decision_method="dpins:llm")
+
+        with self.assertRaisesRegex(GameplayGenerationExhausted, "exactly one legal discussion tactic"):
+            _act(agent, _baseline_observation("1_day_speech"))
+        self.assertEqual(_schema_names(backend), ["belief_report"] + ["discussion_tactic"] * 3)
+
+    def test_llm_and_random_ins_use_the_same_tactics_and_keep_them_on_retry(self):
+        observation = _baseline_observation("1_day_speech")
+        invalid = _direct_speech("我怀疑 player8 是狼人。")
+        selected = "deceptive_defense"
+        llm_backend = MetadataBackend([_belief(), json.dumps({"strategy": selected}), invalid, _direct_speech()])
+
+        _act(self._agent(llm_backend, decision_method="dpins:llm"), observation)
+
+        self.assertEqual(_schema_names(llm_backend), ["belief_report", "discussion_tactic"] + ["direct_gameplay_speech"] * 2)
+        schema = llm_backend.calls[1]["response_format"]["json_schema"]
+        self.assertEqual(
+            schema["schema"]["properties"]["strategy"]["enum"],
+            ["honest_evidence", "deceptive_evidence", "honest_accusation", "deceptive_accusation", "honest_defense", "deceptive_defense"],
+        )
+        for request in llm_backend.calls[-2:]:
+            prompt = request["messages"][0]["content"]
+            self.assertIn(f"本次发言必须执行的讨论策略：{selected}", prompt)
+            self.assertIn("为受到指控的自己或他人作出与你合法掌握的信息或当前信念不一致", prompt)
+
+        random_backend = MetadataBackend([_belief(), invalid, _direct_speech()])
+        repeated_backend = MetadataBackend([_belief(), _direct_speech()])
+        pk_backend = MetadataBackend([_belief(3), _direct_speech()])
+        pk_observation = _baseline_observation("1_day_speech_pk")
+        pk_observation.update(observer_id=3, current_act_idx=3)
+        draws = []
+
+        class TrackingRandom(random.Random):
+            def choice(self, candidates):
+                draws.append(tuple(candidates))
+                return super().choice(candidates)
+
+        global_state = random.getstate()
+        with patch("werewolf.agents.gpt_agent.Random", side_effect=TrackingRandom) as rng:
+            for backend in (random_backend, repeated_backend):
+                _act(self._agent(backend, decision_method="dpins:random", game_seed=7), observation)
+            _act(self._agent(pk_backend, decision_method="dpins:random", game_seed=7), pk_observation)
+            self.assertEqual(
+                rng.call_args_list,
+                [call("7:1:1_day_speech"), call("7:1:1_day_speech"), call("7:3:1_day_speech_pk")],
+            )
+        self.assertEqual(random.getstate(), global_state)
+        candidates = tuple(schema["schema"]["properties"]["strategy"]["enum"])
+        self.assertEqual(draws, [candidates] * 3)
+        self.assertEqual(_schema_names(random_backend), ["belief_report"] + ["direct_gameplay_speech"] * 2)
+        prompt = random_backend.calls[1]["messages"][0]["content"]
+        self.assertEqual(prompt, repeated_backend.calls[1]["messages"][0]["content"])
+        self.assertTrue(random_backend.calls[2]["messages"][0]["content"].startswith(prompt))
+
+    def test_baseline_rejects_other_observer_tom_and_illegal_speech(self):
+        observation = _baseline_observation("1_day_speech_pk")
+        handoff = _pre_speech_belief(observation)
+        backend = MetadataBackend([])
+        agent = self._agent(backend, decision_method="react")
+
+        with self.assertRaisesRegex(ValueError, "current actor's observation"):
+            agent.act_with_pre_speech_belief(dict(observation, observer_id=2), pre_speech_belief=handoff)
+        with self.assertRaisesRegex(ValueError, "does not accept ToM"):
+            agent.act_with_pre_speech_belief(observation, pre_speech_belief=handoff, tom_context="private")
+        with self.assertRaisesRegex(ValueError, "legal speech opportunity"):
+            agent.act_with_pre_speech_belief(dict(observation, valid_action=("speech", -1)), pre_speech_belief=handoff)
+        self.assertEqual(backend.calls, [])
+
+    def test_baseline_uses_only_current_view_and_passes_public_text_to_v1(self):
+        worlds = (
+            (["Werewolf", "Werewolf", "Seer", "Witch", "Villager", "Villager", "Villager"], 1, ("player1",)),
+            (["Werewolf", "Villager", "Seer", "Witch", "Villager", "Villager", "Werewolf"], 2, ("player7",)),
+        )
+        requests = []
+        for roles, check_target, suspicion in worlds:
+            parser_backend = MetadataBackend(["player5 | point_as_werewolf | player3"])
+            env = WerewolfTextEnvV0(
+                log_save_path=None, random_seed=5,
+                speech_perceiver=SpeechPerceiver(backend=parser_backend, model_name="parser"),
+            )
+            env.reset(roles=roles)
+            for action in (("kill", 0), ("kill", 0), ("check", check_target), ("witch_pass", 0)):
+                observation, _, done, _ = env.step(action)
+                self.assertFalse(done)
+            self.assertEqual(observation["phase"], "1_day_speech")
+            self.assertEqual(observation["current_act_idx"], 5)
+            self.assertEqual(observation["identity"], "Villager")
+            handoff = _pre_speech_belief(observation, suspected_werewolves=suspicion)
+            react_backend = MetadataBackend([_direct_speech()])
+            self._agent(react_backend, decision_method="react").act_with_pre_speech_belief(
+                observation, pre_speech_belief=handoff,
+            )
+            backend = MetadataBackend([_belief(5), '{"strategy":"honest_accusation"}', _direct_speech()])
+            agent = self._agent(backend, decision_method="dpins:llm")
+
+            action = agent.act_with_pre_speech_belief(
+                observation, pre_speech_belief=handoff,
+            )
+            requests.append((react_backend.calls, backend.calls))
+            env.step(action)
+
+            self.assertEqual(action, ("speech", "我怀疑 player3 是狼人。"))
+            self.assertNotIn("私下的决策理由", parser_backend.calls[0]["messages"][0]["content"])
+            self.assertEqual(
+                env.speech_annotations[-1].actions[0].to_record(),
+                ["player5", "point_as_werewolf", "player3"],
+            )
+        self.assertEqual(requests[0], requests[1])
 
     def test_belief_schema_has_exact_minimal_fields_and_accepts_unknown(self):
         observation = _observation()

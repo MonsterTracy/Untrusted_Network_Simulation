@@ -4,6 +4,9 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 
+DECISION_METHODS = ("react", "dpins:no", "dpins:llm", "dpins:random")
+
+
 def _as_mapping(value, field):
     if not isinstance(value, Mapping):
         raise ValueError(f"{field} must be a mapping")
@@ -53,8 +56,12 @@ def normalize_agent_profile(profile, backends):
     if backend not in backends:
         raise ValueError(f"agent profile backend does not exist: {backend}")
     params = deepcopy(dict(_as_mapping(profile.get("model_params", {}), "agent profile model_params")))
-    if set(params) - {"temperature", "gameplay_max_tokens", "gameplay_prompt_profile"}:
+    if set(params) - {"temperature", "gameplay_max_tokens", "gameplay_prompt_profile", "decision_method"}:
         raise ValueError("unsupported agent model parameters")
+    if "decision_method" in params:
+        method = params["decision_method"]
+        if not isinstance(method, str) or method not in DECISION_METHODS:
+            raise ValueError(f"unsupported agent decision_method: {method!r}")
     if params.get("gameplay_prompt_profile", "strict_classic7") != "strict_classic7":
         raise ValueError("only strict_classic7 gameplay is supported")
     params["gameplay_prompt_profile"] = "strict_classic7"

@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from werewolf.backends.openai_compatible import in_gameplay_request, model_request_details
 from werewolf.canonical_collection.speech import V1_ACTIONS, V1SpeechAction
 
 
@@ -164,13 +165,14 @@ class SpeechPerceiver:
             SPEECH_PARSER_GENERATION_MAX_ATTEMPTS + 1,
         ):
             try:
-                actions, raw_response = self._parse_configured_with_response(
-                    speaker=speaker,
-                    speech=speech,
-                    day=day,
-                    phase=phase,
-                    validation_feedback=validation_feedback,
-                )
+                with model_request_details(kind="v1_parser", attempt=attempt_index):
+                    actions, raw_response = self._parse_configured_with_response(
+                        speaker=speaker,
+                        speech=speech,
+                        day=day,
+                        phase=phase,
+                        validation_feedback=validation_feedback,
+                    )
                 attempts.append(
                     {
                         "generation_attempt": attempt_index,
@@ -191,8 +193,12 @@ class SpeechPerceiver:
             except CollectionCallBudgetExceeded:
                 raise
             except Exception as exc:
-                last_error = exc
                 raw_response = getattr(exc, "raw_response", None)
+                if in_gameplay_request() and not (
+                    isinstance(exc, SpeechActionValidationError) and isinstance(raw_response, str)
+                ):
+                    raise
+                last_error = exc
                 if not isinstance(raw_response, str):
                     raw_response = None
                 attempts.append(

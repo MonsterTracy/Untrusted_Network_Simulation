@@ -119,6 +119,11 @@ class Classic7RuntimeFactory:
         self.f0_control = f0_control
         self._raw_config = deepcopy(dict(runtime_config))
         self._normalized = normalize_runtime_config(self._raw_config)
+        if any(
+            "decision_method" in profile["model_params"]
+            for profile in self._normalized["agent_config"]["all_candidates"]
+        ):
+            raise ValueError("decision_method is not supported by Canonical Collection")
         self._backends = dict(backends)
         if isinstance(configured_call_limit, bool) or not isinstance(
             configured_call_limit,
@@ -181,12 +186,18 @@ def classic7_full_game_replay_executor(runtime_config):
     return _classic7_replay_executor(runtime_config, require_full_game=True)
 
 
+def build_classic7_replay_environment(seed, env_config=None):
+    """为动作回放装配原生环境和现有无模型解析器。"""
+    config = dict(env_config or {})
+    config["log_save_path"] = None
+    return WerewolfTextEnvV0(**config, speech_perceiver=_ReplaySpeechPerceiver(), random_seed=seed)
+
+
 def _classic7_replay_executor(runtime_config, *, require_full_game):
     env_config = deepcopy(normalize_runtime_config(runtime_config)["env_config"])
-    env_config["log_save_path"] = None
 
     def replay_environment(seed):
-        return WerewolfTextEnvV0(**env_config, speech_perceiver=_ReplaySpeechPerceiver(), random_seed=seed)
+        return build_classic7_replay_environment(seed, env_config)
 
     return make_classic7_replay_executor(
         identity=("classic7-full-game-runtime-action-replay-v1" if require_full_game

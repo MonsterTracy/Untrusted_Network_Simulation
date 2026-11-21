@@ -1,4 +1,6 @@
+import json
 import re
+from random import Random
 
 from werewolf.agents.llm_agent import (
     BeliefValidationError,
@@ -18,18 +20,24 @@ from werewolf.agents.llm_agent import (
     vote_response_format,
 )
 from werewolf.agents.prompt_template_v0 import (
+    DISCUSSION_TACTICS,
     STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
     build_belief_prompt,
     build_day_cognition_prompt,
+    build_direct_speech_prompt,
+    build_discussion_tactic_prompt,
     build_public_speech_realization_prompt,
     build_public_claim_catalog,
     build_vote_prompt,
     compile_discussion_intent,
     derive_belief_constraints,
+    derive_discussion_vote_targets,
     freeze_discussion_candidates,
 )
 from werewolf.backends import BackendError
+from werewolf.backends.openai_compatible import model_request_details
 from werewolf.canonical_collection.pre import SpeakerPREBeliefHandoff
+from werewolf.runtime_config import DECISION_METHODS
 from werewolf.speech.validation import normalize_player
 
 
@@ -55,7 +63,15 @@ class GPTAgent(LLMAgent):
         log_file=None,
         gameplay_prompt_profile=STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
         gameplay_max_tokens=None,
+        decision_method=None,
+        game_seed=None,
     ):
+        if decision_method is not None and (
+            not isinstance(decision_method, str) or decision_method not in DECISION_METHODS
+        ):
+            raise ValueError(f"unsupported agent decision_method: {decision_method!r}")
+        if decision_method == "dpins:random" and type(game_seed) is not int:
+            raise ValueError("dpins:random requires an integer game seed")
         super().__init__(
             backend=backend,
             model_name=model_name,
@@ -65,6 +81,8 @@ class GPTAgent(LLMAgent):
             gameplay_max_tokens=gameplay_max_tokens,
         )
         self.temperature = temperature
+        self.decision_method = decision_method
+        self.game_seed = game_seed
 
     def act(self, observation):
         return self._act(observation, pre_speech_belief=None)
@@ -76,7 +94,7 @@ class GPTAgent(LLMAgent):
         pre_speech_belief,
         tom_context=None,
     ):
-        """Generate speech from the exact immutable PRE self-report."""
+        """校验当前发言交接。默认认知分支使用冻结的 PRE 自身报告。"""
 
         if not isinstance(pre_speech_belief, SpeakerPREBeliefHandoff):
             raise TypeError(
@@ -92,6 +110,8 @@ class GPTAgent(LLMAgent):
             raise ValueError("PRE-belief observer does not match current speaker")
         if "speech" not in observation.get("phase", ""):
             raise ValueError("PRE-belief handoff is only valid for speech")
+        if self.decision_method is not None and tom_context is not None:
+            raise ValueError("decision_method does not accept ToM context")
         if tom_context is not None and (not isinstance(tom_context, str) or not tom_context):
             raise TypeError("ToM context must be non-empty text")
         return self._act(
@@ -107,7 +127,13 @@ class GPTAgent(LLMAgent):
         is_vote = "vote" in phase
         is_night = any(name in phase for name in _CONSTRAINED_NIGHT_PHASES)
         if (
+            self.decision_method is not None
+            and observation.get("observer_id") != observation["current_act_idx"]
+        ):
+            raise ValueError("decision_method requires the current actor's observation")
+        if (
             is_speech
+            and self.decision_method is None
             and not isinstance(pre_speech_belief, SpeakerPREBeliefHandoff)
         ):
             raise TypeError(
@@ -117,6 +143,17 @@ class GPTAgent(LLMAgent):
         temperature, max_tokens = self._request_limits()
 
         if is_speech:
+            if self.decision_method is not None:
+                if (
+                    not phase.endswith(f"_day_{speech_kind}")
+                    or observation.get("valid_action") != (speech_kind, -1)
+                ):
+                    raise ValueError("decision_method requires a legal speech opportunity")
+                return speech_kind, self._generate_direct_speech(
+                    observation,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
             day_cognition, candidate_snapshot, claim_catalog = (
                 self._generate_day_cognition(
                     observation,
@@ -145,11 +182,13 @@ class GPTAgent(LLMAgent):
             return speech_kind, raw_text
 
         if is_vote:
-            belief = self._generate_belief(
-                observation,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            belief = None
+            if self.decision_method != "react":
+                belief = self._generate_belief(
+                    observation,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
             return self._generate_vote(
                 observation,
                 belief=belief,
@@ -178,7 +217,8 @@ class GPTAgent(LLMAgent):
         last_error = None
         for attempt in range(1, GAMEPLAY_GENERATION_MAX_ATTEMPTS + 1):
             try:
-                return generate(attempt, last_error)
+                with model_request_details(kind=stage, attempt=attempt):
+                    return generate(attempt, last_error)
             except _GAMEPLAY_GENERATION_ERRORS as exc:
                 last_error = exc
         raise GameplayGenerationExhausted(
@@ -250,10 +290,99 @@ class GPTAgent(LLMAgent):
                 exact_roles=exact_roles,
                 role_options=role_options,
             )
-        except RoleReportValidationError:
+        except RoleReportValidationError as exc:
+            if self.decision_method is not None:
+                raise BeliefValidationError(str(exc)) from exc
             # The raw response is already retained by the existing call audit.
             pass
         return report
+
+    def _generate_direct_speech(self, observation, *, temperature, max_tokens):
+        legal_targets = derive_discussion_vote_targets(observation)
+        belief = None
+        if self.decision_method != "react":
+            belief = self._generate_belief(
+                observation, temperature=temperature, max_tokens=max_tokens
+            ).as_dict()
+
+        tactic = None
+        if self.decision_method == "dpins:llm":
+            prompt = build_discussion_tactic_prompt(observation, belief)
+            tactic = self._retry_validated_generation(
+                stage="discussion_tactic",
+                generate=lambda attempt, _last_error: self._select_discussion_tactic(
+                    observation,
+                    prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    attempt=attempt,
+                ),
+            )
+        elif self.decision_method == "dpins:random":
+            # Classic7 每个座位每天至多有一次普通发言和一次 PK 发言。
+            actor = observation["current_act_idx"]
+            phase = observation["phase"]
+            speech_seed = f"{self.game_seed}:{actor}:{phase}"
+            tactic = Random(speech_seed).choice(tuple(DISCUSSION_TACTICS))
+
+        with model_request_details(strategy=tactic):
+            return self._generate_public_speech(
+                observation,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                direct_prompt=build_direct_speech_prompt(
+                    observation, belief=belief, tactic=tactic, legal_targets=legal_targets,
+                ),
+            )
+
+    def _decision_response_format(self, name, **properties):
+        if getattr(self.backend, "supports_json_schema", False) is not True:
+            raise BackendError(f"{name} requires backend JSON Schema support")
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": name,
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": list(properties),
+                    "properties": properties,
+                },
+            },
+        }
+
+    def _select_discussion_tactic(self, observation, prompt, *, temperature, max_tokens, attempt):
+        content, metadata = self._chat_with_metadata(
+            [{"role": "user", "content": prompt}],
+            player_log_context={
+                "stage": "discussion_tactic",
+                "observation": observation,
+                "gen_times": attempt - 1,
+            },
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=self._decision_response_format(
+                "discussion_tactic", strategy={"type": "string", "enum": list(DISCUSSION_TACTICS)},
+            ),
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        if metadata["finish_reason"] == "length":
+            raise GameplayActionValidationError("discussion tactic response was truncated")
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise GameplayActionValidationError(
+                "discussion tactic response is not valid JSON"
+            ) from exc
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"strategy"}
+            or not isinstance(payload["strategy"], str)
+            or payload["strategy"] not in DISCUSSION_TACTICS
+        ):
+            raise GameplayActionValidationError("response must select exactly one legal discussion tactic")
+        return payload["strategy"]
 
     def _generate_day_cognition(
         self,
@@ -336,12 +465,13 @@ class GPTAgent(LLMAgent):
         self,
         observation,
         *,
-        discussion_acts,
-        claim_catalog,
+        discussion_acts=(),
+        claim_catalog=(),
         temperature,
         max_tokens,
+        direct_prompt=None,
     ):
-        """Generate public natural language from a frozen communication intent."""
+        """生成并校验提交给环境的公开发言。"""
 
         return self._retry_validated_generation(
             stage="speech_realization",
@@ -353,6 +483,7 @@ class GPTAgent(LLMAgent):
                 max_tokens=max_tokens,
                 attempt=attempt,
                 validation_error=last_error,
+                direct_prompt=direct_prompt,
             ),
         )
 
@@ -366,21 +497,29 @@ class GPTAgent(LLMAgent):
         max_tokens,
         attempt,
         validation_error,
+        direct_prompt,
     ):
-        """Generate one public realization from a frozen communication intent."""
-
         phase = observation.get("phase")
         player_id = observation.get("current_act_idx")
-        prompt = build_public_speech_realization_prompt(
-            observation,
-            discussion_acts=discussion_acts,
-            claim_catalog=claim_catalog,
-        )
+        request_options = {}
+        if direct_prompt is None:
+            prompt = build_public_speech_realization_prompt(
+                observation,
+                discussion_acts=discussion_acts,
+                claim_catalog=claim_catalog,
+            )
+            retry_instruction = "必须基于同一组冻结意图完整重新生成一段发言。"
+        else:
+            prompt = direct_prompt
+            retry_instruction = "按照同一请求重新生成内部推理和公开发言。"
+            request_options["response_format"] = self._decision_response_format(
+                "direct_gameplay_speech", thought={"type": "string"}, speech={"type": "string"},
+            )
         if validation_error is not None:
             prompt += (
                 "\n\n上一次输出未通过本地严格验证：\n"
                 f"{validation_error}\n\n"
-                "必须基于同一组冻结意图完整重新生成一段发言。"
+                f"{retry_instruction}"
                 "不得修改、引用或解释上一次响应。"
             )
         content, metadata = self._chat_with_metadata(
@@ -393,7 +532,21 @@ class GPTAgent(LLMAgent):
             temperature=temperature,
             max_tokens=max_tokens,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            **request_options,
         )
+        if direct_prompt is not None and metadata["finish_reason"] != "length":
+            try:
+                speech_response = json.loads(content)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise GameplaySpeechQualityError("direct speech response is not valid JSON") from exc
+            if (
+                not isinstance(speech_response, dict)
+                or set(speech_response) != {"thought", "speech"}
+                or not isinstance(speech_response["thought"], str)
+                or not speech_response["thought"].strip()
+            ):
+                raise GameplaySpeechQualityError("direct speech requires thought and speech fields")
+            content = speech_response["speech"]
         validate_gameplay_public_speech(
             content,
             finish_reason=metadata["finish_reason"],
@@ -442,11 +595,12 @@ class GPTAgent(LLMAgent):
         )
         legal_targets = tuple(target for target, _action in candidates)
         action_by_target = dict(candidates)
-        prompt = build_vote_prompt(
-            observation,
-            belief.gameplay_dict(),
-            legal_targets,
-        )
+        belief_payload = None
+        if belief is not None:
+            belief_payload = (
+                belief.gameplay_dict() if self.decision_method is None else belief.as_dict()
+            )
+        prompt = build_vote_prompt(observation, belief_payload, legal_targets)
         content, metadata = self._chat_with_metadata(
             [{"role": "user", "content": prompt}],
             player_log_context={

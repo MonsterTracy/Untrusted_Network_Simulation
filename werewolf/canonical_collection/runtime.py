@@ -188,6 +188,31 @@ class _PendingAction:
     handoff: SpeakerPREBeliefHandoff | None = None
 
 
+def freeze_classic7_speech_pre(env, *, game_id, actor):
+    """从当前真实发言机会冻结报告所需的公开前缀。"""
+    history = freeze_public_event_history(env.public_events)
+    terminal = history.events[-1]
+    boundary_id = f"{game_id}-pre-{terminal.event_index:06d}"
+    alive = tuple(
+        player
+        for player, is_alive in zip(PLAYER_IDS, env.alive, strict=True)
+        if is_alive == 1
+    )
+    return construct_authoritative_pre_prefix(
+        game_id=game_id,
+        boundary_id=boundary_id,
+        step_index=terminal.event_index,
+        report_trigger_id=f"{boundary_id}-trigger",
+        current_speaker=actor,
+        alive_observer_ids=alive,
+        public_event_history=history,
+        v1_annotations=tuple(env.speech_annotations),
+        belief_observation_ids_by_observer={
+            observer: f"{boundary_id}-belief-{observer}" for observer in alive
+        },
+    )
+
+
 class CanonicalGameRecorder:
     """Sole constructor of PRE, observation, handoff and submitted-action evidence."""
 
@@ -244,29 +269,7 @@ class CanonicalGameRecorder:
         )
         if speech_kind is None:
             return None
-        history = freeze_public_event_history(env.public_events)
-        terminal = history.events[-1]
-        boundary_id = f"{self.game_id}-pre-{terminal.event_index:06d}"
-        alive = tuple(
-            player
-            for player, is_alive in zip(PLAYER_IDS, env.alive, strict=True)
-            if is_alive == 1
-        )
-        observation_ids = {
-            observer: f"{boundary_id}-belief-{observer}"
-            for observer in alive
-        }
-        prefix = construct_authoritative_pre_prefix(
-            game_id=self.game_id,
-            boundary_id=boundary_id,
-            step_index=terminal.event_index,
-            report_trigger_id=f"{boundary_id}-trigger",
-            current_speaker=actor,
-            alive_observer_ids=alive,
-            public_event_history=history,
-            v1_annotations=tuple(env.speech_annotations),
-            belief_observation_ids_by_observer=observation_ids,
-        )
+        prefix = freeze_classic7_speech_pre(env, game_id=self.game_id, actor=actor)
         self.prefixes.append(prefix)
         self._pending.prefix = prefix
         observations = self.belief_collector.collect(
@@ -522,6 +525,38 @@ class CanonicalGameRecorder:
         )
 
 
+def classic7_native_winner(env, done, info):
+    """核对最后一步与原生胜负规则，保留活体环境的计数。"""
+    # is_done() 会增加狼人胜局计数，复核只在环境副本上执行。
+    _, state_done, state_info = copy(env).is_done()
+    if done is not True or state_done is not True or env.phase != "end_game":
+        raise ValueError("actions do not reach a complete native game terminal")
+    if (
+        not isinstance(info, dict) or not isinstance(state_info, dict)
+        or type(info.get("Werewolf")) is not int
+        or info["Werewolf"] not in (-1, 1) or state_info != info
+    ):
+        raise ValueError("terminal winner disagrees with native win rule")
+    return "Werewolf" if info["Werewolf"] == 1 else "Villager"
+
+
+def replay_classic7_actions(env, roles, actions, *, require_full_game, validate_action=None):
+    """仅重放提交给原生环境的动作并返回公开轨迹和可核验胜者。"""
+    observation = env.reset(roles=roles)
+    done, info = False, {}
+    for action in actions:
+        if require_full_game and done:
+            raise ValueError("replay contains actions after the terminal step")
+        if not isinstance(action, (list, tuple)):
+            raise TypeError("replay action must be a JSON array")
+        action = tuple(action)
+        if validate_action is not None:
+            validate_action(observation, action)
+        observation, _, done, info = env.step(action)
+    winner = classic7_native_winner(env, done, info) if require_full_game else None
+    return list(env.public_events), winner
+
+
 def make_classic7_replay_executor(
     *,
     identity: str,
@@ -550,30 +585,12 @@ def make_classic7_replay_executor(
         roles = [
             role for _, role in private_replay_evidence.role_assignment
         ]
-        env.reset(roles=roles)
-        done, info = False, {}
-        for raw_action in raw_actions:
-            if require_full_game and done:
-                raise ValueError("replay contains actions after the terminal step")
-            if not isinstance(raw_action, list):
-                raise TypeError("replay action must be a JSON array")
-            outcome = env.step(tuple(raw_action))
-            if require_full_game:
-                _, _, done, info = outcome
-        if require_full_game:
-            # Check both the final step and the environment's native win rule.
-            # A supplied winner string or a synthetic early `done` is insufficient.
-            _, state_done, state_info = env.is_done()
-            if done is not True or state_done is not True or env.phase != "end_game":
-                raise ValueError("replay does not reach a complete native game terminal")
-            if (not isinstance(info, dict) or not isinstance(state_info, dict)
-                    or type(info.get("Werewolf")) is not int
-                    or info["Werewolf"] not in (-1, 1) or state_info != info):
-                raise ValueError("replay terminal winner disagrees with native win rule")
-            winner = "Werewolf" if info["Werewolf"] == 1 else "Villager"
-            if replay_inputs.get("winner") != winner:
-                raise ValueError("recorded winner disagrees with replay terminal winner")
-        return list(env.public_events)
+        events, winner = replay_classic7_actions(
+            env, roles, raw_actions, require_full_game=require_full_game,
+        )
+        if require_full_game and replay_inputs.get("winner") != winner:
+            raise ValueError("recorded winner disagrees with replay terminal winner")
+        return events
 
     executor_type = FullGameReplayExecutor if require_full_game else DeterministicReplayExecutor
     return executor_type(identity=identity, execute=execute)
