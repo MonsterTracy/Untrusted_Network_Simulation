@@ -223,7 +223,6 @@ def server_inputs(plan, repo):
     from scripts.qwen3_gameplay_predictor import FIT_DIGEST, SEAL_DIGEST
     from scripts.collect_games import derive_seed_pool, plan_fields, model_manifest
     from scripts.phase2_online_campaign import qualification_inputs
-    from scripts.run_phase2_language_smoke import VERSION as SMOKE_VERSION
     from werewolf.interventions.online.preflight import _smoke_v3_gate
     from werewolf.interventions.online.server import _verify_smoke_source
     from werewolf.interventions.mapper.runtime import load_runtime_mapper
@@ -288,9 +287,9 @@ def server_inputs(plan, repo):
     reference = build_development_layer(paths["publication"], paths["evaluation_root"]).values
     if reference_tables_digest(reference) != bound["reference_tables_digest"]:
         raise ValueError("reference lineage mismatch")
-    if not _smoke_v3_gate(paths["smoke_v3"], bound["smoke_v3_manifest_digest"], bound["mapper_manifest_digest"]):
+    smoke = _smoke_v3_gate(paths["smoke_v3"], bound["smoke_v3_manifest_digest"], bound["mapper_manifest_digest"])
+    if smoke is None:
         raise ValueError("Smoke-V3 gate failed")
-    smoke = verify_artifact(paths["smoke_v3"], expected_artifact_type="phase2_language_execution_smoke", expected_schema_version=SMOKE_VERSION)
     _verify_smoke_source(repo, smoke)
     return paths, config, limit, mapper, reference
 

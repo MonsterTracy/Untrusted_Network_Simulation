@@ -194,8 +194,22 @@ def _setup(tmp_path, monkeypatch, purpose="qualification"):
     return args, plan, counters, make_smoke
 
 
+def _smoke_reads(monkeypatch, root, worker_count):
+    reads = []
+    original = Path.read_bytes
+
+    def read_bytes(path):
+        if path.parent == root:
+            reads.append((worker_count(), path.name))
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    return reads
+
+
 def test_full_preflight_only_has_no_game_assignment_inference_or_campaign_files(tmp_path, monkeypatch, capsys):
     args, _, counters, _ = _setup(tmp_path, monkeypatch)
+    smoke_reads = _smoke_reads(monkeypatch, args.smoke_v3, lambda: counters["q_start"])
     args.preflight_only = True
     assert server.execute_server_campaign(args) == 0
     output = json.loads(capsys.readouterr().out)
@@ -203,6 +217,67 @@ def test_full_preflight_only_has_no_game_assignment_inference_or_campaign_files(
     assert output["preflight"]["checkpoint_executable"] is False
     assert not args.work_directory.exists() and not args.destination.exists()
     assert counters == {"q_start": 1, "q_predict": 0, "language": 0, "closed": 1}
+    filenames = sorted(path.name for path in args.smoke_v3.iterdir())
+    assert sorted(smoke_reads) == [(stage, name) for stage in (0, 1) for name in filenames]
+
+
+@pytest.mark.parametrize("bad_source", [False, True])
+def test_gameplay_smoke_gate_and_source_share_one_read(tmp_path, monkeypatch, bad_source):
+    from scripts import collect_games, phase2_online_campaign, qwen3_gameplay_predictor
+    from werewolf.interventions import gameplay_server, offline
+
+    args, _, _, _ = _setup(tmp_path, monkeypatch)
+    deployment = yaml.safe_load(args.deployment_config.read_bytes())
+    provenance = json.loads(args.game_plan.read_bytes())["environment_provenance"]
+    provenance.update(model_manifest_sha256="e" * 64, hf_revision="fixture", model_path=deployment["model"])
+    collection_id = "gameplay-smoke-fixture"
+    game_plan = construct_collection_plan(ordered_seed_pool=collect_games.derive_seed_pool(collection_id, 2),
+        **plan_fields({"collection_id": collection_id, "target_games": 2, "seed_pool_size": 2,
+                     "call_limit": 10000}, args.source_commit, provenance))
+    excluded = [{"collection_id": name} for name in ("paper-phase2-online-terminal-pilot-v1",
+        "paper-phase2-online-probe-pilot-v1", *(f"paper-phase2-online-probe-qualification-v{i}" for i in (1, 2, 3)))]
+    tom_collection = "paper-tom-gameplay-ablation-v1"
+    qualification_digest = "f" * 64
+    bound = {**{key: getattr(args, key) for key in ("q_python", "mapper_manifest_digest",
+            "reference_tables_digest", "smoke_v3_manifest_digest")},
+        "qualified_runtime_manifest_digest": qualification_digest,
+        "q_fit_digest": server.FIT_DIGEST, "q_seal_digest": server.SEAL_DIGEST,
+        "runtime_config_sha256": provenance["runtime_config_sha256"],
+        "deployment_config_sha256": provenance["serve_config_sha256"],
+        "additional_seed_exclusions": {"tom_gameplay_seed_rule": f"{tom_collection}:100",
+            "seeds": list(collect_games.derive_seed_pool(tom_collection, 100))},
+        "paths": {key: str(getattr(args, key)) for key in ("runtime_config", "deployment_config", "publication",
+            "evaluation_root", "mapper", "smoke_v3", "q_checkout", "q_fit")}}
+    source = {"commit": args.source_commit}
+    plan = {"purpose": "qualification", "runtime_inputs": bound, "source": source,
+            "game_plan": game_plan.to_record(), "exclusions": excluded, "randomized_games": 2}
+    monkeypatch.setattr(gameplay_server, "freeze_source", lambda _: source)
+    monkeypatch.setattr(phase2_online_campaign, "qualification_inputs", lambda: (
+        None, {**bound, "canonical_game_plan": excluded[0]}, SimpleNamespace(manifest_digest=qualification_digest)))
+    monkeypatch.setattr(gameplay_server, "verify_q_static", lambda *_: None)
+    monkeypatch.setattr(collect_games, "model_manifest",
+                        lambda _: (provenance["model_manifest_sha256"], provenance["hf_revision"]))
+    monkeypatch.setattr(offline, "build_development_layer", lambda *_: SimpleNamespace(values=values()))
+
+    def no_startup(*args, **kwargs):
+        pytest.fail("Smoke validation must precede Worker or service startup")
+
+    monkeypatch.setattr(gameplay_server, "verify_runtime_service", no_startup)
+    monkeypatch.setattr(qwen3_gameplay_predictor, "Qwen3GameplayPredictorClient", no_startup)
+    smoke_reads = _smoke_reads(monkeypatch, args.smoke_v3, lambda: 0)
+    if bad_source:
+        source_file = args.repo / "werewolf/interventions/language/verified_speech.py"
+        source_file.write_bytes(source_file.read_bytes() + b"\n# drift\n")
+        monkeypatch.setattr(gameplay_server, "bind_campaign_profile", lambda *_args, **_kwargs: None)
+        with pytest.raises(ValueError, match="Smoke-V3 source bytes differ"):
+            gameplay_server.execute_server(plan, repo=args.repo, work=args.work_directory,
+                                          destination=args.destination, allow_gpu=True)
+    else:
+        paths, _, _, mapper, _ = gameplay_server.server_inputs(plan, args.repo)
+        assert paths["smoke_v3"] == args.smoke_v3
+        assert mapper.artifact_digest == args.mapper_manifest_digest
+    assert sorted(smoke_reads) == [(0, path.name) for path in sorted(args.smoke_v3.iterdir())]
+    assert not args.work_directory.exists() and not args.destination.exists()
 
 
 def test_failed_full_runtime_preflight_prevents_campaign_start(tmp_path, monkeypatch):

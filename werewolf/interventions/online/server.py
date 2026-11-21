@@ -13,7 +13,7 @@ import tempfile
 
 import yaml
 
-from werewolf.artifact_io import canonical_json_bytes, sha256_bytes, verify_artifact
+from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.artifact_io.canonical import ensure_durable_directory
 from werewolf.backends.factory import load_named_backends
 from werewolf.canonical_collection.attempt_ledger import (
@@ -206,14 +206,10 @@ def load_server_inputs(args):
     reference = build_development_layer(args.publication, args.evaluation_root).values
     if reference_tables_digest(reference) != args.reference_tables_digest:
         raise ValueError("preregistered reference table digest mismatch")
-    if not _smoke_v3_gate(args.smoke_v3, args.smoke_v3_manifest_digest,
-                          args.mapper_manifest_digest):
+    smoke_artifact = _smoke_v3_gate(args.smoke_v3, args.smoke_v3_manifest_digest,
+                                   args.mapper_manifest_digest)
+    if smoke_artifact is None:
         raise ValueError("Smoke-V3 manifest, mapper lineage, selection, or gate mismatch")
-    from scripts.run_phase2_language_smoke import VERSION as SMOKE_VERSION
-    smoke_artifact = verify_artifact(args.smoke_v3,
-        expected_artifact_type="phase2_language_execution_smoke", expected_schema_version=SMOKE_VERSION)
-    if smoke_artifact.manifest_digest != args.smoke_v3_manifest_digest:
-        raise ValueError("Smoke-V3 manifest changed during input validation")
     smoke_source = _verify_smoke_source(args.repo, smoke_artifact)
     bound = {
         "schema_version": INPUT_VERSION, "pilot_plan": plan.to_record(),

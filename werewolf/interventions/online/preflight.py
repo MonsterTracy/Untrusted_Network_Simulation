@@ -10,7 +10,7 @@ import os
 import subprocess
 
 from werewolf.artifact_io import (
-    canonical_json_bytes, open_artifact_envelope, read_artifact_file, sha256_bytes, verify_artifact,
+    ArtifactEnvelope, canonical_json_bytes, open_artifact_envelope, read_artifact_file, sha256_bytes,
 )
 from werewolf.interventions.intervention import CHECKPOINT_CLOSURE_VERSION
 from werewolf.interventions.language.semantics import LANGUAGE_VERSION
@@ -240,35 +240,31 @@ def assess_capsule_q_interface(predictor, prefix) -> dict:
 
 
 def _smoke_v3_gate(path: Path | None, digest: str | None,
-                   mapper_digest: str | None, verified_artifacts=None) -> bool:
+                   mapper_digest: str | None, verified_artifacts=None) -> ArtifactEnvelope | None:
+    """返回通过内容校验的 Smoke Artifact，供同次 Source 校验使用。"""
     if path is None or digest is None:
-        return False
+        return None
     try:
         from scripts.run_phase2_language_smoke import (
             EXPECTED_CASE_SELECTION_DIGEST, NAME, VERSION,
         )
         from werewolf.interventions.actions import CONTRACT_VERSION
         key = (Path(path), "phase2_language_execution_smoke", VERSION, digest)
-        verified = verified_artifacts.get(key) if verified_artifacts is not None else None
-        if verified is None:
-            artifact = verify_artifact(path,
-                expected_artifact_type="phase2_language_execution_smoke",
-                expected_schema_version=VERSION)
-            payloads = {name: read_artifact_file(artifact, name) for name in
-                        ("selected_cases.json", "case_executions.jsonl", "metrics.json")}
-        else:
-            artifact, payloads = verified
-            if (artifact.path != Path(path)
-                    or artifact.manifest["artifact_type"] != "phase2_language_execution_smoke"
-                    or artifact.manifest["schema_version"] != VERSION):
-                return False
+        artifacts = verified_artifacts
+        if artifacts is None or key not in artifacts:
+            artifacts = _verify_frozen_artifacts((FrozenArtifactRequirement(*key),))
+        if artifacts is None:
+            return None
+        artifact, payloads = artifacts[key]
+        if (artifact.path, artifact.manifest["artifact_type"], artifact.manifest["schema_version"],
+                artifact.manifest_digest) != key:
+            return None
         selected = artifact.manifest["case_selection"]
         selected_cases = json.loads(payloads["selected_cases.json"])
         executions = payloads["case_executions.jsonl"].splitlines()
         metrics = json.loads(payloads["metrics.json"])
         gate = metrics["gate"]
-        return (artifact.manifest_digest == digest
-                and artifact.manifest["study_name"] == NAME
+        if (artifact.manifest["study_name"] == NAME
                 and artifact.manifest["language_semantic_version"] == LANGUAGE_VERSION
                 and artifact.manifest["action_contract_version"] == CONTRACT_VERSION
                 and artifact.manifest["final_mapper_manifest_digest"] == mapper_digest
@@ -281,9 +277,11 @@ def _smoke_v3_gate(path: Path | None, digest: str | None,
                 and metrics["overall"]["case_count"] == 58
                 and gate["passed"] is True
                 and bool(gate["checks"])
-                and all(value is True for value in gate["checks"].values()))
+                and all(value is True for value in gate["checks"].values())):
+            return artifact
     except (OSError, TypeError, ValueError, KeyError, RuntimeError, ImportError):
-        return False
+        return None
+    return None
 
 
 def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifactRequirement, ...],
@@ -332,8 +330,8 @@ def assess_pilot_preflight(repo: Path, *, frozen_artifacts: tuple[FrozenArtifact
                                and mapper_runtime.model_digest == loaded_mapper.model_digest)
         except (OSError, TypeError, ValueError, KeyError, RuntimeError):
             mapper_verified = False
-    smoke_passed = _smoke_v3_gate(smoke_v3_artifact, smoke_v3_manifest_digest,
-                                 mapper_manifest_digest, verified_artifacts)
+    smoke_passed = bool(_smoke_v3_gate(smoke_v3_artifact, smoke_v3_manifest_digest,
+                                      mapper_manifest_digest, verified_artifacts))
     plan_types = (Phase2OnlineTerminalPilotPlanV1, Phase2OnlineProbePilotPlanV1)
     plan_frozen = (isinstance(online_plan, plan_types)
                    and online_plan.selection_status == FROZEN)

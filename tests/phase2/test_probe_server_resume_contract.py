@@ -135,9 +135,8 @@ def resumed_inputs(server_input_scope, tmp_path, monkeypatch):
             artifact_digest=expected_manifest_digest),
         build_development_layer=lambda *args: SimpleNamespace(values=values()),
         reference_tables_digest=reference_tables_digest,
-        _smoke_v3_gate=lambda *args: True,
-        verify_artifact=lambda *unused, **kwargs: SimpleNamespace(
-            manifest_digest=args.smoke_v3_manifest_digest,
+        _smoke_v3_gate=lambda _path, digest, _mapper_digest: SimpleNamespace(
+            manifest_digest=digest,
             manifest={"source": smoke_source}),
     )
     exec(compile(ast.Module(body=definitions, type_ignores=[]),
