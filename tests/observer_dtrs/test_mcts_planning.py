@@ -72,7 +72,7 @@ def no_execution(monkeypatch):
     from werewolf.speech.speech_perceiver import SpeechPerceiver
     from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
     from werewolf.observer_dtrs import online_model, dataset
-    from scripts import verified_speech_commit
+    from werewolf.speech import commit_workflow
 
     def forbidden(*args, **kwargs):
         raise AssertionError('人工搜索不得执行模型、语言、数据reader、游戏或网络')
@@ -86,7 +86,7 @@ def no_execution(monkeypatch):
         (torch, ('load',)),
         (online_model, ('read_deployment',)),
         (dataset, ('open_dataset',)),
-        (verified_speech_commit, ('realize_and_commit',)),
+        (commit_workflow, ('realize_and_commit',)),
         (socket.socket, ('connect',)),
         (subprocess, ('Popen',)),
     ):

@@ -4,7 +4,7 @@ from typing import Callable
 
 from werewolf.strategy.speech_planning import SpeechPlan, generate_candidates
 from werewolf.strategy.counterfactual_tom import derive_public_phase_speaker_order
-from scripts.verified_speech_commit import realize_and_commit
+from werewolf.speech.commit_workflow import realize_and_commit
 from werewolf.canonical_collection.pre import AuthoritativePREPrefix
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 

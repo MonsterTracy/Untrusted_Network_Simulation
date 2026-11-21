@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from werewolf.strategy.speech_planning import PlanningAction, SpeechPlan, generate_candidates
-from scripts.speech_realization import PublicRealizationContext
+from werewolf.speech.realization import PublicRealizationContext
 from werewolf.agents.prompt_template_v0 import PublicClaim
 from werewolf.canonical_collection.pre import AuthoritativePREPrefix
 from werewolf.canonical_collection.public_history import PLAYER_IDS

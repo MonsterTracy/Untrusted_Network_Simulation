@@ -7,7 +7,7 @@ import json
 import pytest
 
 from scripts import compare_observer_dtrs_synthetic as c
-from scripts.speech_realization import expected_action
+from werewolf.speech.realization import expected_action
 from werewolf.observer_dtrs.decision import Region, conditional_risks
 from werewolf.observer_dtrs.features import ObserverFeatures
 

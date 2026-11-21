@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from scripts import speech_realization as r
+from werewolf.speech import realization as r
 from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
 from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.speech.speech_perceiver import SpeechPerceiver
@@ -157,7 +157,7 @@ def test_private_fields_rejected_before_actor(private_field):
 
 def test_actor_module_does_not_import_sealed_tom_or_planner():
     # Fresh interpreter avoids altering pytest's module identities.
-    subprocess.run([sys.executable, "-c", "import sys; import scripts.speech_realization; "
+    subprocess.run([sys.executable, "-c", "import sys; import werewolf.speech.realization; "
         "assert 'scripts.counterfactual_tom' not in sys.modules; "
         "assert 'scripts.speech_planning' not in sys.modules; "
         "assert 'werewolf.strategy.counterfactual_tom' not in sys.modules; "

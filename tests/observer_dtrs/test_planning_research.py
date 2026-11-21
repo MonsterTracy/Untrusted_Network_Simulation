@@ -244,8 +244,8 @@ def test_repeatability_no_mutation_io_rng_actor_parser_or_supervision(monkeypatc
     args = inputs()
     pre_bytes = canonical_json_bytes(args[0].prefix.to_record())
     q_bytes = canonical_json_bytes(args[1].matrix.values)
-    import scripts.verified_speech_commit as commits
-    import scripts.speech_realization as language
+    import werewolf.speech.commit_workflow as commits
+    import werewolf.speech.realization as language
     py = random.getstate()
     numpy = np.random.get_state()
     torch_rng = torch.get_rng_state().clone()

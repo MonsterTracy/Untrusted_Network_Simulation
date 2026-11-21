@@ -2,8 +2,8 @@
 from unittest.mock import Mock
 import pytest
 from werewolf.strategy.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
-from scripts.speech_realization import expected_action
-from scripts.verified_speech_commit import PreCommitAudit, capture_precommit_binding, realize_and_commit
+from werewolf.speech.realization import expected_action
+from werewolf.speech.commit_workflow import PreCommitAudit, capture_precommit_binding, realize_and_commit
 from tests.tom.test_precommit_audit import setup
 from tests.tom.test_verified_speech_commit import actor_for, response_for, snapshot
 
@@ -109,7 +109,7 @@ def test_other_legal_fixed_plan_does_not_replace_assignment(phase, tmp_path):
 
 @pytest.mark.parametrize('phase', ['speech', 'speech_pk'])
 def test_complete_multi_action_response_is_not_single_plan_compliance(phase, tmp_path):
-    from scripts.speech_realization import SemanticVerificationError
+    from werewolf.speech.realization import SemanticVerificationError
     env, rec, backend, actor, payload, owner = setup(tmp_path, phase, A.SELF_DEFEND)
     try:
         speaker = rec._pending.prefix.current_speaker

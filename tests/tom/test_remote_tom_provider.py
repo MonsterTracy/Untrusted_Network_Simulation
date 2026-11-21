@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from scripts import remote_tom_provider as r
-from scripts.constrained_speech import public_eligibility, SpeechTreatment
+from werewolf.speech.constrained import public_eligibility, SpeechTreatment
 from werewolf.strategy.speech_planning import PlanningAction as A
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from tests.tom.test_constrained_speech import runner_fixture
@@ -173,7 +173,7 @@ def test_untreated_does_not_call_remote_transport(mode):
         options['planning_mode'] = 'original'
     elif mode == 'last':
         # Public gate runs before provider even if all players are assigned.
-        from scripts.constrained_speech import handle_speech
+        from werewolf.speech.constrained import handle_speech
         from tests.tom.test_verified_speech_commit import prepare, pending
         env, recorder, backend = prepare()
         from tests.tom.test_speech_realization import ParserBackend

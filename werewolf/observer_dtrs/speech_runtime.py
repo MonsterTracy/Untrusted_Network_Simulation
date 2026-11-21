@@ -9,7 +9,7 @@ from enum import Enum
 import re
 
 from werewolf.strategy.speech_planning import generate_candidates
-from scripts.verified_speech_commit import realize_and_commit
+from werewolf.speech.commit_workflow import realize_and_commit
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
 from werewolf.observer_dtrs.context import contexts_for_pre

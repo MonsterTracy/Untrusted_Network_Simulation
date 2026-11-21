@@ -15,13 +15,14 @@ and the [README](../README.md) for existing installation and execution commands.
 | Observer-ToM | [tom](../werewolf/tom/) owns observer suspicion prediction; [tom_llm](../werewolf/tom_llm/) owns the corresponding general-model Baseline comparison. |
 | Observer-DTRS | [observer_dtrs](../werewolf/observer_dtrs/) owns conditional event estimation, cognitive risks and three-way judgments. Its evidence does not itself define language-action utility. |
 | Strategy | [strategy](../werewolf/strategy/) owns reusable candidate and planning research implementations. The retained MCTS prototype is not the current paper's strategy method. |
+| Speech | [Constrained speech](../werewolf/speech/constrained.py) checks public eligibility. [Realization](../werewolf/speech/realization.py) verifies one V1 speech action. The [commit workflow](../werewolf/speech/commit_workflow.py) uses the [canonical speech binding](../werewolf/speech/verified_commit.py) and the existing recorder transaction. |
 | Phase-2 | [interventions](../werewolf/interventions/) owns shared actions and evidence, [Mapper](../werewolf/interventions/mapper/), [Language](../werewolf/interventions/language/), [Online](../werewolf/interventions/online/), and Terminal statistics. Gameplay and shared modules sit at the package root. The development layout includes all 30 modules. See the [Phase-2 navigation](research/phase2-current-status.md) for execution entrypoints and Source requirements. |
 | Evaluation | [ToM reporting](../werewolf/tom/reporting.py), [Baseline analysis](../werewolf/tom_llm/baseline_analysis.py), [Terminal statistics](../werewolf/interventions/terminal_estimator.py) and [Gameplay results](../werewolf/interventions/gameplay.py) retain their distinct populations and endpoints. |
 | scripts | [scripts](../scripts/) supplies operators, analyses and some callable research libraries. Shared Phase-2 implementations remain in place under their Source contracts; see the [Phase-2 navigation](research/phase2-current-status.md). |
 
 ## Operator and research entrypoints
 
-Under `scripts/`, 50 Python files have executable entry guards, seven provide
+Under `scripts/`, 50 Python files have executable entry guards, four provide
 callable or compatibility code, and two initialize packages. The Shell launcher
 is counted separately. These counts describe source files. The single installed
 console entry is `uns=werewolf.cli:main`. The module command
@@ -45,7 +46,6 @@ Non-CLI files under `scripts/` have the following current import roles.
 | --- | --- |
 | [__init__.py](../scripts/__init__.py) | Installable operator-package boundary; importing it starts no runtime. |
 | [diagnostics/__init__.py](../scripts/diagnostics/__init__.py) | Package marker for the local diagnostic commands. |
-| [constrained_speech.py](../scripts/constrained_speech.py), [speech_realization.py](../scripts/speech_realization.py), [verified_speech_commit.py](../scripts/verified_speech_commit.py) | Callable eligibility, realization/verification and commit research logic used by opt-in Runtime and DTRS research paths. These are not standalone command entrypoints. |
 | [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Thin exports for Phase-2 speech preparation. [verified_speech.py](../werewolf/interventions/language/verified_speech.py) owns the shared realization workflow. |
 | [remote_tom_protocol.py](../scripts/remote_tom_protocol.py), [remote_tom_provider.py](../scripts/remote_tom_provider.py) | Shared wire validation and injected Gameplay-side provider; neither is a model-service launcher. |
 | [tom_gameplay_ablation.py](../scripts/tom_gameplay_ablation.py) | Callable experiment integration used by the existing paired collection/smoke operators; preserves their original scientific contract. |

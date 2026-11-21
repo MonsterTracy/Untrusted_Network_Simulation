@@ -76,7 +76,7 @@ def eval(env, agent_list, roles_, *, canonical_recorder, call_audit,
             or not callable(getattr(online_pilot, 'after_step', None))):
         raise TypeError("online pilot requires an explicit original-mode PRE/step hook")
     if planning_mode == 'constrained':
-        from scripts.constrained_speech import SpeechTreatment, handle_speech
+        from werewolf.speech.constrained import SpeechTreatment, handle_speech
         if not callable(plan_provider) or type(ablation_trace) is not list:
             raise TypeError("constrained mode requires provider and sidecar trace list")
         if speech_treatment is None:

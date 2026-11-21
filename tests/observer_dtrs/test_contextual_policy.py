@@ -13,7 +13,7 @@ import sys
 import pytest
 
 from werewolf.strategy.speech_planning import PlanningAction as A, generate_candidates
-from scripts.speech_realization import realize_parse_verify, SemanticVerificationError
+from werewolf.speech.realization import realize_parse_verify, SemanticVerificationError
 from tests.observer_dtrs.conftest import prefix_for
 from tests.observer_dtrs.test_estimation import fit, row
 from tests.tom.test_counterfactual_consumer import PublicWitness, P

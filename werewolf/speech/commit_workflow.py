@@ -1,5 +1,5 @@
 """Phase 3B orchestration at an already collected PRE; no planner imports."""
-from scripts.speech_realization import PublicRealizationContext, realize_parse_verify
+from werewolf.speech.realization import PublicRealizationContext, realize_parse_verify
 from werewolf.agents.prompt_template_v0 import build_public_claim_catalog
 from werewolf.canonical_collection.public_history import freeze_public_event_history
 from werewolf.speech.verified_commit import bind_verified_speech

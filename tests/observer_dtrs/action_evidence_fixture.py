@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 from werewolf.strategy.speech_planning import generate_candidates
-from scripts.speech_realization import expected_action
+from werewolf.speech.realization import expected_action
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.observer_dtrs.action_evidence_ledger import digest, extend_ledger, validate_ledger

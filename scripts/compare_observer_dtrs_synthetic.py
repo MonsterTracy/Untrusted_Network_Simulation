@@ -252,7 +252,7 @@ def run(output):
     root = Path(__file__).resolve().parents[1]
     paths = ['scripts/compare_observer_dtrs_synthetic.py', 'tests/observer_dtrs/test_speech_runtime.py',
         'werewolf/observer_dtrs/speech_runtime.py', 'werewolf/observer_dtrs/contextual_policy.py',
-        'scripts/speech_realization.py', 'scripts/verified_speech_commit.py',
+        'werewolf/speech/realization.py', 'werewolf/speech/commit_workflow.py',
         'tests/canonical_collection/test_runtime_game_evidence.py']
     plan = dict(version=VERSION, scope='SYNTHETIC_CONTROLLED_ONLY', scenarios=scenarios(),
         conditions=[c.value for c in Comparison], policy=POLICY.to_record(), model_digest=model.digest,

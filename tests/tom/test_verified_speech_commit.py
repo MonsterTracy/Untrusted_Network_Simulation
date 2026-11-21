@@ -6,8 +6,8 @@ from unittest.mock import Mock
 import pytest
 
 from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
-from scripts.speech_realization import expected_action, realize_parse_verify, PublicRealizationContext
-from scripts.verified_speech_commit import realize_and_commit
+from werewolf.speech.realization import expected_action, realize_parse_verify, PublicRealizationContext
+from werewolf.speech.commit_workflow import realize_and_commit
 from werewolf.strategy.counterfactual_tom import build_continuation
 from tests.tom.test_counterfactual_consumer import CAPACITY
 from tests.tom.test_speech_realization import ActorBackend
@@ -185,7 +185,7 @@ def test_envelope_fields_contain_no_planner_diagnostics():
 def test_audited_contexts_are_sequential_and_exit_on_semantic_failure(semantic_match):
     from werewolf.canonical_collection.call_audit import audited_backends
     from werewolf.canonical_collection.trajectory_evidence import BackendCallPurpose
-    from scripts.speech_realization import SemanticVerificationError
+    from werewolf.speech.realization import SemanticVerificationError
 
     env, recorder, backend = prepare()
     handoff = pending(env, recorder)

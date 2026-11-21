@@ -242,8 +242,8 @@ def test_snapshot_cannot_alias_fixture_Q_as_OOF_or_Final(family):
 
 
 def test_pure_cross_interface_path_no_actor_parser_model_env_or_output(monkeypatch, tmp_path):
-    import scripts.speech_realization as language
-    import scripts.verified_speech_commit as commit
+    import werewolf.speech.realization as language
+    import werewolf.speech.commit_workflow as commit
     from werewolf.speech.speech_perceiver import SpeechPerceiver
     args = bound_inputs(directional_witness('discussion', P[0]).pre(), .5)
     before = canonical_json_bytes(args[0].prefix.to_record())

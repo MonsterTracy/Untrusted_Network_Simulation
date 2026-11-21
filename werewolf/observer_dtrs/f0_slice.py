@@ -10,8 +10,8 @@ from pathlib import Path
 import threading
 
 from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction, generate_candidates, CANDIDATE_ORDER_VERSION
-from scripts.speech_realization import expected_action
-from scripts.verified_speech_commit import (
+from werewolf.speech.realization import expected_action
+from werewolf.speech.commit_workflow import (
     PreCommitAudit, AuditAcknowledgement, capture_precommit_binding, realize_and_commit,
 )
 from werewolf.artifact_io import canonical_json_bytes, publish_artifact, sha256_bytes

@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from werewolf.game_runtime import eval as run_game
-from scripts import constrained_speech as c
+from werewolf.speech import constrained as c
 from werewolf.strategy.speech_planning import SpeechPlan, PlanningAction as A
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
 from tests.tom.test_verified_speech_commit import prepare, pending, snapshot, actor_for
@@ -47,7 +47,7 @@ def test_real_pending_opportunity_commit_or_fail_closed(phase, outcome):
     env, recorder, backend = prepare(phase)
     pending(env, recorder)
     speaker = f'player{env.current_act_idx + 1}'
-    from scripts.speech_realization import expected_action
+    from werewolf.speech.realization import expected_action
     actor, _ = actor_for(expected_action(SpeechPlan(A.NO_COMMITMENT).public_payload(), speaker))
     backend.perception_response = 'NONE' if outcome == 'semantic_failure' else f'{speaker} | no_commitment | NONE'
     provider = Mock(side_effect=RuntimeError('provider failed')) if outcome == 'provider_failure' else Mock(
@@ -177,7 +177,7 @@ def test_private_assignment_and_payload_are_separate():
 
 def test_gameplay_imports_do_not_load_sealed_predictor():
     subprocess.run([sys.executable, '-c',
-        "import sys; import werewolf.game_runtime; import scripts.constrained_speech; "
+        "import sys; import werewolf.game_runtime; import werewolf.speech.constrained; "
         "assert 'run_random' not in sys.modules; "
         "assert 'werewolf.tom.final_evaluation' not in sys.modules"], check=True)
 
