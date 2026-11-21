@@ -9,14 +9,15 @@ from pathlib import Path
 
 from werewolf.artifact_io import (
     ArtifactValidationError, VerifiedArtifact, canonical_json_bytes,
-    publish_artifact, sha256_bytes, verify_artifact,
+    open_artifact_envelope, publish_artifact, read_artifact_file, sha256_bytes, verify_artifact,
 )
+from werewolf.artifact_io.canonical import _load_canonical_json
 from werewolf.canonical_collection.attempt_ledger import (
     CollectionPlan, AttemptLedgerState, TerminalOutcome, collection_plan_from_record,
     _claim_from_record, _terminal_from_record, _state_from_records,
 )
 from werewolf.development_publication import (
-    VerifiedCollection, _collection_identity, _load_canonical_json,
+    VerifiedCollection, _collection_identity,
     _require_digest, _SAFE_IDENTITY, _validate_verified_collection,
 )
 
@@ -270,29 +271,37 @@ def publish_canonical_split(collection, protocol, destination, *, split_id):
 
 
 def open_canonical_split(path, *, expected_digest):
-    """Recompute membership from bound Plan/ledger metadata, not JSON membership claims.
+    """用外部可信摘要校验清单，再从绑定的 Plan 和 Ledger 重算成员身份。
 
-    The expected digest is a trust anchor, recorded outside this artifact. Hashes
-    cannot authenticate an attacker who can replace every parent and that anchor.
-    This portable check does not replace replay verification of the source games.
+    调用方独立提供预期摘要。源游戏的完整性另由回放流程验证。
     """
     _require_digest(expected_digest, "expected_split_digest")
-    artifact = verify_artifact(path, expected_artifact_type=SPLIT_TYPE,
-                               expected_schema_version=SPLIT_VERSION)
-    m = artifact.manifest
-    validate_split_header(m, expected_digest=expected_digest)
-    if artifact.path.name != m["artifact_identity"]:
+    envelope = open_artifact_envelope(path, expected_artifact_type=SPLIT_TYPE,
+                                      expected_schema_version=SPLIT_VERSION)
+    manifest = validate_split_header(envelope.manifest, expected_digest=expected_digest)
+    if envelope.path.name != manifest["artifact_identity"]:
         raise ArtifactValidationError("Split Manifest path identity mismatch")
-    protocol = _validate_protocol(_load_canonical_json(artifact.path / "split_protocol.json"))
-    plan = collection_plan_from_record(_load_canonical_json(artifact.path / "collection_plan.json"))
-    state = _closed_state(plan, _load_canonical_json(artifact.path / "attempt_ledger.json"))
-    expected, ranked = _split_fields(m["artifact_identity"], protocol, plan, state)
-    membership = _load_canonical_json(artifact.path / "split_membership.json")
-    if (canonical_json_bytes({k: v for k, v in m.items() if k not in _ENVELOPE}) != canonical_json_bytes(expected)
+
+    def read_metadata(filename):
+        data = read_artifact_file(envelope, filename)
+        try:
+            value = _load_canonical_json(data)
+            if not isinstance(value, dict):
+                raise ValueError("expected a JSON object")
+        except (TypeError, ValueError) as error:
+            raise ArtifactValidationError(f"invalid canonical JSON: {filename}") from error
+        return value
+
+    protocol = _validate_protocol(read_metadata("split_protocol.json"))
+    plan = collection_plan_from_record(read_metadata("collection_plan.json"))
+    state = _closed_state(plan, read_metadata("attempt_ledger.json"))
+    expected, ranked = _split_fields(manifest["artifact_identity"], protocol, plan, state)
+    membership = read_metadata("split_membership.json")
+    fields = {k: v for k, v in manifest.items() if k not in _ENVELOPE}
+    if (canonical_json_bytes(fields) != canonical_json_bytes(expected)
             or canonical_json_bytes(membership) != canonical_json_bytes({"ranked_games": ranked})):
         raise ArtifactValidationError("Split Manifest membership or collection binding mismatch")
-    if artifact.manifest_digest != expected_digest:
-        raise ArtifactValidationError("Split Manifest differs from trusted digest")
+    artifact = VerifiedArtifact(**vars(envelope))
     return VerifiedCanonicalSplit(artifact, protocol, plan, state, tuple(ranked))
 
 

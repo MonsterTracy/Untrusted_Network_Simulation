@@ -1,23 +1,228 @@
-"""Sealed label-free prediction and one-shot independent evaluation."""
+"""历史 Final 评价，以及固定 Canonical Test 的独立预测与评分。"""
+
+import json
+from pathlib import Path
 
 import numpy as np
 import torch
 
-from werewolf.artifact_io import canonical_jsonl_bytes, sha256_bytes, open_artifact_envelope
+from werewolf.artifact_io import (
+    ArtifactConflictError, ArtifactValidationError, canonical_json_bytes, canonical_jsonl_bytes,
+    open_artifact_envelope, publish_artifact, read_artifact_file, sha256_bytes,
+)
+from werewolf.canonical_collection.game_bundle import (
+    open_split_game_bundle, read_bundle_pre_prefixes, read_bundle_supervision,
+)
+from werewolf.canonical_collection.public_history import PLAYER_IDS
+from werewolf.canonical_split import open_canonical_split
 from werewolf.final_publication import FINAL_PUBLICATION_VERSION, open_final_publication, publish_final_publication
 from werewolf.development_publication import open_publication
-from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors, tensorize_public_pre
+from werewolf.structured_history import plan_structured_history
+from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors, belief_target, tensorize_public_pre
 from werewolf.tom.experiment import TEMPORAL_CONDITIONS, validate_runtime
 from werewolf.tom.final_capacity import validate_final_pre
 from werewolf.tom.final_training import verify_final_seal, verify_final_terminal
 from werewolf.tom.training import build_model
 from werewolf.tom.state import load_model_state
-from werewolf.tom.population import select_final_primary_population, build_all_alive_eligibility
-from werewolf.tom.evaluation import score_prediction_rows
+from werewolf.tom.population import PRIMARY_SELECTOR_VERSION, select_final_primary_population, build_all_alive_eligibility
+from werewolf.tom.evaluation import (
+    predict_structured_observers, probability_cell, score_prediction_rows, uniform_prediction_rows,
+)
+from werewolf.tom.paper_study import attest_source
 from werewolf.tom.reporting import summarize_scores
 from werewolf.tom.protocol import bootstrap_indices, BOOTSTRAP_VERSION
 from werewolf.tom.scoring import paired_summary, SCORING_VERSION
 from werewolf.tom.run_records import publish_record, publish_run_bytes, read_record
+
+
+TEST_SPLIT_DIGEST = "edc271676649d9b23e01f505f0f23deb38fdbd0b0ab0ad65753a90cd562ee6e8"
+TEST_GAME_COUNT = 1000
+TEST_TEMPORAL_DIGEST = "16830ce07a968c5d8c811912f6b6b189fefffd1f296cae1e304b8b37111e48b6"
+TEST_SCHEMA = "classic7_independent_test"
+TEST_PREDICTIONS = "independent_test_predictions"
+TEST_EVALUATION = "independent_test_evaluation"
+PROBABILITY_FIELDS = {"probability", "non_self_log_probability"}
+
+
+def _independent_test_bundles(split_path, collection):
+    """仅打开冻结 Split 和它列出的 Test Bundle 清单。"""
+    split = open_canonical_split(split_path, expected_digest=TEST_SPLIT_DIGEST)
+    members = sorted(split.members("independent_test"), key=lambda member: member["game_id"])
+    games = {member["game_id"]: member["bundle_digest"] for member in members}
+    if len(members) != len(games) or len(games) != TEST_GAME_COUNT:
+        raise ArtifactValidationError("Independent Test must cover the complete frozen game population")
+    binding = {"split_id": split.manifest["artifact_identity"], "split_manifest_digest": split.digest,
+               "independent_test_identity_digest": split.manifest["independent_test_identity_digest"],
+               "collection_identity_digest": split.manifest["collection_identity_digest"],
+               "game_bundles": games}
+    return binding, [open_split_game_bundle(collection, split.plan, member) for member in members]
+
+
+def _independent_test_model():
+    from werewolf.tom.makto import EPOCH35_DIGEST
+    from werewolf.tom.qwen3_large import graph_identity
+
+    return {"checkpoint_digest": EPOCH35_DIGEST, "graph_digest": graph_identity()["graph_digest"],
+            "temporal_artifact_digest": TEST_TEMPORAL_DIGEST, "temporal_condition": "explicit_day_phase",
+            "canonical_shift": 0}
+
+
+def _test_output_path(destination, collection):
+    path = Path(destination).absolute()
+    if (".." in path.parts or Path(collection).resolve() in (path, *path.parents)
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ArtifactConflictError("Test output requires a separate directory outside the Canonical Collection")
+    if path.exists() or any((parent / name).exists() for parent in path.parents for name in (
+            "manifest.json", "contract/manifest.json", "phase_codebook.manifest.json",
+            "experiment_manifest.json", "final_experiment_manifest.json")):
+        raise ArtifactConflictError("Test output exists or is inside frozen evidence")
+    return path
+
+
+def _test_row_identity(game_id, boundary_id, alive, plan, observer):
+    return {"game_id": game_id, "boundary_id": boundary_id, "prefix_digest": plan.prefix_digest,
+            "plan_digest": plan.plan_digest, "observer": observer, "observer_alive": PLAYER_IDS[observer] in alive}
+
+
+def _test_coverage(binding, pre_count, rows):
+    return {"game_count": len(binding["game_bundles"]), "pre_count": pre_count,
+            "public_prediction_row_count": len(rows),
+            "public_alive_row_count": sum(r["observer_alive"] for r in rows)}
+
+
+def predict_independent_test(split_path, collection, checkpoint, temporal, destination, *, device="cpu"):
+    """用公开 PRE 生成完整七席预测，成功后一次性封存。"""
+    from werewolf.tom.makto import load_epoch35_model
+
+    destination = _test_output_path(destination, collection)
+    source = attest_source()
+    binding, bundles = _independent_test_bundles(split_path, collection)
+    identity = _independent_test_model()
+    model = load_epoch35_model(checkpoint, temporal)
+    if (model.graph["graph_digest"] != identity["graph_digest"]
+            or model.temporal.artifact_digest != identity["temporal_artifact_digest"]):
+        raise ArtifactValidationError("Independent Test requires the frozen Epoch 35 graph and Temporal")
+
+    plans = []
+    for bundle in bundles:
+        for prefix in read_bundle_pre_prefixes(bundle):
+            plan = plan_structured_history(prefix)
+            if plan.token_count > model.capacity.max_seq_len:
+                raise ValueError(f"Independent Test PRE exceeds model capacity: {prefix.game_id}/{prefix.boundary_id}")
+            if prefix.maximum_public_day >= len(model.temporal.day):
+                raise ValueError(f"Independent Test PRE exceeds frozen Temporal: {prefix.game_id}/{prefix.boundary_id}")
+            plans.append((prefix.game_id, prefix.boundary_id, prefix.alive_observer_ids, plan))
+
+    model.to(device)
+    rows = []
+    for game_id, boundary_id, alive, plan in plans:
+        probabilities, logs = predict_structured_observers(plan, model, device)
+        for observer in range(len(PLAYER_IDS)):
+            rows.append({**_test_row_identity(game_id, boundary_id, alive, plan, observer),
+                         "probability": probabilities[observer], "non_self_log_probability": logs[observer]})
+    coverage = _test_coverage(binding, len(plans), rows)
+    return publish_artifact(destination, manifest_fields={
+        "artifact_type": TEST_PREDICTIONS, "schema_version": TEST_SCHEMA, **binding, **identity,
+        "source": source, "device": device, "coverage": coverage,
+    }, files={"predictions.jsonl": canonical_jsonl_bytes(rows)})
+
+
+def _align_independent_test_predictions(prediction, bundles):
+    """在读取第一条监督前检查整个预测封存及其公开人口。"""
+    from werewolf.tom_llm.common import valid_distribution
+
+    data = read_artifact_file(prediction, "predictions.jsonl")
+    rows = [json.loads(line) for line in data.splitlines()]
+    if canonical_jsonl_bytes(rows) != data:
+        raise ArtifactValidationError("Independent Test predictions must be canonical JSONL")
+    ordered_rows = iter(rows)
+    inputs = []
+    for bundle in bundles:
+        prefixes = read_bundle_pre_prefixes(bundle)
+        game_rows = []
+        for prefix in prefixes:
+            plan = plan_structured_history(prefix)
+            for observer in range(len(PLAYER_IDS)):
+                identity = _test_row_identity(prefix.game_id, prefix.boundary_id, prefix.alive_observer_ids, plan, observer)
+                row = next(ordered_rows, None)
+                if (not isinstance(row, dict) or set(row) != set(identity) | PROBABILITY_FIELDS
+                        or type(row["observer_alive"]) is not bool
+                        or any(row[name] != value for name, value in identity.items())):
+                    raise ArtifactValidationError(f"missing or misaligned Independent Test prediction: {identity}")
+                valid_distribution(row)
+                game_rows.append(row)
+        inputs.append((bundle, prefixes, game_rows))
+    pre_count = sum(len(pres) for _, pres, _ in inputs)
+    if len(rows) != pre_count * len(PLAYER_IDS):
+        raise ArtifactValidationError("extra Independent Test prediction rows")
+    coverage = _test_coverage(prediction.manifest, pre_count, rows)
+    if coverage != prediction.manifest["coverage"]:
+        raise ArtifactValidationError("Independent Test prediction coverage mismatch")
+    return inputs, coverage
+
+
+def score_independent_test(split_path, collection, predictions, expected_prediction_digest, destination):
+    """核验全量公开预测后才读取 Test 监督并发布游戏级指标。"""
+    from werewolf.tom_llm.policy import POLICY
+
+    destination = _test_output_path(destination, collection)
+    source = attest_source()
+    prediction = open_artifact_envelope(predictions, expected_artifact_type=TEST_PREDICTIONS,
+                                        expected_schema_version=TEST_SCHEMA)
+    if prediction.manifest_digest != expected_prediction_digest or set(prediction.manifest["file_table"]) != {"predictions.jsonl"}:
+        raise ArtifactValidationError("Independent Test prediction Seal mismatch")
+    binding, bundles = _independent_test_bundles(split_path, collection)
+    identity = _independent_test_model()
+    if any(prediction.manifest[k] != v for k, v in {**binding, **identity}.items()):
+        raise ArtifactValidationError("Independent Test prediction model or Split binding mismatch")
+    inputs, coverage = _align_independent_test_predictions(prediction, bundles)
+
+    primary, population = [], []
+    for bundle, prefixes, rows in inputs:
+        observations, roles = read_bundle_supervision(bundle, prefixes)
+        reports = {(o.boundary_id, o.observer_id): o for o in observations.values()}
+        for row in rows:
+            seat = row["observer"]
+            player = PLAYER_IDS[seat]
+            if not row["observer_alive"] or roles[player] == "Werewolf":
+                continue
+            observation = reports[row["boundary_id"], player]
+            q, observed = belief_target(seat, observation.suspicion_support, observation.status.value)
+            if observed:
+                primary.append({**row, "q": q.tolist()})
+                population.append({key: row[key] for key in ("game_id", "boundary_id", "prefix_digest", "plan_digest", "observer")}
+                                  | {"nu": int(q.count_nonzero()) < len(PLAYER_IDS) - 1})
+
+    games = sorted(binding["game_bundles"])
+    primary_games = {r["game_id"] for r in population}
+    missing = set(games) - primary_games
+    if missing:
+        raise ValueError(f"Independent Test has games without effective Primary rows: {sorted(missing)}")
+    nu_games = sorted({r["game_id"] for r in population if r["nu"]})
+    sampling = POLICY["bootstrap"]
+    indices = bootstrap_indices(games, sampling["replicates"], sampling["seed"])
+    nu_indices = None
+    if nu_games:
+        nu_indices = indices if nu_games == games else bootstrap_indices(nu_games, sampling["replicates"], sampling["seed"])
+    cells = {}
+    # 每种方法使用同一 q、同一游戏排序和同一抽样。
+    for method, rows in (("epoch35", primary), ("uniform_non_self", uniform_prediction_rows(primary))):
+        cell, nu_scores = probability_cell(rows, games, indices, nu_games, nu_indices)
+        cells[method] = {**cell, "nu_game_scores": nu_scores}
+    coverage.update(primary_row_count=len(primary), primary_game_count=len(primary_games),
+                    nu_row_count=sum(r["nu"] for r in population), nu_game_count=len(nu_games))
+    bootstrap = {**sampling, "version": BOOTSTRAP_VERSION, "indices_digest": sha256_bytes(indices.tobytes()),
+                 "nu_indices_digest": None if nu_indices is None else sha256_bytes(nu_indices.tobytes())}
+    report = {**binding, **identity, "prediction_seal_digest": prediction.manifest_digest,
+              "prediction_source": prediction.manifest["source"], "scoring_source": source,
+              "coverage": coverage, "game_ids": games, "nu_game_ids": nu_games, "bootstrap": bootstrap,
+              "scoring_version": SCORING_VERSION, "population_version": PRIMARY_SELECTOR_VERSION,
+              "cells": cells}
+    return publish_artifact(destination, manifest_fields={
+        "artifact_type": TEST_EVALUATION, "schema_version": TEST_SCHEMA,
+        "prediction_seal_digest": prediction.manifest_digest, "split_manifest_digest": binding["split_manifest_digest"],
+        "independent_test_identity_digest": binding["independent_test_identity_digest"],
+    }, files={"analysis.json": canonical_json_bytes(report), "population.jsonl": canonical_jsonl_bytes(population)})
 
 
 class SealedFinalPredictor:

@@ -153,6 +153,19 @@ def build_parser():
     final_evaluation.add_argument("--experiment", type=Path, required=True)
     final_evaluation.add_argument("--publication", type=Path, required=True)
     final_evaluation.add_argument("--resume", action="store_true")
+    independent_test = commands.add_parser("independent-test", help="固定 Epoch 35 的 Canonical 独立测试")
+    test_stages = independent_test.add_subparsers(dest="test_stage", required=True)
+    test_predict = test_stages.add_parser("predict", help="从公开 PRE 生成并封存预测")
+    test_score = test_stages.add_parser("score", help="核验封存预测后读取监督并评分")
+    for stage in (test_predict, test_score):
+        stage.add_argument("--split", type=Path, required=True)
+        stage.add_argument("--collection", type=Path, required=True)
+        stage.add_argument("--destination", type=Path, required=True)
+    test_predict.add_argument("--checkpoint", type=Path, required=True)
+    test_predict.add_argument("--temporal", type=Path, required=True)
+    test_predict.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    test_score.add_argument("--predictions", type=Path, required=True)
+    test_score.add_argument("--prediction-digest", required=True)
     from werewolf.tom_llm.cli import register
     register(commands)
     return parser
@@ -324,6 +337,19 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command == "independent-test":
+        from werewolf.tom.final_evaluation import predict_independent_test, score_independent_test
+        split = _artifact_path(root, args.split, "splits")
+        collection = _artifact_path(root, args.collection, "canonical")
+        destination = _artifact_path(root, args.destination)
+        if args.test_stage == "predict":
+            artifact = predict_independent_test(split, collection, _artifact_path(root, args.checkpoint),
+                _artifact_path(root, args.temporal), destination, device=args.device)
+        else:
+            artifact = score_independent_test(split, collection, _artifact_path(root, args.predictions),
+                args.prediction_digest, destination)
+        print(artifact.manifest_digest)
+        return 0
     if args.command in {"prepare-experiment-v2", "prepare-final-experiment-v2", "prepare-backbone-tom-study-v2"}:
         from werewolf.tom.development_input import open_development_input
         publication_path = _artifact_path(root, args.publication, "publications")

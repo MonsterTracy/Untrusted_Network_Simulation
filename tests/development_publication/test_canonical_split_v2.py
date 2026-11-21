@@ -8,7 +8,7 @@ import pytest
 
 from tests.canonical_collection.test_game_bundle import _fixture, _plan
 from tests.development_publication.test_development_publication import _republish, _publication
-from werewolf.artifact_io import ArtifactConflictError, ArtifactValidationError, canonical_json_bytes
+from werewolf.artifact_io import ArtifactConflictError, ArtifactValidationError, VerifiedArtifact, canonical_json_bytes
 from werewolf.canonical_collection import (
     construct_attempt_claim, construct_attempt_terminal, initialize_attempt_ledger,
     publish_ledger_record, publish_canonical_game_bundle, TerminalOutcome,
@@ -65,7 +65,53 @@ def test_split_exact_disjoint_cover_and_repeat(completed):
     assert not dev & test and dev | test == {g.game_id for g in collection.games}
     assert len(split.ledger_state.claims) == 11
     assert publish_canonical_split(collection, protocol, split.artifact.path, split_id="split").digest == split.digest
-    assert open_canonical_split(split.artifact.path, expected_digest=split.digest).manifest == split.manifest
+    reopened = open_canonical_split(split.artifact.path, expected_digest=split.digest)
+    assert isinstance(reopened.artifact, VerifiedArtifact)
+    assert reopened == split
+
+
+@pytest.mark.parametrize(("fault", "message"), [
+    ("manifest_digest", "manifest digest mismatch"),
+    ("trusted_digest", "differs from trusted digest"),
+    ("extra_payload", "version/inventory mismatch"),
+])
+def test_split_rejects_header_before_opening_payload(completed, tmp_path, monkeypatch, fault, message):
+    _, _, split, _ = completed
+    path = tmp_path / fault / "split"
+    updates = {"source_revision": "different-source"} if fault == "trusted_digest" else {}
+    files = {"simulated_supervision.json": b'{"synthetic":true}'} if fault == "extra_payload" else {}
+    candidate = _republish(split.artifact.path, path, manifest_updates=updates, files=files)
+    manifest_path = path / "manifest.json"
+    if fault == "manifest_digest":
+        manifest_path.write_bytes(canonical_json_bytes({**candidate.manifest, "manifest_digest": "0" * 64}))
+
+    original = Path.open
+    opened = []
+
+    def guarded(file, *args, **kwargs):
+        if file.is_relative_to(path):
+            opened.append(file)
+            assert file == manifest_path, f"Split payload opened before verifying the header: {file.name}"
+        return original(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded)
+    with pytest.raises(ArtifactValidationError, match=message):
+        open_canonical_split(path, expected_digest=split.digest)
+    assert opened == [manifest_path]
+
+
+@pytest.mark.parametrize("filename", [
+    "split_protocol.json", "collection_plan.json", "attempt_ledger.json", "split_membership.json",
+])
+def test_split_rejects_each_metadata_digest_mismatch(completed, tmp_path, filename):
+    _, _, split, _ = completed
+    candidate = _republish(split.artifact.path, tmp_path / "tampered" / "split")
+    payload = candidate.path / filename
+    data = payload.read_bytes()
+    payload.write_bytes(b"!" + data[1:])
+
+    with pytest.raises(ArtifactValidationError, match=f"file digest mismatch: {filename}"):
+        open_canonical_split(candidate.path, expected_digest=split.digest)
 
 
 def test_filesystem_order_does_not_affect_split(completed, monkeypatch):

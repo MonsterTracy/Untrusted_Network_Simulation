@@ -1,4 +1,5 @@
 from collections import Counter
+from itertools import count, islice
 
 import numpy as np
 import pytest
@@ -45,6 +46,18 @@ def test_paired_game_bootstrap_retains_negative_differences():
     paired = paired_summary([1., 2.], [3., 1.], indices, .8)
     assert paired["point"] == -.5
     assert paired["interval"] == pytest.approx([-1.7, .7])
+
+
+def test_bootstrap_reuses_prefix_without_changing_frozen_draws():
+    from werewolf.tom.protocol import BOOTSTRAP_VERSION, bootstrap_indices, digest_fields
+
+    games = ["game-a", "game-b", "\u6e2c\u8a66"]
+    replicates, seed = 17, 2196221715671680944
+    values = (int.from_bytes(digest_fields(BOOTSTRAP_VERSION, seed, games, counter), "big") for counter in count())
+    limit = 2**256 - 2**256 % len(games)
+    draws = list(islice((v % len(games) for v in values if v < limit), replicates * len(games)))
+    original = np.array(draws, dtype="<i4").reshape(replicates, len(games))
+    assert bootstrap_indices(games, replicates, seed).tobytes() == original.tobytes()
 
 
 @pytest.fixture

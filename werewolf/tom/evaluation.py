@@ -1,5 +1,6 @@
 """Sealed shift-zero inference and two named population evaluations."""
 
+from collections import defaultdict
 import math
 
 import numpy as np
@@ -7,13 +8,29 @@ import torch
 
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, sha256_bytes
 from werewolf.tom.development_input import open_development_input as open_publication
-from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors
+from werewolf.tom.dataset import CanonicalToMDataset, ExperimentCapacity, PublicTensors, tensorize_structured_plan
 from werewolf.tom.experiment import read_json, validate_runtime
 from werewolf.tom.run_records import publish_record, publish_run_bytes, read_record
-from werewolf.tom.scoring import row_kl, row_cross_entropy
+from werewolf.tom.scoring import game_macro_summary, row_kl, row_cross_entropy
 from werewolf.tom.state import load_model_state
 from werewolf.tom.training import verify_checkpoint_set, verify_terminal, lineage_path, build_model
 from werewolf.tom.population import load_held_out_primary, load_held_out_all_alive
+
+
+def predict_structured_observers(plan, model, device):
+    """每个公开计划一次前向，按原座号返回七席概率及六列非自身对数概率。"""
+    with torch.inference_mode():
+        batch = PublicTensors.stack([tensorize_structured_plan(plan, model.capacity)])
+        output = model(**{name: value.to(device) for name, value in batch.kwargs().items()})
+        if output.shape != (1, 7, 7):
+            raise ValueError(f"seven-seat output shape mismatch for PRE {plan.prefix_digest}")
+        logp = output[0].cpu()
+        probability = logp.exp()
+        non_self = ~torch.eye(7, dtype=torch.bool)
+        if (not torch.isfinite(logp[non_self]).all() or not (logp.diagonal() == -torch.inf).all()
+                or not torch.allclose(probability.sum(-1), torch.ones_like(logp.diagonal()), atol=1e-6, rtol=0)):
+            raise ValueError(f"non-self simplex mismatch for PRE {plan.prefix_digest}")
+        return probability.tolist(), logp[non_self].reshape(7, 6).tolist()
 
 
 def _held_out_data(experiment, fold):
@@ -123,6 +140,30 @@ def score_prediction_rows(selected, game_ids):
         game_scores[game_id] = {"row_count": len(values), **{name: float(np.mean([r[name] for r in values]))
             for name in ("kl", "uniform_kl", "cross_entropy", "total_variation", "mean_absolute_error", "argmax_in_target_support", "target_support_probability")}}
     return scores, game_scores
+
+
+def uniform_prediction_rows(rows):
+    """在相同评价行上构造六席均匀对照。"""
+    return [{**row, "probability": [0. if j == row["observer"] else 1/6 for j in range(7)],
+             "non_self_log_probability": [-math.log(6)] * 6} for row in rows]
+
+
+def probability_cell(rows, games, indices, nu_games, nu_indices):
+    """共用历史概率计分及游戏等权聚合，NU 只在有合格行的局上计算。"""
+    scores, game_scores = score_prediction_rows(rows, games)
+    nu_hits = defaultdict(list)
+    for row, score in zip(rows, scores, strict=True):
+        if sum(q > 0 for q in row["q"]) < 6:
+            nu_hits[row["game_id"]].append(int(score["argmax_in_target_support"]))
+    nu_scores = {g: float(np.mean(nu_hits[g])) for g in nu_games}
+    cell = {
+        "kl": game_macro_summary([game_scores[g]["kl"] for g in games], indices, .95),
+        "tv": game_macro_summary([game_scores[g]["total_variation"] for g in games], indices, .95),
+        "top1_nu": game_macro_summary(list(nu_scores.values()), nu_indices, .95) if nu_scores else None,
+        "game_scores": game_scores, "row_count": len(rows), "game_count": len(games),
+        "nu_row_count": sum(map(len, nu_hits.values())), "nu_game_count": len(nu_games),
+    }
+    return cell, nu_scores
 
 
 def _fold_report_value(experiment, fold, condition, fields, load_masks):

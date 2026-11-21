@@ -1,4 +1,4 @@
-"""Immutable Canonical Game Bundle publication and sole read interface."""
+"""不可变 Canonical Game Bundle 的发布、验证和按分区读取。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from werewolf.artifact_io import (
     VerifiedArtifact,
     canonical_json_bytes,
     canonical_jsonl_bytes,
+    open_artifact_envelope,
     publish_artifact,
+    read_artifact_file,
     sha256_bytes,
     verify_artifact,
 )
@@ -440,14 +442,17 @@ def _load_json(path: Path) -> Any:
 
 
 def _load_jsonl(path: Path) -> list[Any]:
-    data = path.read_bytes()
+    return _decode_jsonl(path.read_bytes(), path.name)
+
+
+def _decode_jsonl(data: bytes, name: str) -> list[Any]:
     if data and not data.endswith(b"\n"):
         raise ArtifactValidationError(
-            f"JSONL child lacks terminal newline: {path.name}"
+            f"JSONL child lacks terminal newline: {name}"
         )
     records = [json.loads(line.decode("utf-8")) for line in data.splitlines()]
     if canonical_jsonl_bytes(records) != data:
-        raise ArtifactValidationError(f"non-canonical JSONL child: {path.name}")
+        raise ArtifactValidationError(f"non-canonical JSONL child: {name}")
     return records
 
 
@@ -695,34 +700,7 @@ def validate_canonical_game_bundle_public_records(
     if any(not annotation.is_successful for annotation in annotations):
         raise ArtifactValidationError("published V1 annotation is not successful")
 
-    observations_by_id = {item.observation_id: item for item in observations}
-    linked_ids: list[str] = []
-    for prefix in prefixes:
-        for link in prefix.belief_observation_links:
-            linked_ids.append(link.observation_id)
-            observation = observations_by_id.get(link.observation_id)
-            if observation is None:
-                raise ArtifactValidationError(
-                    "published PRE Prefix has a missing Belief Observation"
-                )
-            if (
-                observation.boundary_id != prefix.boundary_id
-                or observation.prefix_digest != prefix.prefix_digest
-                or observation.observer_id != link.observer_id
-                or not observation.observer_alive
-                or observation.status is not BeliefObservationStatus.SUCCESS
-                or observation.day != prefix.public_temporal_state.day
-                or observation.phase != prefix.public_temporal_state.phase.value
-            ):
-                raise ArtifactValidationError(
-                    "published Belief Observation PRE binding mismatch"
-                )
-    if len(linked_ids) != len(set(linked_ids)) or set(linked_ids) != set(
-        observations_by_id
-    ):
-        raise ArtifactValidationError(
-            "published Belief Observations do not exactly equal PRE links"
-        )
+    _validate_bundle_observation_links(prefixes, observations)
     if call_budget.fallback_action_count or call_budget.second_speaker_belief_count:
         raise ArtifactValidationError("published call budget is not canonical")
 
@@ -738,6 +716,38 @@ def validate_canonical_game_bundle_public_records(
         call_budget_summary=call_budget,
         parser_summary=parser_summary,
     )
+
+
+def _validate_bundle_observation_links(prefixes, observations):
+    observations_by_id = {item.observation_id: item for item in observations}
+    linked_ids: list[str] = []
+    for prefix in prefixes:
+        for link in prefix.belief_observation_links:
+            linked_ids.append(link.observation_id)
+            observation = observations_by_id.get(link.observation_id)
+            if observation is None:
+                raise ArtifactValidationError(
+                    "published PRE Prefix has a missing Belief Observation"
+                )
+            if (
+                observation.game_id != prefix.game_id
+                or observation.boundary_id != prefix.boundary_id
+                or observation.prefix_digest != prefix.prefix_digest
+                or observation.observer_id != link.observer_id
+                or not observation.observer_alive
+                or observation.status is not BeliefObservationStatus.SUCCESS
+                or observation.day != prefix.public_temporal_state.day
+                or observation.phase != prefix.public_temporal_state.phase.value
+            ):
+                raise ArtifactValidationError(
+                    "published Belief Observation PRE binding mismatch"
+                )
+    if (len(linked_ids) != len(set(linked_ids)) or len(observations) != len(observations_by_id)
+            or set(linked_ids) != set(observations_by_id)):
+        raise ArtifactValidationError(
+            "published Belief Observations do not exactly equal PRE links"
+        )
+    return observations_by_id
 
 
 def _private_replay_from_record(record: Mapping[str, Any]) -> PrivateReplayEvidence:
@@ -885,6 +895,55 @@ def _validate_manifest(
         raise ArtifactValidationError("Bundle child file partition is incomplete")
 
 
+def open_split_game_bundle(collection_path, plan, member):
+    """用已验证的 Split 成员绑定 Bundle，只打开清单。"""
+    game_id = member["game_id"]
+    if not _SAFE_IDENTITY.fullmatch(game_id):
+        raise ArtifactValidationError("invalid Split game identity")
+    path = Path(collection_path) / "games" / game_id
+    if ".." in path.parts or any(p.is_symlink() for p in (path, *path.parents)):
+        raise ArtifactValidationError("Bundle path cannot traverse links or parent directories")
+    bundle = open_artifact_envelope(path, expected_artifact_type=CANONICAL_GAME_BUNDLE_ARTIFACT_TYPE,
+                                    expected_schema_version=CANONICAL_GAME_BUNDLE_SCHEMA_VERSION)
+    manifest = bundle.manifest
+    if (bundle.manifest_digest != member["bundle_digest"]
+            or manifest["artifact_identity"] != game_id
+            or manifest["collection_id"] != plan.collection_id
+            or manifest["collection_plan_digest"] != plan.plan_digest
+            or manifest["canonical_eligibility"] is not True
+            or set(manifest["file_table"]) != _BUNDLE_FILE_PATHS
+            or any(manifest[key] != member[key]
+                   for key in ("game_id", "seed", "attempt_id", "ordinal", "claim_record_digest"))):
+        raise ArtifactValidationError(f"Split/Bundle identity mismatch for {game_id}")
+    return bundle
+
+
+def read_bundle_pre_prefixes(bundle):
+    """只读取封存的公开 PRE 快照和其中的公开语义标注。"""
+    name = "public/authoritative_pre_prefixes.jsonl"
+    records = _decode_jsonl(read_artifact_file(bundle, name), name)
+    prefixes = tuple(_prefix_from_record(record) for record in records)
+    indices = [p.public_event_history.events[-1].event_index for p in prefixes]
+    if (not prefixes or len({p.boundary_id for p in prefixes}) != len(prefixes)
+            or any(p.game_id != bundle.manifest["game_id"] for p in prefixes)
+            or indices != sorted(set(indices))):
+        raise ArtifactValidationError(f"missing, duplicate or nonchronological PRE in {bundle.path}")
+    return prefixes
+
+
+def read_bundle_supervision(bundle, prefixes):
+    """评分阶段恢复与已验证 PRE 对齐的报告和角色。"""
+    name = "public/belief_observations.jsonl"
+    records = _decode_jsonl(read_artifact_file(bundle, name), name)
+    observations = tuple(_observation_from_record(record) for record in records)
+    indexed = _validate_bundle_observation_links(prefixes, observations)
+    private = _private_replay_from_record(json.loads(read_artifact_file(bundle, "private/private_replay_evidence.json")))
+    if (private.game_id != bundle.manifest["game_id"] or private.seed != bundle.manifest["seed"]
+            or any(o.attempt_id != bundle.manifest["attempt_id"] for o in observations)):
+        raise ArtifactValidationError("Bundle supervision identity mismatch")
+    return indexed, dict(private.role_assignment)
+
+
 def validate_canonical_game_bundle(
     path: Path | str,
     *,
@@ -892,7 +951,7 @@ def validate_canonical_game_bundle(
     claim: AttemptClaim,
     replay_executor: DeterministicReplayExecutor,
 ) -> VerifiedCanonicalGameBundle:
-    """The sole interface that opens a Canonical Game Bundle."""
+    """完整验证 Canonical Game Bundle 并执行原有确定性重放核验。"""
 
     validate_collection_plan(plan)
     validate_attempt_claim(claim, plan)

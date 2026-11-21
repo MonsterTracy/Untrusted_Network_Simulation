@@ -1,12 +1,12 @@
 """Strict public-alive joins using the unchanged game-macro mathematics."""
 
-from collections import Counter, defaultdict
+from collections import Counter
 import math
 
 import numpy as np
 
 from werewolf.artifact_io import sha256_bytes
-from werewolf.tom.evaluation import score_prediction_rows
+from werewolf.tom.evaluation import probability_cell, uniform_prediction_rows
 from werewolf.tom.protocol import bootstrap_indices
 from werewolf.tom.scoring import game_macro_summary, paired_summary
 from werewolf.tom_llm.common import digest, identity, require
@@ -36,29 +36,6 @@ def _aligned_predictions(reference, predictions, game_ids):
                 and row["plan_digest"] == ref["plan_digest"] and type(row["canonical_shift"]) is int and row["canonical_shift"] == 0
                 and row["temporal_condition"] == ref["temporal_condition"], "LLM/reference semantics mismatch")
     return games, expected, indexed
-
-
-def uniform_prediction_rows(rows):
-    return [{**row, "probability": [0. if j == row["observer"] else 1/6 for j in range(7)],
-             "non_self_log_probability": [-math.log(6)] * 6} for row in rows]
-
-
-def probability_cell(rows, games, indices, nu_games, nu_indices):
-    """共用历史概率计分及游戏等权聚合，NU 只在有合格行的局上计算。"""
-    scores, game_scores = score_prediction_rows(rows, games)
-    nu_hits = defaultdict(list)
-    for row, score in zip(rows, scores, strict=True):
-        if sum(q > 0 for q in row["q"]) < 6:
-            nu_hits[row["game_id"]].append(int(score["argmax_in_target_support"]))
-    nu_scores = {g: float(np.mean(nu_hits[g])) for g in nu_games}
-    cell = {
-        "kl": game_macro_summary([game_scores[g]["kl"] for g in games], indices, .95),
-        "tv": game_macro_summary([game_scores[g]["total_variation"] for g in games], indices, .95),
-        "top1_nu": game_macro_summary(list(nu_scores.values()), nu_indices, .95) if nu_scores else None,
-        "game_scores": game_scores, "row_count": len(rows), "game_count": len(games),
-        "nu_row_count": sum(map(len, nu_hits.values())), "nu_game_count": len(nu_games),
-    }
-    return cell, nu_scores
 
 
 def compare(reference, predictions, game_ids):

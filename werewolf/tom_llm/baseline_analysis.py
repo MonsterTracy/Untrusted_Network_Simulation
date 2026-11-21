@@ -13,12 +13,12 @@ from werewolf.tom_llm.common import digest, identity, require, require_digest, s
 from werewolf.tom_llm.experiment import VERSION, open_run, require_formal_cohort, safe_path
 from werewolf.tom_llm.live_runner import read_predictions
 from werewolf.tom_llm.multimodel import COHORT_VERSION, source_identity
-from werewolf.tom_llm.evaluation import compare, compare_sets, probability_cell, uniform_prediction_rows
+from werewolf.tom_llm.evaluation import compare, compare_sets
 from werewolf.tom_llm.multimodel_evaluation import paired_extras,nonuniform_prediction_rows,reference_binding,validate_public_coverage
 from werewolf.tom_llm.reference import open_reference
 from werewolf.tom.protocol import bootstrap_indices
 from werewolf.tom.scoring import paired_summary
-from werewolf.tom.evaluation import score_prediction_rows
+from werewolf.tom.evaluation import probability_cell, predict_structured_observers, score_prediction_rows, uniform_prediction_rows
 from werewolf.tom_llm.policy import POLICY
 
 def compute(reference,run,tasks,predictions):
@@ -260,9 +260,7 @@ def _read_v1_comparison_inputs(run_paths):
 
 def _predict_epoch35(tasks, task_digests, model, device):
     """仅从公开计划构造张量，每个 PRE 前向一次，按请求顺序回填观察者。"""
-    import torch
     from werewolf.structured_history import StructuredTokenDescriptor, StructuredTokenPlan
-    from werewolf.tom.dataset import PublicTensors, tensorize_structured_plan
     from werewolf.tom.makto import EPOCH35_DIGEST
     from werewolf.tom_llm.prompt import validate_plan
 
@@ -284,19 +282,7 @@ def _predict_epoch35(tasks, task_digests, model, device):
                 f"Epoch35 capacity/Temporal mismatch for PRE {key}")
         plans[key] = plan
 
-    row_predictions = {}
-    non_self = ~torch.eye(7, dtype=torch.bool)
-    with torch.inference_mode():
-        for key, plan in plans.items():
-            public = PublicTensors.stack([tensorize_structured_plan(plan, model.capacity)])
-            output = model(**{k: v.to(device) for k, v in public.kwargs().items()})
-            require(output.shape == (1, 7, 7), f"Epoch35 seven-seat output shape mismatch for PRE {key}")
-            logp = output[0].cpu()
-            probability = logp.exp()
-            require(bool(torch.isfinite(logp[non_self]).all() and (logp.diagonal() == -torch.inf).all()
-                         and torch.allclose(probability.sum(-1), torch.ones_like(logp.diagonal()), atol=1e-6, rtol=0)),
-                    f"Epoch35 non-self simplex mismatch for PRE {key}")
-            row_predictions[key] = probability.tolist(), logp[non_self].reshape(7, 6).tolist()
+    row_predictions = {key: predict_structured_observers(plan, model, device) for key, plan in plans.items()}
 
     rows = []
     for task, task_digest in zip(tasks, task_digests, strict=True):

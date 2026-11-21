@@ -33,9 +33,13 @@ def load_bootstrap_plan(experiment):
     return indices, metadata["digest"]
 
 
+def _encode_field(value):
+    encoded = canonical_json_bytes(value)
+    return len(encoded).to_bytes(8, "big") + encoded
+
+
 def digest_fields(*values):
-    encoded = [canonical_json_bytes(value) for value in values]
-    return hashlib.sha256(b"".join(len(v).to_bytes(8, "big") + v for v in encoded)).digest()
+    return hashlib.sha256(b"".join(map(_encode_field, values))).digest()
 
 
 def development_holdout_split(game_ids, *, development_game_ids):
@@ -130,11 +134,17 @@ def bootstrap_indices(game_ids, replicates, seed):
     if n >= 2**31:
         raise ValueError("bootstrap game count exceeds canonical int32")
     limit = 2**256 - 2**256 % n
-    draws = []
+    # 每次抽样的游戏列表相同，复用其哈希状态，保持冻结的字节和计数顺序。
+    prefix = hashlib.sha256(b"".join(map(_encode_field, (BOOTSTRAP_VERSION, seed, list(game_ids)))))
+    draws = np.empty(replicates * n, dtype="<i4")
+    accepted = 0
     counter = 0
-    while len(draws) < replicates * n:
-        value = int.from_bytes(digest_fields(BOOTSTRAP_VERSION, seed, list(game_ids), counter), "big")
+    while accepted < draws.size:
+        hasher = prefix.copy()
+        hasher.update(_encode_field(counter))
+        value = int.from_bytes(hasher.digest(), "big")
         counter += 1
         if value < limit:
-            draws.append(value % n)
-    return np.array(draws, dtype="<i4").reshape(replicates, n)
+            draws[accepted] = value % n
+            accepted += 1
+    return draws.reshape(replicates, n)
