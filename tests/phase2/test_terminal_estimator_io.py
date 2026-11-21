@@ -261,6 +261,7 @@ def test_source_provenance_hashes_current_repository_inventory():
         "scripts/phase2_terminal_estimator.py",
         "scripts/phase2_terminal_itt_analysis.py",
         "werewolf/artifact_io/canonical.py",
+        "werewolf/artifact_io/strict_json.py",
         io.PROTOCOL,
         io.SUPPORT_REVIEW,
     )

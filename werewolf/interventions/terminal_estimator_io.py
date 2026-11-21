@@ -39,6 +39,7 @@ SOURCE_FILES = (
     "scripts/phase2_terminal_estimator.py",
     "scripts/phase2_terminal_itt_analysis.py",
     "werewolf/artifact_io/canonical.py",
+    "werewolf/artifact_io/strict_json.py",
     PROTOCOL, SUPPORT_REVIEW,
 )
 

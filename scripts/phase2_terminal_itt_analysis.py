@@ -18,6 +18,7 @@ from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact,
     read_artifact_file, sha256_bytes, verify_artifact,
 )
+from werewolf.artifact_io.strict_json import strict_json
 from werewolf.canonical_collection.attempt_ledger import _claim_from_record, collection_plan_from_record
 from werewolf.canonical_collection.failure_evidence import validate_canonical_partial_evidence
 from werewolf.canonical_collection.game_bundle import _prefix_from_record
@@ -46,18 +47,6 @@ ROOT = Path("/data/yuxiao/Untrusted_Network_Simulation/paper-studies")
 def require(condition, message):
     if not condition:
         raise ValueError(message)
-
-
-def strict_json(data):
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            require(key not in result, "duplicate JSON key")
-            result[key] = value
-        return result
-    def invalid(value):
-        raise ValueError(f"non-finite JSON value: {value}")
-    return json.loads(data, object_pairs_hook=unique, parse_constant=invalid)
 
 
 def read_json(path):

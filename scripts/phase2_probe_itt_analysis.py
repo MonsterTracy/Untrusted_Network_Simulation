@@ -20,6 +20,7 @@ from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact,
     read_artifact_file, sha256_bytes, verify_artifact,
 )
+from werewolf.artifact_io.strict_json import strict_json as _strict_json
 from werewolf.interventions.offline import _transition, classify_outcome
 from werewolf.interventions.online.plan import Phase2OnlineProbePilotPlanV1, probe_assignment_from_record
 from werewolf.interventions.online.pilot_dataset import PROBE_ONLINE_VERSION, analyze_phase2_online_support_record
@@ -39,6 +40,7 @@ TABLE_FILES = ("assignments.jsonl", "executions.jsonl", "consequences.jsonl",
                "backend_calls.jsonl", "strategy_stages.jsonl")
 SOURCE_FILES = (
     "scripts/phase2_probe_itt_analysis.py", "werewolf/artifact_io/canonical.py",
+    "werewolf/artifact_io/strict_json.py",
     "werewolf/interventions/online/plan.py", "werewolf/interventions/online/records.py",
     "werewolf/interventions/online/pilot_dataset.py", "werewolf/interventions/offline.py",
     "werewolf/interventions/actions.py", "werewolf/interventions/decision_opportunity.py",
@@ -60,20 +62,6 @@ def digest(value):
 
 def _sha256(value):
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
-
-
-def _strict_json(data):
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            require(key not in result, "duplicate JSON key")
-            result[key] = value
-        return result
-
-    def invalid(value):
-        raise ValueError(f"non-finite JSON value: {value}")
-
-    return json.loads(data, object_pairs_hook=unique, parse_constant=invalid)
 
 
 def _json(artifact, name):
