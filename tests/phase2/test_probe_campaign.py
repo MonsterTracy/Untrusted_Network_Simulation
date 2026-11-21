@@ -7,6 +7,7 @@ from statistics import NormalDist
 import pytest
 
 from scripts import phase2_online_campaign as campaign
+from werewolf.interventions.online import plan as online_plan, preflight
 
 
 @pytest.mark.parametrize(("qualification", "seed", "target", "cap", "status"), (
@@ -15,7 +16,7 @@ from scripts import phase2_online_campaign as campaign
 ))
 def test_probe_profiles_freeze_identity_seed_and_preregistered_budgets(
         qualification, seed, target, cap, status):
-    profile = campaign.read_profile(policy="probe", qualification=qualification)
+    profile = online_plan.read_profile(policy="probe", qualification=qualification)
     payload = (profile["pilot_id"] + ":assignment").encode("utf-8")
     derived = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") & ((1 << 63) - 1)
     assert profile["assignment_seed"] == derived == seed
@@ -26,8 +27,8 @@ def test_probe_profiles_freeze_identity_seed_and_preregistered_budgets(
 
 
 def test_qualification_plan_preserves_equal_randomization_and_one_assignment_per_game():
-    profile = campaign.read_profile(policy="probe", qualification=True)
-    plan = campaign.pilot_plan(profile).to_record()
+    profile = online_plan.read_profile(policy="probe", qualification=True)
+    plan = online_plan.pilot_plan(profile).to_record()
     assert plan["target_assignment_count"] == 20
     assert plan["max_games_attempted"] == 80
     assert plan["immediate_redirect_probability"] == 0.5
@@ -36,9 +37,9 @@ def test_qualification_plan_preserves_equal_randomization_and_one_assignment_per
 
 
 def test_v3_identity_preserves_v1_and_v2_and_requires_their_entire_planned_pools():
-    profile = campaign.read_profile(policy="probe", qualification=True)
-    v1 = campaign.read_json(campaign.REPO / "configs/phase2/online-probe-qualification-v1.json")
-    formal = campaign.read_profile(policy="probe", qualification=False)
+    profile = online_plan.read_profile(policy="probe", qualification=True)
+    v1 = online_plan.read_json(online_plan.REPO / "configs/phase2/online-probe-qualification-v1.json")
+    formal = online_plan.read_profile(policy="probe", qualification=False)
     assert profile["pilot_id"] == "paper-phase2-online-probe-qualification-v3"
     assert v1["pilot_id"] == "paper-phase2-online-probe-qualification-v1"
     assert v1["assignment_seed"] == 4325493448326950820
@@ -56,7 +57,7 @@ def test_v3_identity_preserves_v1_and_v2_and_requires_their_entire_planned_pools
 
 
 def test_formal_precision_target_uses_frozen_terminal_max_variance():
-    profile = campaign.read_profile(policy="probe", qualification=False)
+    profile = online_plan.read_profile(policy="probe", qualification=False)
     variance, half_width = 0.030782462625115643, 0.05
     planned_n = 4 * NormalDist().inv_cdf(0.975) ** 2 * variance / half_width ** 2
     assert planned_n == pytest.approx(189.19930011830033)
@@ -64,7 +65,7 @@ def test_formal_precision_target_uses_frozen_terminal_max_variance():
 
 
 def test_formal_missing_cap_blocks_prepare_even_if_marked_frozen(tmp_path):
-    profile = campaign.read_profile(policy="probe", qualification=False)
+    profile = online_plan.read_profile(policy="probe", qualification=False)
     profile["max_games_attempted"] = None
     for key in ("plan", "game_plan", "work_directory", "destination"):
         profile[key] = str(tmp_path / key)
@@ -77,7 +78,7 @@ def test_formal_missing_cap_blocks_prepare_even_if_marked_frozen(tmp_path):
 
 @pytest.mark.parametrize("qualification", (True, False))
 def test_probe_status_unstarted_is_readonly_without_server_imports(qualification, tmp_path, monkeypatch):
-    profile = campaign.read_profile(policy="probe", qualification=qualification)
+    profile = online_plan.read_profile(policy="probe", qualification=qualification)
     for key in ("plan", "game_plan", "work_directory", "destination"):
         profile[key] = str(tmp_path / key)
     before = list(tmp_path.iterdir())
@@ -94,7 +95,7 @@ def test_operator_reader_rejects_duplicate_keys_and_nonfinite(tmp_path):
     for text in ('{"assignment_seed":1,"assignment_seed":2}', '{"seed":NaN}'):
         path.write_text(text)
         with pytest.raises(ValueError):
-            campaign.read_json(path)
+            online_plan.read_json(path)
 
 
 def test_probe_qualification_gate_uses_mechanisms_not_outcome():
@@ -106,11 +107,11 @@ def test_probe_qualification_gate_uses_mechanisms_not_outcome():
          "lifecycle": ["T1_COMMITTED", "T3_SCHEDULED", "T3_REACHED", "T3_COMMITTED",
                        "GAME_RESULT_RECORDED"], "day_consequence": {"l_ref": 0}},
     ]
-    gate = campaign.probe_qualification_gate(records, complete=True)
+    gate = preflight.probe_qualification_gate(records, complete=True)
     assert gate["passed"] is True
     for record in records:
         record["day_consequence"]["l_ref"] = .5
-    assert campaign.probe_qualification_gate(records, complete=True) == gate
-    assert not campaign.probe_qualification_gate(records, complete=False)["passed"]
+    assert preflight.probe_qualification_gate(records, complete=True) == gate
+    assert not preflight.probe_qualification_gate(records, complete=False)["passed"]
     records[1]["lifecycle"] = ["T1_LANGUAGE_INVALID", "T3_CANCELLED", "GAME_RESULT_RECORDED"]
-    assert not campaign.probe_qualification_gate(records, complete=True)["passed"]
+    assert not preflight.probe_qualification_gate(records, complete=True)["passed"]

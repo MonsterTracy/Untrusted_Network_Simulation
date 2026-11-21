@@ -1,10 +1,13 @@
-"""Pilot and Router candidate sampling, assignment, and per-game limits."""
+"""冻结 Online 计划、候选抽样和单局分配限制。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import json
 import math
+from pathlib import Path
+import re
 
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.interventions.actions import Action, ActionContextV1, ObservationWindowV1, probe_continuation
@@ -20,6 +23,16 @@ FROZEN = "FROZEN"
 QUALIFICATION = "qualification"
 FORMAL_PILOT = "pilot"
 TARGET_ASSIGNMENTS = {QUALIFICATION: 10, FORMAL_PILOT: 120}
+
+
+REPO = Path(__file__).resolve().parents[3]
+PROFILE = REPO / "configs/phase2/online-terminal-pilot-formal-v1.json"
+PROFILE_VERSION = "phase2_online_campaign_profile_v1"
+PROBE_PROFILE_VERSION = "phase2_online_probe_campaign_profile_v1"
+PROBE_PROFILES = {"qualification": REPO / "configs/phase2/online-probe-qualification-v3.json",
+                  "formal": REPO / "configs/phase2/online-probe-formal-v1.json"}
+PROBE_NAMES = {"qualification": "paper-phase2-online-probe-qualification-v3",
+               "pilot": "paper-phase2-online-probe-pilot-v1"}
 
 
 class OnlinePilotPlanError(ValueError):
@@ -163,6 +176,176 @@ class Phase2OnlineTerminalPilotPlanV1:
 
     def digest(self) -> str:
         return sha256_bytes(canonical_json_bytes(self.to_record()))
+
+
+def read_run_json(path):
+    """读取已冻结的计划及运行记录，拒绝重复键。"""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    return json.loads(Path(path).read_bytes(), object_pairs_hook=unique)
+
+
+def load_online_plan(path, purpose):
+    raw = read_run_json(path)
+    if raw.get("schema_version") == PROBE_PLAN_VERSION:
+        fields = ("pilot_id", "assignment_seed", "campaign_purpose", "target_assignment_count",
+                  "candidate_selection_rule", "selection_status", "max_games_attempted")
+        plan = Phase2OnlineProbePilotPlanV1(**{name: raw[name] for name in fields})
+    else:
+        fields = ("pilot_id", "assignment_seed", "campaign_purpose", "push_probability",
+                  "candidate_selection_rule", "selection_status", "max_games_attempted")
+        plan = Phase2OnlineTerminalPilotPlanV1(**{name: raw[name] for name in fields})
+    if raw != plan.to_record() or plan.campaign_purpose != purpose:
+        raise ValueError("campaign purpose or frozen Pilot-T plan differs")
+    for identity in (plan.pilot_id,):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", identity) or ".." in identity:
+            raise ValueError("campaign id must be one safe path component")
+    return plan
+
+
+def read_json(path):
+    """严格读取 Campaign 配置与资格输入，拒绝重复键和非标准数值。"""
+    from werewolf.artifact_io.canonical import _reject_duplicate_keys, _reject_json_constant
+    return json.loads(Path(path).read_bytes(), object_pairs_hook=_reject_duplicate_keys,
+                      parse_constant=_reject_json_constant)
+
+
+def digest(value):
+    from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+    return sha256_bytes(canonical_json_bytes(value))
+
+
+def read_profile(*, policy="terminal", qualification=False):
+    probe = policy == "probe"
+    profile = read_json(PROBE_PROFILES["qualification" if qualification else "formal"]
+                        if probe else PROFILE)
+    fields = {"schema_version", "campaign_purpose", "pilot_id", "assignment_seed",
+              "max_games_attempted", "target_assignment_count", "estimator_eligible",
+              "plan", "game_plan", "work_directory", "destination"}
+    if probe:
+        fields |= {"planning_status", "probe_protocol_digest", "excluded_game_plans"}
+        purpose = "qualification" if qualification else "pilot"
+        if purpose == "pilot":
+            fields.add("probe_qualification")
+        if (set(profile) != fields or profile["schema_version"] != PROBE_PROFILE_VERSION
+                or profile["campaign_purpose"] != purpose
+                or profile["pilot_id"] != PROBE_NAMES[purpose]
+                or profile["estimator_eligible"] is not False
+                or profile["planning_status"] not in ("UNFROZEN", "FROZEN")
+                or not isinstance(profile["probe_protocol_digest"], str)
+                or len(profile["probe_protocol_digest"]) != 64
+                or any(c not in "0123456789abcdef" for c in profile["probe_protocol_digest"])
+                or not isinstance(profile["excluded_game_plans"], list)
+                or not profile["excluded_game_plans"]):
+            raise ValueError("invalid Probe campaign profile")
+        for item in profile["excluded_game_plans"]:
+            if (set(item) != {"path", "plan_digest"}
+                    or not Path(item["path"]).is_absolute()
+                    or item["plan_digest"] is not None and (
+                        not isinstance(item["plan_digest"], str) or len(item["plan_digest"]) != 64
+                        or any(c not in "0123456789abcdef" for c in item["plan_digest"]))):
+                raise ValueError("excluded canonical plans require absolute paths and digests")
+        for key in ("assignment_seed", "target_assignment_count", "max_games_attempted"):
+            value = profile[key]
+            if value is not None and (type(value) is not int or value < (0 if key == "assignment_seed" else 1)):
+                raise ValueError(f"invalid Probe profile {key}")
+        if purpose == "pilot":
+            pins = profile["probe_qualification"]
+            if (not isinstance(pins, dict) or set(pins) != {
+                    "artifact", "run_inputs", "manifest_digest", "inputs_digest"}
+                    or not all(Path(pins[k]).is_absolute() for k in ("artifact", "run_inputs"))):
+                raise ValueError("invalid Probe qualification pointers")
+        expected_name = PROBE_NAMES[purpose]
+    else:
+        from werewolf.interventions.online.runner import ARTIFACT_NAME
+        if (set(profile) != fields or profile["schema_version"] != PROFILE_VERSION
+            or profile["campaign_purpose"] != "pilot"
+            or profile["pilot_id"] != ARTIFACT_NAME
+            or type(profile["target_assignment_count"]) is not int
+            or profile["target_assignment_count"] != TARGET_ASSIGNMENTS["pilot"]
+            or profile["estimator_eligible"] is not True):
+            raise ValueError("invalid formal campaign profile")
+        expected_name = ARTIFACT_NAME
+    paths = []
+    for key in ("plan", "game_plan", "work_directory", "destination"):
+        path = Path(profile[key])
+        if not path.is_absolute():
+            raise ValueError(f"profile {key} must be absolute")
+        paths.append(path.resolve())
+    if any(a == b or a.is_relative_to(b) or b.is_relative_to(a)
+           for i, a in enumerate(paths) for b in paths[i + 1:]):
+        raise ValueError("plan/work/destination paths must be disjoint")
+    if Path(profile["destination"]).name != expected_name:
+        raise ValueError("formal destination must use the fixed pilot artifact name")
+    return profile
+
+
+def pilot_plan(profile):
+    if profile["schema_version"] == PROBE_PROFILE_VERSION:
+        if profile["planning_status"] != "FROZEN" or any(profile[k] is None for k in (
+                "assignment_seed", "target_assignment_count", "max_games_attempted")):
+            raise ValueError("Probe target/seed/cap are not frozen; prepare is disabled")
+        return Phase2OnlineProbePilotPlanV1(profile["pilot_id"], profile["assignment_seed"],
+            profile["target_assignment_count"], profile["max_games_attempted"],
+            campaign_purpose=profile["campaign_purpose"])
+    if profile["assignment_seed"] is None:
+        raise ValueError("formal assignment_seed is not frozen; provide it before prepare")
+    if profile["max_games_attempted"] is None:
+        raise ValueError("formal max_games_attempted is not frozen; provide the safety cap")
+    return Phase2OnlineTerminalPilotPlanV1(profile["pilot_id"], profile["assignment_seed"],
+        campaign_purpose=profile["campaign_purpose"],
+        max_games_attempted=profile["max_games_attempted"])
+
+
+def canonical_plan(plan, head, bound, *, profile=None):
+    from scripts.collect_games import derive_seed_pool, plan_fields
+    from werewolf.canonical_collection.attempt_ledger import construct_collection_plan, validate_collection_plan
+    provenance = bound["canonical_game_plan"]["environment_provenance"]
+    extra = {k: v for k, v in provenance.items() if k not in (
+        "configured_call_limit", "gameplay_prompt_profile", "seed_pool_size", "target_success_count")}
+    if profile is not None:
+        extra.update(probe_policy_protocol_sha256=profile["probe_protocol_digest"],
+                     probe_campaign_profile_digest=digest(profile))
+    return validate_collection_plan(construct_collection_plan(
+        ordered_seed_pool=derive_seed_pool(plan.pilot_id, plan.max_games_attempted),
+        **plan_fields({"collection_id": plan.pilot_id, "target_games": plan.max_games_attempted,
+                      "seed_pool_size": plan.max_games_attempted,
+                      "call_limit": int(provenance["configured_call_limit"])}, head, extra)))
+
+
+def seed_overlaps(seeds, pins, bound):
+    from scripts.collect_games import CALIBRATION_SEEDS
+    from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
+    development = collection_plan_from_record(read_json(pins["development_game_plan"]))
+    publication = read_json(Path(bound["paths"]["publication"]) / "manifest.json")
+    if (development.plan_digest != pins["development_game_plan_digest"]
+            or publication["manifest_digest"] != pins["publication_manifest_digest"]
+            or digest({k: v for k, v in publication.items() if k != "manifest_digest"}) !=
+               publication["manifest_digest"]
+            or publication["collection_plan_digest"] != development.plan_digest
+            or development.target_canonical_success_count != 1500):
+        raise ValueError("development seed pool/publication provenance differs")
+    selected = set(seeds)
+    overlaps = {"qualification": len(selected.intersection(bound["canonical_game_plan"]["ordered_seed_pool"])),
+                "development": len(selected.intersection(development.ordered_seed_pool)),
+                "calibration": len(selected.intersection(CALIBRATION_SEEDS))}
+    if any(overlaps.values()):
+        raise ValueError(f"seed overlap; no skip/reroll: {overlaps}")
+    return overlaps
+
+
+def checked_seed_overlaps(game, pins, bound, excluded=()):
+    counts = seed_overlaps(game.ordered_seed_pool, pins, bound)
+    for old in excluded:
+        counts[old.collection_id] = len(set(game.ordered_seed_pool).intersection(old.ordered_seed_pool))
+    if any(counts.values()):
+        raise ValueError(f"seed overlap; no skip/reroll: {counts}")
+    return counts
 
 
 @dataclass(frozen=True)

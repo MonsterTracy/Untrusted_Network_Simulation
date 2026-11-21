@@ -10,7 +10,6 @@ import ast
 import hashlib
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
@@ -23,7 +22,7 @@ from werewolf.artifact_io.canonical import ensure_durable_directory
 from werewolf.canonical_collection import attempt_ledger as canonical
 from werewolf.canonical_collection import game_bundle, pre, public_history, speech, trajectory_evidence
 from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
-from werewolf.interventions.online.plan import PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1
+from werewolf.interventions.online import plan as online_plan, preflight
 from werewolf.interventions.online.preflight import SOURCE_FILES
 from tests.phase2.test_probe_policy_ledger import frozen_assignment, LiteralRecord, literal_snapshots
 
@@ -82,13 +81,10 @@ def assembly(monkeypatch):
         V1_SPEECH_PARSER_VERSION=speech.V1_SPEECH_PARSER_VERSION,
         V1_SPEECH_PROMPT_VERSION=speech.V1_SPEECH_PROMPT_VERSION,
         CANONICAL_GAME_BUNDLE_SCHEMA_VERSION=game_bundle.CANONICAL_GAME_BUNDLE_SCHEMA_VERSION)
-    server = definitions(ROOT / "werewolf/interventions/online/server.py", {
-        "_read_json", "_publish_json", "load_online_plan"},
-        json=json, re=re, Path=Path, ensure_durable_directory=ensure_durable_directory,
+    server = definitions(ROOT / "werewolf/interventions/online/server.py", {"_publish_json"},
+        ensure_durable_directory=ensure_durable_directory,
         _publish_bytes_noreplace=canonical._publish_bytes_noreplace,
-        canonical_json_bytes=canonical_json_bytes, PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
-        Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
-        Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1)
+        canonical_json_bytes=canonical_json_bytes)
     runner = definitions(ROOT / "werewolf/interventions/online/runner.py", {
         "ARTIFACT_NAME", "QUALIFICATION_NAME", "ARTIFACT_VERSION"})
     for name, module in (("scripts.collect_games", collection),
@@ -116,14 +112,14 @@ def operator(tmp_path, monkeypatch, assembly):
         destination = repo / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((ROOT / name).read_bytes())
-    monkeypatch.setattr(campaign, "REPO", repo)
+    monkeypatch.setattr(online_plan, "REPO", repo)
     monkeypatch.setattr(campaign, "__file__", str(repo / "scripts/phase2_online_campaign.py"))
-    monkeypatch.setattr(campaign, "PROFILE", repo / "configs/phase2/online-terminal-pilot-formal-v1.json")
-    monkeypatch.setattr(campaign, "PINS", repo / "configs/phase2/online-terminal-runtime-pins-v1.json")
-    monkeypatch.setattr(campaign, "PROBE_PROFILES", {
+    monkeypatch.setattr(online_plan, "PROFILE", repo / "configs/phase2/online-terminal-pilot-formal-v1.json")
+    monkeypatch.setattr(preflight, "PINS", repo / "configs/phase2/online-terminal-runtime-pins-v1.json")
+    monkeypatch.setattr(online_plan, "PROBE_PROFILES", {
         "qualification": repo / "configs/phase2/online-probe-qualification-v3.json",
         "formal": repo / "configs/phase2/online-probe-formal-v1.json"})
-    profile = campaign.read_profile(policy="probe", qualification=True)
+    profile = online_plan.read_profile(policy="probe", qualification=True)
     profile.update(planning_status="FROZEN", assignment_seed=frozen_assignment()[0].assignment_seed,
                    target_assignment_count=2, max_games_attempted=5)
     paths = {name: str(tmp_path / name) for name in ("runtime_config", "deployment_config",
@@ -132,12 +128,12 @@ def operator(tmp_path, monkeypatch, assembly):
                  destination=str(tmp_path / "terminal-qualification"))
     for name in ("plan", "game_plan", "work_directory"):
         profile[name] = str(tmp_path / ("probe-" + name))
-    profile["destination"] = str(tmp_path / campaign.PROBE_NAMES["qualification"])
-    terminal_profile = campaign.read_profile()
+    profile["destination"] = str(tmp_path / online_plan.PROBE_NAMES["qualification"])
+    terminal_profile = online_plan.read_profile()
     terminal_profile.update({name: str(tmp_path / ("terminal-" + name)) for name in
                              ("plan", "game_plan", "work_directory")})
     terminal_profile["destination"] = str(tmp_path / terminal_profile["pilot_id"])
-    write(campaign.PROFILE, terminal_profile)
+    write(online_plan.PROFILE, terminal_profile)
     provenance = {"served_model_name": "synthetic-test-only", "runtime_config_sha256": "1" * 64,
                   "serve_config_sha256": "2" * 64, "model_manifest_sha256": "3" * 64}
     terminal = canonical.construct_collection_plan(ordered_seed_pool=tuple(range(101, 106)),
@@ -145,7 +141,7 @@ def operator(tmp_path, monkeypatch, assembly):
                                  "seed_pool_size": 5, "call_limit": 10000}, "a" * 40, provenance))
     write(terminal_profile["game_plan"], terminal.to_record())
     profile["excluded_game_plans"] = [{"path": terminal_profile["game_plan"], "plan_digest": terminal.plan_digest}]
-    old_profile = campaign.read_json(repo / "configs/phase2/online-probe-qualification-v1.json")
+    old_profile = online_plan.read_json(repo / "configs/phase2/online-probe-qualification-v1.json")
     for name in ("plan", "game_plan", "work_directory", "destination"):
         old_profile[name] = str(tmp_path / ("failed-probe-v1-" + name))
     write(repo / "configs/phase2/online-probe-qualification-v1.json", old_profile)
@@ -155,7 +151,7 @@ def operator(tmp_path, monkeypatch, assembly):
     write(old_profile["game_plan"], old_probe.to_record())
     profile["excluded_game_plans"].append({"path": old_profile["game_plan"],
                                          "plan_digest": old_probe.plan_digest})
-    failed_v2 = campaign.read_json(repo / "configs/phase2/online-probe-qualification-v2.json")
+    failed_v2 = online_plan.read_json(repo / "configs/phase2/online-probe-qualification-v2.json")
     for name in ("plan", "game_plan", "work_directory", "destination"):
         failed_v2[name] = str(tmp_path / ("failed-probe-v2-" + name))
     write(repo / "configs/phase2/online-probe-qualification-v2.json", failed_v2)
@@ -165,7 +161,7 @@ def operator(tmp_path, monkeypatch, assembly):
     write(failed_v2["game_plan"], failed_v2_game.to_record())
     profile["excluded_game_plans"].append({"path": failed_v2["game_plan"],
                                          "plan_digest": failed_v2_game.plan_digest})
-    write(campaign.PROBE_PROFILES["qualification"], profile)
+    write(online_plan.PROBE_PROFILES["qualification"], profile)
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "synthetic operator source")
     head = git(repo, "rev-parse", "HEAD")
@@ -181,20 +177,20 @@ def operator(tmp_path, monkeypatch, assembly):
     dev_path = tmp_path / "development.json"
     write(dev_path, development.to_record())
     publication = {"collection_plan_digest": development.plan_digest}
-    publication["manifest_digest"] = campaign.digest(publication)
+    publication["manifest_digest"] = online_plan.digest(publication)
     write(Path(paths["publication"]) / "manifest.json", publication)
     pins = {"development_game_plan": str(dev_path), "development_game_plan_digest": development.plan_digest,
             "publication_manifest_digest": publication["manifest_digest"]}
     # Existing terminal qualification artifact admission is an external seam;
     # these tests exercise actual Probe pin/exclusion and operator contracts.
-    monkeypatch.setattr(campaign, "qualification_inputs", lambda: (pins, bound, None))
+    monkeypatch.setattr(preflight, "qualification_inputs", lambda: (pins, bound, None))
     monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
     return SimpleNamespace(profile=profile, repo=repo, head=head, bound=bound, pins=pins,
                            terminal=terminal, collection=collection, server=server)
 
 
 def test_formal_partial_freeze_is_readable_but_cannot_prepare(assembly, tmp_path):
-    profile = campaign.read_profile(policy="probe", qualification=False)
+    profile = online_plan.read_profile(policy="probe", qualification=False)
     # A partial profile still fails closed after the committed profile is frozen.
     profile.update(planning_status="UNFROZEN", max_games_attempted=None)
     assert profile["planning_status"] == "UNFROZEN"
@@ -209,12 +205,12 @@ def test_prepare_binds_clean_source_protocol_profile_and_fixed_seed_pool_exclusi
     op = operator
     (op.repo / "unrelated-untracked.md").write_text("must not block")
     result = campaign.prepare(op.profile, source_commit=op.head)
-    game = canonical.collection_plan_from_record(campaign.read_json(op.profile["game_plan"]))
+    game = canonical.collection_plan_from_record(online_plan.read_json(op.profile["game_plan"]))
     assert result["source_commit"] == game.source_revision == op.head
     assert game.ordered_seed_pool == EXPECTED_SEEDS
     environment = dict(game.environment_provenance)
     assert environment["probe_policy_protocol_sha256"] == op.profile["probe_protocol_digest"]
-    assert environment["probe_campaign_profile_digest"] == campaign.digest(op.profile)
+    assert environment["probe_campaign_profile_digest"] == online_plan.digest(op.profile)
     assert result["seed_overlap_counts"] == {"qualification": 0, "development": 0,
         "calibration": 0, "paper-phase2-online-terminal-pilot-v1": 0,
         "paper-phase2-online-probe-qualification-v1": 0,
@@ -245,7 +241,7 @@ def test_prepare_blocks_source_fault_before_runtime_or_publication(operator, fau
 @pytest.fixture
 def formal_operator(operator, monkeypatch):
     op = operator
-    profile = campaign.read_profile(policy="probe")
+    profile = online_plan.read_profile(policy="probe")
     for key in ("plan", "game_plan", "work_directory"):
         profile[key] = str(op.repo.parent / ("formal-" + key))
     profile["destination"] = str(op.repo.parent / profile["pilot_id"])
@@ -253,13 +249,13 @@ def formal_operator(operator, monkeypatch):
     runtime_pins = {key: str(index) * 64 for index, key in enumerate((
         "q_fit_digest", "q_seal_digest", "runtime_config_sha256", "deployment_config_sha256"), 1)}
     op.bound.update(runtime_pins)
-    qualification_profile = campaign.read_profile(policy="probe", qualification=True)
+    qualification_profile = online_plan.read_profile(policy="probe", qualification=True)
     qualification_profile.update(target_assignment_count=20, max_games_attempted=80)
-    qualified = campaign.canonical_plan(
-        campaign.pilot_plan(qualification_profile), op.head, op.bound, profile=qualification_profile)
+    qualified = online_plan.canonical_plan(
+        online_plan.pilot_plan(qualification_profile), op.head, op.bound, profile=qualification_profile)
     assert len(qualified.ordered_seed_pool) == 80
     probe_bound = {**op.bound, "source_commit": op.head,
-                   "pilot_plan": campaign.pilot_plan(qualification_profile).to_record(),
+                   "pilot_plan": online_plan.pilot_plan(qualification_profile).to_record(),
                    "canonical_game_plan": qualified.to_record(),
                    "paths": {key: op.profile[key] for key in (
                        "plan", "game_plan", "work_directory", "destination")}}
@@ -268,8 +264,8 @@ def formal_operator(operator, monkeypatch):
         Path(probe_bound["paths"]["work_directory"]) / "run_inputs.json")
     # Durable artifact admission is tested separately with the real journal.
     # Here its verified output enters the production prepare/exclusion path.
-    monkeypatch.setattr(campaign, "probe_qualification_inputs", lambda _: (probe_bound, None))
-    write(campaign.PROBE_PROFILES["formal"], profile)
+    monkeypatch.setattr(preflight, "probe_qualification_inputs", lambda _: (probe_bound, None))
+    write(online_plan.PROBE_PROFILES["formal"], profile)
     git(op.repo, "add", "configs/phase2/online-probe-formal-v1.json")
     git(op.repo, "commit", "-qm", "synthetic frozen formal profile")
     return SimpleNamespace(op=op, profile=profile, qualified=qualified,
@@ -279,18 +275,18 @@ def formal_operator(operator, monkeypatch):
 def test_frozen_formal_prepare_uses_existing_v3_admission_and_excludes_full_pool(formal_operator):
     f = formal_operator
     result = campaign.prepare(f.profile, source_commit=f.head)
-    game = canonical.collection_plan_from_record(campaign.read_json(f.profile["game_plan"]))
+    game = canonical.collection_plan_from_record(online_plan.read_json(f.profile["game_plan"]))
     assert result["status"] == "FROZEN" and result["seed_pool_size"] == 800
     assert game.source_revision == f.head
     assert game.ordered_seed_pool == f.op.collection.derive_seed_pool(f.profile["pilot_id"], 800)
-    assert f.op.server.load_online_plan(f.profile["plan"], "pilot").target_assignment_count == 200
-    _, _, _, excluded = campaign.probe_inputs(f.profile)
-    v3 = [old for old in excluded if old.collection_id == campaign.PROBE_NAMES["qualification"]]
+    assert online_plan.load_online_plan(f.profile["plan"], "pilot").target_assignment_count == 200
+    _, _, _, excluded = preflight.probe_inputs(f.profile)
+    v3 = [old for old in excluded if old.collection_id == online_plan.PROBE_NAMES["qualification"]]
     assert v3 == [f.qualified] and len(v3[0].ordered_seed_pool) == 80
     assert len(excluded) == 4  # Terminal formal, V1, V2, and V3 exactly once.
     assert all(set(game.ordered_seed_pool).isdisjoint(old.ordered_seed_pool) for old in excluded)
     assert all(count == 0 for count in result["seed_overlap_counts"].values())
-    assert result["seed_overlap_counts"][campaign.PROBE_NAMES["qualification"]] == 0
+    assert result["seed_overlap_counts"][online_plan.PROBE_NAMES["qualification"]] == 0
 
 
 def test_formal_prepare_rejects_even_unexecuted_last_v3_planned_seed(formal_operator, monkeypatch):
@@ -321,7 +317,7 @@ def test_overlap_is_rejected_without_reroll_or_plan_publication(operator, monkey
 @pytest.mark.parametrize("fault", ["missing", "unbound", "wrong_digest", "reuse_path"])
 def test_v3_prepare_requires_bound_prior_exclusions_and_preserves_evidence(operator, version, fault):
     op = operator
-    old_profile = campaign.read_json(op.repo / f"configs/phase2/online-probe-qualification-{version}.json")
+    old_profile = online_plan.read_json(op.repo / f"configs/phase2/online-probe-qualification-{version}.json")
     old_bytes = Path(old_profile["game_plan"]).read_bytes()
     index = next(i for i, item in enumerate(op.profile["excluded_game_plans"])
                  if item["path"] == old_profile["game_plan"])
@@ -350,7 +346,7 @@ def test_existing_server_parser_receives_frozen_probe_identity_and_only_requeste
     assert args.game_plan == Path(op.profile["game_plan"])
     assert args.resume is (command == "resume")
     assert args.preflight_only is (command == "preflight")
-    assert op.server.load_online_plan(args.plan, args.campaign_purpose) == campaign.pilot_plan(op.profile)
+    assert online_plan.load_online_plan(args.plan, args.campaign_purpose) == online_plan.pilot_plan(op.profile)
     assert args.mapper_manifest_digest == op.bound["mapper_manifest_digest"]
     assert args.reference_tables_digest == op.bound["reference_tables_digest"]
 
@@ -370,7 +366,7 @@ def test_cli_run_rejects_invalid_bindings_before_server_execution(operator, monk
         git(op.repo, "add", ".")
         git(op.repo, "commit", "-qm", "changed protocol")
     else:
-        raw = campaign.read_json(op.profile["excluded_game_plans"][0]["path"])
+        raw = online_plan.read_json(op.profile["excluded_game_plans"][0]["path"])
         raw["source_revision"] = "f" * 40
         write(op.profile["excluded_game_plans"][0]["path"], raw)
     assert campaign.main(["run", "qualification", "--policy", "probe"]) == 1
@@ -400,12 +396,12 @@ def test_status_reads_real_partial_probe_ledger_without_writes_or_rescheduling(o
     campaign.prepare(op.profile, source_commit=op.head)
     assert campaign.status(op.profile)["status"] == "NOT_STARTED"
     work = Path(op.profile["work_directory"])
-    bound = {"source_commit": op.head, "pilot_plan": campaign.pilot_plan(op.profile).to_record(),
+    bound = {"source_commit": op.head, "pilot_plan": online_plan.pilot_plan(op.profile).to_record(),
              "paths": {"work_directory": str(work), "destination": op.profile["destination"]}}
-    bound["inputs_digest"] = campaign.digest(bound)
+    bound["inputs_digest"] = online_plan.digest(bound)
     write(work / "run_inputs.json", bound)
     ledger = OnlinePilotAssignmentLedgerV1(work / "assignment-ledger.jsonl",
-        plan=campaign.pilot_plan(op.profile), source_commit=op.head)
+        plan=online_plan.pilot_plan(op.profile), source_commit=op.head)
     _, assignment = frozen_assignment(count=2, cap=5)
     # The authoritative constructor verifies this assignment against this plan;
     # use the same frozen randomization seed but the operator campaign identity.
@@ -446,13 +442,13 @@ def test_prepare_never_overwrites_or_reuses_existing_campaign_paths(operator, ex
 
 def test_formal_prepare_requires_frozen_probe_qualification_admission(operator):
     op = operator
-    formal = campaign.read_profile(policy="probe", qualification=False)
+    formal = online_plan.read_profile(policy="probe", qualification=False)
     formal.update(planning_status="FROZEN", assignment_seed=19,
                   target_assignment_count=3, max_games_attempted=6,
                   excluded_game_plans=op.profile["excluded_game_plans"])
     for name in ("plan", "game_plan", "work_directory"):
         formal[name] = str(op.repo.parent / ("formal-probe-" + name))
-    formal["destination"] = str(op.repo.parent / campaign.PROBE_NAMES["pilot"])
+    formal["destination"] = str(op.repo.parent / online_plan.PROBE_NAMES["pilot"])
     formal["probe_qualification"].update(manifest_digest=None, inputs_digest=None)
     with pytest.raises(ValueError, match="Probe qualification digests are not frozen"):
         campaign.prepare(formal, source_commit=op.head)
@@ -464,7 +460,7 @@ def test_explicit_source_commit_required_and_unfrozen_status_remains_read_only(o
     op = operator
     assert campaign.main(["prepare", "qualification", "--policy", "probe"]) == 1
     assert not Path(op.profile["plan"]).exists()
-    unfrozen = campaign.read_profile(policy="probe", qualification=False)
+    unfrozen = online_plan.read_profile(policy="probe", qualification=False)
     result = campaign.status(unfrozen)
     assert result["status"] == "NOT_STARTED"
     assert result["remaining_target"] == 200

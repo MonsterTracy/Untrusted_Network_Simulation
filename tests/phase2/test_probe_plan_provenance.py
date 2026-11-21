@@ -16,9 +16,8 @@ import pytest
 from tests.canonical_collection.test_attempt_ledger import _plan
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
-from werewolf.interventions.online.plan import (
-    PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
-)
+from werewolf.interventions.online import plan as online_plan, preflight
+from werewolf.interventions.online.plan import Phase2OnlineProbePilotPlanV1
 from werewolf.interventions.online.preflight import verify_probe_plan_provenance
 from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
 
@@ -114,13 +113,12 @@ def server_input_scope():
     # server import assembly. All tests terminate before runtime construction.
     source = ast.parse(Path("werewolf/interventions/online/server.py").read_text())
     definitions = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                   and node.name in ("_read_json", "load_online_plan", "_require_package_source",
-                                     "load_server_inputs", "execute_server_campaign")]
+                   and node.name in ("_require_package_source", "load_server_inputs",
+                                     "execute_server_campaign")]
     scope = dict(
         os=os, Path=Path, shutil=shutil, re=re, json=json, ExitStack=ExitStack,
-        PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
         Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
-        Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1,
+        load_online_plan=online_plan.load_online_plan, read_run_json=online_plan.read_run_json,
         collection_plan_from_record=collection_plan_from_record,
         verify_probe_plan_provenance=verify_probe_plan_provenance,
     )
@@ -162,8 +160,7 @@ def server_args(tmp_path, repo, plan, game_plan, profile):
         ordered_seed_pool=(11, 12, 13, 14), target_canonical_success_count=2,
         environment_provenance=provenance,
     )
-    from scripts.phase2_online_campaign import PROBE_PROFILES
-    profile_path = repo / "configs/phase2" / PROBE_PROFILES[purpose].name
+    profile_path = repo / "configs/phase2" / online_plan.PROBE_PROFILES[purpose].name
     profile_path.parent.mkdir(parents=True)
     profile_path.write_bytes(canonical_json_bytes(profile))
     plan_path.write_bytes(canonical_json_bytes(plan.to_record()))
@@ -173,7 +170,6 @@ def server_args(tmp_path, repo, plan, game_plan, profile):
 
 def shared_admission_fixture(monkeypatch, args, profile, *, calls, rejection=None):
     """Isolate qualified external evidence, retaining the actual server guard."""
-    from scripts import phase2_online_campaign as campaign
     qualified = {key: getattr(args, key) for key in (
         "mapper_manifest_digest", "reference_tables_digest", "smoke_v3_manifest_digest")}
     qualified["q_python"] = str(Path(args.q_python).resolve())
@@ -195,11 +191,11 @@ def shared_admission_fixture(monkeypatch, args, profile, *, calls, rejection=Non
         assert head == SOURCE_COMMIT and bound == qualified
         return game
 
-    monkeypatch.setattr(campaign, "probe_inputs", probe_inputs)
-    monkeypatch.setattr(campaign, "canonical_plan", canonical_plan)
+    monkeypatch.setattr(preflight, "probe_inputs", probe_inputs)
+    monkeypatch.setattr(online_plan, "canonical_plan", canonical_plan)
     # Preserve checked_seed_overlaps itself. Its independent frozen-data
     # lookup is isolated, while excluded-plan intersections stay real.
-    monkeypatch.setattr(campaign, "seed_overlaps", lambda seeds, pins, bound: {"development": 0})
+    monkeypatch.setattr(online_plan, "seed_overlaps", lambda seeds, pins, bound: {"development": 0})
     return qualified
 
 
@@ -258,6 +254,7 @@ def test_actual_input_loader_reaches_config_only_after_valid_probe_guard(
     shared_admission_fixture(monkeypatch, args, profile, calls=calls)
     scope["normalize_runtime_config"] = lambda value: value
     scope["yaml"] = SimpleNamespace(safe_load=lambda value: value)
+    monkeypatch.setitem(sys.modules, "scripts.phase2_online_campaign", None)
     # The next production input is intentionally absent. This proves the
     # valid binding is accepted without assembling any model or runtime.
     with pytest.raises(FileNotFoundError):
@@ -318,8 +315,7 @@ def test_raw_server_cli_paths_must_equal_frozen_profile(
     )
     args.game_plan.write_bytes(canonical_json_bytes(game_plan.to_record()))
     purpose_name = "qualification" if purpose == "qualification" else "formal"
-    from scripts.phase2_online_campaign import PROBE_PROFILES
-    (repo / "configs/phase2" / PROBE_PROFILES[purpose_name].name).write_bytes(canonical_json_bytes(profile))
+    (repo / "configs/phase2" / online_plan.PROBE_PROFILES[purpose_name].name).write_bytes(canonical_json_bytes(profile))
     calls = []
     shared_admission_fixture(monkeypatch, args, profile, calls=calls)
     scope = server_input_scope

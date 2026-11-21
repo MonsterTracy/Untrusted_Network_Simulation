@@ -4,9 +4,7 @@ No server assembly, language dispatch, simulator step, or package shims.
 """
 import ast
 from copy import deepcopy
-import json
 from pathlib import Path
-import re
 
 import pytest
 
@@ -21,8 +19,7 @@ from werewolf.canonical_collection.trajectory_evidence import (
 from werewolf.interventions.actions import Action, context_from_pre
 from werewolf.interventions.decision_opportunity import build_phase2_decision_opportunity
 from werewolf.interventions.online.plan import (
-    PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
-    probe_opportunity_from_record,
+    Phase2OnlineProbePilotPlanV1, load_online_plan, probe_opportunity_from_record, read_run_json,
 )
 from werewolf.interventions.treatment import build_phase2_treatment
 from werewolf.interventions.offline import classify_outcome
@@ -31,34 +28,31 @@ from werewolf.interventions.offline import classify_outcome
 @pytest.fixture
 def server():
     source = ast.parse(Path("werewolf/interventions/online/server.py").read_text())
-    nodes = [node for node in source.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-             and node.name in ("_read_json", "load_online_plan", "ServerRuntimeFactory")]
-    scope = dict(json=json, Path=Path, re=re, canonical_json_bytes=canonical_json_bytes,
+    nodes = [node for node in source.body if isinstance(node, ast.ClassDef)
+             and node.name == "ServerRuntimeFactory"]
+    scope = dict(Path=Path, read_run_json=read_run_json, canonical_json_bytes=canonical_json_bytes,
                  sha256_bytes=sha256_bytes, classify_outcome=classify_outcome,
                  _prefix_from_record=_prefix_from_record,
                  _backend_call_from_record=_backend_call_from_record,
                  freeze_public_event_history=freeze_public_event_history,
-                 probe_opportunity_from_record=probe_opportunity_from_record,
-                 PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
-                 Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
-                 Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1)
+                 probe_opportunity_from_record=probe_opportunity_from_record)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "werewolf/interventions/online/server.py", "exec"), scope)
     return scope
 
 
 @pytest.mark.parametrize("purpose", ["qualification", "pilot"])
-def test_same_server_loader_accepts_explicit_probe_plan_without_old_fixed_n(server, tmp_path, purpose):
+def test_same_server_loader_accepts_explicit_probe_plan_without_old_fixed_n(tmp_path, purpose):
     plan = Phase2OnlineProbePilotPlanV1("local-fixture", 11, 3, 9, campaign_purpose=purpose)
     path = tmp_path / "plan.json"
     path.write_bytes(canonical_json_bytes(plan.to_record()))
-    assert server["load_online_plan"](path, purpose) == plan
+    assert load_online_plan(path, purpose) == plan
     with pytest.raises(ValueError):
-        server["load_online_plan"](path, "pilot" if purpose == "qualification" else "qualification")
+        load_online_plan(path, "pilot" if purpose == "qualification" else "qualification")
     raw = plan.to_record()
     raw["target_assignment_count"] = None
     path.write_bytes(canonical_json_bytes(raw))
     with pytest.raises(ValueError):
-        server["load_online_plan"](path, purpose)
+        load_online_plan(path, purpose)
 
 
 def canonical_stage(success=True, *, treatment_override=None, assignment_id="a" * 64):

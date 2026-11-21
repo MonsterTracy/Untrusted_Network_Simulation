@@ -53,7 +53,7 @@ def literal_constants(path, names):
 def resumed_inputs(server_input_scope, tmp_path, monkeypatch):
     scope = server_input_scope
     repo, plan, _, profile = probe_inputs(tmp_path)
-    from scripts.phase2_online_campaign import PROBE_PROFILES
+    from werewolf.interventions.online.plan import PROBE_PROFILES
 
     args = SimpleNamespace(
         repo=repo, plan=tmp_path / "pilot-plan.json", game_plan=tmp_path / "game-plan.json",

@@ -3,28 +3,26 @@
 All experiments here are fictional deterministic fixtures. The production
 runner, ledger, dataset builder, artifact publisher and admission validator
 are exercised; these tests do not certify real canonical gameplay evidence.
-Only optional server import assembly and clean-Git source lookup are isolated.
+Only the runtime fixture and clean-Git source lookup are isolated.
 """
 
-import ast
 from dataclasses import replace
 import json
 from pathlib import Path
-import re
 from types import SimpleNamespace
 
 import pytest
 
-from scripts import phase2_online_campaign as campaign
 from tests.canonical_collection.test_attempt_ledger import _plan
 from tests.phase2.test_probe_policy_runner import canonical_pre, fixture, next_pre, observe, pre, runtime
 from werewolf.artifact_io import (
     canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes,
 )
+from werewolf.interventions.online import plan as online_plan, preflight
 from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
 from werewolf.interventions.actions import context_from_pre
 from werewolf.interventions.online.plan import (
-    PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
+    Phase2OnlineProbePilotPlanV1,
     ProbeStrategy, assign_probe_strategy, select_probe_candidate,
 )
 from werewolf.interventions.online.preflight import SOURCE_FILES
@@ -35,29 +33,8 @@ from werewolf.interventions.online.pilot_dataset import (
 
 
 SOURCE_COMMIT = "a" * 40
-NAME = campaign.PROBE_NAMES["qualification"]
+NAME = online_plan.PROBE_NAMES["qualification"]
 PROTOCOL_DIGEST = sha256_bytes(b"immutable fixture protocol")
-
-
-@pytest.fixture
-def admission():
-    scope = dict(campaign.__dict__)
-    server = ast.parse(Path("werewolf/interventions/online/server.py").read_text())
-    definitions = [node for node in server.body if isinstance(node, ast.FunctionDef)
-                   and node.name in ("_read_json", "load_online_plan")]
-    scope.update(re=re, PROBE_PLAN_VERSION=PROBE_PLAN_VERSION,
-                 Phase2OnlineProbePilotPlanV1=Phase2OnlineProbePilotPlanV1,
-                 Phase2OnlineTerminalPilotPlanV1=Phase2OnlineTerminalPilotPlanV1)
-    exec(compile(ast.Module(body=definitions, type_ignores=[]),
-                 "werewolf/interventions/online/server.py", "exec"), scope)
-    source = ast.parse(Path("scripts/phase2_online_campaign.py").read_text())
-    definition = next(node for node in source.body if isinstance(node, ast.FunctionDef)
-                      and node.name == "probe_qualification_inputs")
-    definition.body = [node for node in definition.body if not (
-        isinstance(node, ast.ImportFrom) and node.module == "werewolf.interventions.online.server")]
-    exec(compile(ast.Module(body=[definition], type_ignores=[]),
-                 "scripts/phase2_online_campaign.py", "exec"), scope)
-    return scope["probe_qualification_inputs"]
 
 
 def qualification_journal(runtime, monkeypatch, tmp_path, *, invalid_probe=False,
@@ -165,7 +142,7 @@ def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
         "canonical_game_plan": game_plan.to_record(),
         "paths": {"work_directory": str(work), "destination": str(destination)},
     }
-    bound["inputs_digest"] = campaign.digest(bound)
+    bound["inputs_digest"] = online_plan.digest(bound)
     run_inputs = work / "run_inputs.json"
     run_inputs.write_bytes(canonical_json_bytes(bound))
     source = {"commit": SOURCE_COMMIT, "branch": "twd/mainline",
@@ -223,22 +200,21 @@ def qualification_evidence(runtime, monkeypatch, tmp_path, *, mutation=None,
         "artifact": str(destination), "run_inputs": str(run_inputs),
         "manifest_digest": artifact.manifest_digest, "inputs_digest": bound["inputs_digest"],
     }}
-    import werewolf.interventions.online.preflight as preflight
     monkeypatch.setattr(preflight, "freeze_online_source_provenance", lambda repo: source)
     return SimpleNamespace(f=f, profile=profile, bound=bound, artifact=artifact,
                            source=source, run_inputs=run_inputs)
 
 
 def test_complete_two_strategy_artifacts_admitted_independently_of_outcomes(
-        admission, runtime, monkeypatch, tmp_path):
-    formal_profile = campaign.read_profile(policy="probe")
-    formal_plan = campaign.pilot_plan(formal_profile).to_record()
+        runtime, monkeypatch, tmp_path):
+    formal_profile = online_plan.read_profile(policy="probe")
+    formal_plan = online_plan.pilot_plan(formal_profile).to_record()
     gates, assignments, consequences = [], [], []
     for ordinal, (exiled_player, winner) in enumerate(
             (("player2", "Werewolf"), ("player1", "Villager"))):
         evidence = qualification_evidence(runtime, monkeypatch, tmp_path / str(ordinal),
             exiled_player=exiled_player, winner=winner)
-        bound, artifact = admission(evidence.profile)
+        bound, artifact = preflight.probe_qualification_inputs(evidence.profile)
         assert bound == evidence.bound
         assert artifact.manifest_digest == evidence.artifact.manifest_digest
         assert evidence.f.ledger.snapshot()["assignment_count"] == 2
@@ -246,10 +222,10 @@ def test_complete_two_strategy_artifacts_admitted_independently_of_outcomes(
         assert json.loads((artifact.path / "metrics/support.json").read_bytes())["estimator_eligible"] is False
         records = [s["STRATEGY_STAGE"]["record"]
                    for s in evidence.f.ledger.snapshot()["games"].values()]
-        gates.append(campaign.probe_qualification_gate(records, complete=evidence.f.ledger.sealable()))
+        gates.append(preflight.probe_qualification_gate(records, complete=evidence.f.ledger.sealable()))
         assignments.append([record["assignment"] for record in records])
         consequences.append([record["day_consequence"] for record in records])
-        assert campaign.pilot_plan(campaign.read_profile(policy="probe")).to_record() == formal_plan
+        assert online_plan.pilot_plan(online_plan.read_profile(policy="probe")).to_record() == formal_plan
     assert gates[0] == gates[1] and gates[0]["passed"] is True
     assert assignments[0] == assignments[1]
     assert {row["Y"] for row in consequences[0]} != {row["Y"] for row in consequences[1]}
@@ -257,9 +233,9 @@ def test_complete_two_strategy_artifacts_admitted_independently_of_outcomes(
 
 
 def test_endpoint_complete_qualification_is_admitted_without_secondary_game_results(
-        admission, runtime, monkeypatch, tmp_path):
+        runtime, monkeypatch, tmp_path):
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path, tail_interruption=True)
-    bound, artifact = admission(evidence.profile)
+    bound, artifact = preflight.probe_qualification_inputs(evidence.profile)
     assert bound == evidence.bound
     assert artifact.manifest_digest == evidence.artifact.manifest_digest
     stages = evidence.f.ledger.snapshot()["games"].values()
@@ -275,10 +251,10 @@ def test_endpoint_complete_qualification_is_admitted_without_secondary_game_resu
     "ledger_digest", "support_incomplete",
 ])
 def test_valid_outer_artifact_digest_cannot_hide_ledger_or_table_mismatch(
-        admission, runtime, monkeypatch, tmp_path, mutation):
+        runtime, monkeypatch, tmp_path, mutation):
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path, mutation=mutation)
     with pytest.raises(ValueError, match="differs from ledger|ledger/population"):
-        admission(evidence.profile)
+        preflight.probe_qualification_inputs(evidence.profile)
 
 
 @pytest.mark.parametrize("mutation", [
@@ -286,7 +262,7 @@ def test_valid_outer_artifact_digest_cannot_hide_ledger_or_table_mismatch(
     "incomplete_ledger", "ledger_bytes",
 ])
 def test_admission_fails_closed_on_artifact_inputs_source_protocol_and_journal_drift(
-        admission, runtime, monkeypatch, tmp_path, mutation):
+        runtime, monkeypatch, tmp_path, mutation):
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path)
     if mutation == "artifact_bytes":
         (evidence.artifact.path / "executions.jsonl").write_bytes(b"{}\n")
@@ -309,11 +285,11 @@ def test_admission_fails_closed_on_artifact_inputs_source_protocol_and_journal_d
         with evidence.f.ledger.path.open("ab") as file:
             file.write(b"{")
     with pytest.raises(ValueError):
-        admission(evidence.profile)
+        preflight.probe_qualification_inputs(evidence.profile)
 
 
 def test_complete_language_invalid_probe_does_not_satisfy_t3_qualification_gate(
-        admission, runtime, monkeypatch, tmp_path):
+        runtime, monkeypatch, tmp_path):
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path, invalid_probe=True)
     assert evidence.f.ledger.sealable()
     snapshot = evidence.f.ledger.snapshot()["games"]["game-1"]
@@ -321,15 +297,15 @@ def test_complete_language_invalid_probe_does_not_satisfy_t3_qualification_gate(
     assert snapshot["EXECUTION"]["execution"]["success"] is False
     assert "CONSEQUENCE" in snapshot and "GAME_RESULT" in snapshot
     with pytest.raises(ValueError, match="mechanism gate failed"):
-        admission(evidence.profile)
+        preflight.probe_qualification_inputs(evidence.profile)
 
 
 def test_formal_admission_rejects_old_v1_qualification_identity(
-        admission, runtime, monkeypatch, tmp_path):
+        runtime, monkeypatch, tmp_path):
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path,
                                        mutation="old_qualification_identity")
     with pytest.raises(ValueError, match="Probe qualification provenance differs"):
-        admission(evidence.profile)
+        preflight.probe_qualification_inputs(evidence.profile)
 
 
 @pytest.mark.parametrize("mutation,reason", [
@@ -340,11 +316,11 @@ def test_formal_admission_rejects_old_v1_qualification_identity(
     ("population_count", "Probe qualification ledger/population differs"),
 ])
 def test_verified_artifact_must_remain_complete_and_match_source_plan_population(
-        admission, runtime, monkeypatch, tmp_path, mutation, reason):
+        runtime, monkeypatch, tmp_path, mutation, reason):
     evidence = qualification_evidence(runtime, monkeypatch, tmp_path, mutation=mutation)
     assert evidence.f.ledger.sealable()
     with pytest.raises(ValueError, match=reason):
-        admission(evidence.profile)
+        preflight.probe_qualification_inputs(evidence.profile)
 
 
 @pytest.mark.parametrize("fault", [None, "protocol", "profile", "missing_pins"])
@@ -369,7 +345,7 @@ def test_actual_v3_publisher_exclusive_and_preserves_analysis_provenance(
         source_commit_pin=SOURCE_COMMIT, reference_tables_digest_pin=f.pilot.reference_artifact_digest)
     pins = {"probe_policy_protocol_sha256": sha256_bytes(
                 Path("docs/research/phase2-probe-policy-protocol-v1.md").read_bytes()),
-            "probe_campaign_profile_digest": campaign.digest({"synthetic_profile": f.pilot.plan.to_record()})}
+            "probe_campaign_profile_digest": online_plan.digest({"synthetic_profile": f.pilot.plan.to_record()})}
     if fault == "missing_pins":
         pins = {}
     elif fault == "protocol":

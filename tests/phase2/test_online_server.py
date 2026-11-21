@@ -26,7 +26,7 @@ from tests.phase2.test_online_ledger import _game_assignment
 from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
 from werewolf.canonical_collection.attempt_ledger import construct_collection_plan
 from werewolf.interventions.mapper.final_fit import FINAL_VERSION
-from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1
+from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1, read_run_json
 from werewolf.interventions.online.records import Phase2OnlineInterventionRecordV1, record_online_execution
 from werewolf.interventions.outcome import reference_tables_digest
 import werewolf.interventions.mapper.runtime as mapper_module
@@ -223,7 +223,8 @@ def test_full_preflight_only_has_no_game_assignment_inference_or_campaign_files(
 
 @pytest.mark.parametrize("bad_source", [False, True])
 def test_gameplay_smoke_gate_and_source_share_one_read(tmp_path, monkeypatch, bad_source):
-    from scripts import collect_games, phase2_online_campaign, qwen3_gameplay_predictor
+    from scripts import collect_games, qwen3_gameplay_predictor
+    from werewolf.interventions.online import preflight
     from werewolf.interventions import gameplay_server, offline
 
     args, _, _, _ = _setup(tmp_path, monkeypatch)
@@ -252,7 +253,7 @@ def test_gameplay_smoke_gate_and_source_share_one_read(tmp_path, monkeypatch, ba
     plan = {"purpose": "qualification", "runtime_inputs": bound, "source": source,
             "game_plan": game_plan.to_record(), "exclusions": excluded, "randomized_games": 2}
     monkeypatch.setattr(gameplay_server, "freeze_source", lambda _: source)
-    monkeypatch.setattr(phase2_online_campaign, "qualification_inputs", lambda: (
+    monkeypatch.setattr(preflight, "qualification_inputs", lambda: (
         None, {**bound, "canonical_game_plan": excluded[0]}, SimpleNamespace(manifest_digest=qualification_digest)))
     monkeypatch.setattr(gameplay_server, "verify_q_static", lambda *_: None)
     monkeypatch.setattr(collect_games, "model_manifest",
@@ -325,7 +326,7 @@ def test_wrong_frozen_input_fails_before_worker_or_language(tmp_path, monkeypatc
         _git(args.repo, "add", "werewolf/interventions/language/semantics.py")
         _git(args.repo, "commit", "-qm", "changed language bytes")
         args.source_commit = _git(args.repo, "rev-parse", "HEAD")
-        game = server._read_json(args.game_plan)
+        game = read_run_json(args.game_plan)
         from werewolf.canonical_collection.attempt_ledger import collection_plan_from_record
         prior = collection_plan_from_record(game)
         fields = {key: value for key, value in game.items() if key not in (
@@ -459,7 +460,7 @@ def test_resume_rejects_changed_binding_and_leaves_ledger_unchanged(tmp_path, mo
         server.execute_server_campaign(args)
     ledger_path = args.work_directory / "assignment-ledger.jsonl"
     before = ledger_path.read_bytes()
-    raw = server._read_json(args.work_directory / "run_inputs.json")
+    raw = read_run_json(args.work_directory / "run_inputs.json")
     raw["q_python"] = "different"
     (args.work_directory / "run_inputs.json").write_bytes(canonical_json_bytes(raw))
     args.resume = True

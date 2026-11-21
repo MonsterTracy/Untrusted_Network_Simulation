@@ -49,7 +49,8 @@ def prepare(args):
     if args.source_commit != source["commit"]:
         raise ValueError("prepare source differs from the explicit clean commit")
     from scripts.collect_games import derive_seed_pool, plan_fields
-    from scripts.phase2_online_campaign import qualification_inputs, seed_overlaps
+    from werewolf.interventions.online.plan import seed_overlaps
+    from werewolf.interventions.online.preflight import qualification_inputs
     pins, bound, qualified = qualification_inputs()
     excluded = []
     for pin in exclusion_pins:

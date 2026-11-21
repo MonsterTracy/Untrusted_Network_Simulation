@@ -33,8 +33,7 @@ from werewolf.interventions.mapper.runtime import load_runtime_mapper
 from werewolf.interventions.offline import build_development_layer, classify_outcome
 from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
 from werewolf.interventions.online.plan import (
-    PROBE_PLAN_VERSION, Phase2OnlineProbePilotPlanV1, Phase2OnlineTerminalPilotPlanV1,
-    probe_opportunity_from_record,
+    Phase2OnlineProbePilotPlanV1, load_online_plan, probe_opportunity_from_record, read_run_json,
 )
 from werewolf.interventions.online.preflight import (
     FrozenArtifactRequirement, _smoke_v3_gate, assess_pilot_preflight,
@@ -55,17 +54,6 @@ from scripts.qwen3_gameplay_predictor import Qwen3GameplayPredictorClient, FIT_D
 INPUT_VERSION = "phase2_online_server_inputs_v1"
 
 
-def _read_json(path):
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON key: {key}")
-            result[key] = value
-        return result
-    return json.loads(Path(path).read_bytes(), object_pairs_hook=unique)
-
-
 def _publish_json(path, record):
     """Reuse the canonical durable no-replace primitive for running inputs/claims."""
     ensure_durable_directory(path.parent)
@@ -73,24 +61,6 @@ def _publish_json(path, record):
     ensure_durable_directory(staging)
     _publish_bytes_noreplace(staging_directory=staging, final_path=path,
                            durable_directory=path.parent, data=canonical_json_bytes(record))
-
-
-def load_online_plan(path, purpose):
-    raw = _read_json(path)
-    if raw.get("schema_version") == PROBE_PLAN_VERSION:
-        fields = ("pilot_id", "assignment_seed", "campaign_purpose", "target_assignment_count",
-                  "candidate_selection_rule", "selection_status", "max_games_attempted")
-        plan = Phase2OnlineProbePilotPlanV1(**{name: raw[name] for name in fields})
-    else:
-        fields = ("pilot_id", "assignment_seed", "campaign_purpose", "push_probability",
-                  "candidate_selection_rule", "selection_status", "max_games_attempted")
-        plan = Phase2OnlineTerminalPilotPlanV1(**{name: raw[name] for name in fields})
-    if raw != plan.to_record() or plan.campaign_purpose != purpose:
-        raise ValueError("campaign purpose or frozen Pilot-T plan differs")
-    for identity in (plan.pilot_id,):
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", identity) or ".." in identity:
-            raise ValueError("campaign id must be one safe path component")
-    return plan
 
 
 def _require_package_source(repo):
@@ -137,13 +107,13 @@ def load_server_inputs(args):
     source = freeze_online_source_provenance(args.repo)
     if source is None or source["commit"] != args.source_commit:
         raise ValueError("tracked source/index must be clean at the preregistered source commit")
-    game_plan = collection_plan_from_record(_read_json(args.game_plan))
+    game_plan = collection_plan_from_record(read_run_json(args.game_plan))
     if isinstance(plan, Phase2OnlineProbePilotPlanV1):
-        from scripts.phase2_online_campaign import (
-            PROBE_PROFILES, probe_inputs, canonical_plan, checked_seed_overlaps,
-        )
+        from werewolf.interventions.online.plan import PROBE_PROFILES, canonical_plan, checked_seed_overlaps
+        from werewolf.interventions.online.preflight import probe_inputs
+
         purpose = "qualification" if plan.campaign_purpose == "qualification" else "formal"
-        profile = _read_json(args.repo / "configs/phase2" / PROBE_PROFILES[purpose].name)
+        profile = read_run_json(args.repo / "configs/phase2" / PROBE_PROFILES[purpose].name)
         verify_probe_plan_provenance(args.repo, plan, game_plan, profile)
         # Raw server CLI and operator CLI share the same admission/overlap checks.
         pins, qualified, _, excluded = probe_inputs(profile)
@@ -230,7 +200,7 @@ def load_server_inputs(args):
     if args.resume:
         if (not args.work_directory.is_dir()
                 or not (args.work_directory / "assignment-ledger.jsonl").is_file()
-                or _read_json(args.work_directory / "run_inputs.json") != bound):
+                or read_run_json(args.work_directory / "run_inputs.json") != bound):
             raise ValueError("--resume requires the exact existing campaign inputs and ledger")
     elif os.path.lexists(args.work_directory):
         raise FileExistsError("existing campaign work directory requires explicit --resume")
@@ -255,7 +225,7 @@ class ServerRuntimeFactory:
         ordinal = self.game_ids.index(game_id)
         path = self.work_directory / "claims" / f"{game_id}.json"
         if path.is_file():
-            return _claim_from_record(_read_json(path), self.game_plan)
+            return _claim_from_record(read_run_json(path), self.game_plan)
         claim = construct_attempt_claim(
             self.game_plan, ordinal=ordinal,
             attempt_id=f"attempt-{ordinal:06d}-seed-{self.game_plan.ordered_seed_pool[ordinal]}",

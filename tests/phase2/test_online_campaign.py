@@ -21,7 +21,7 @@ from werewolf.canonical_collection.attempt_ledger import collection_plan_from_re
 from werewolf.interventions.online.ledger import OnlinePilotAssignmentLedgerV1
 from werewolf.interventions.online.plan import Phase2OnlineTerminalPilotPlanV1
 from werewolf.interventions.online.runner import ARTIFACT_NAME, QUALIFICATION_NAME, ARTIFACT_VERSION
-from werewolf.interventions.online import server
+from werewolf.interventions.online import plan as online_plan, preflight, server
 
 
 def write(path, value):
@@ -33,7 +33,7 @@ def write(path, value):
 def setup(tmp_path, monkeypatch):
     args, old_plan, counters, _ = _setup(tmp_path, monkeypatch, purpose="pilot")
     plan = replace(old_plan, pilot_id=ARTIFACT_NAME)
-    profile = {"schema_version": campaign.PROFILE_VERSION, "campaign_purpose": "pilot",
+    profile = {"schema_version": online_plan.PROFILE_VERSION, "campaign_purpose": "pilot",
         "pilot_id": ARTIFACT_NAME, "assignment_seed": plan.assignment_seed,
         "max_games_attempted": plan.max_games_attempted, "target_assignment_count": 120,
         "estimator_eligible": True, **{k: str(getattr(args, k)) for k in
@@ -43,25 +43,25 @@ def setup(tmp_path, monkeypatch):
     paths.update(work_directory=str(tmp_path / "qualification-work"),
                  destination=str(tmp_path / QUALIFICATION_NAME))
     bound = {"paths": paths, "source_commit": args.source_commit,
-        "canonical_game_plan": campaign.read_json(args.game_plan),
+        "canonical_game_plan": online_plan.read_json(args.game_plan),
         **{k: getattr(args, k) for k in ("mapper_manifest_digest", "reference_tables_digest",
                                        "smoke_v3_manifest_digest", "q_python")}}
     bound["canonical_game_plan"]["ordered_seed_pool"] = list(range(801, 841))
     # qualification_inputs is an external artifact seam, tested separately below.
-    monkeypatch.setattr(campaign, "qualification_inputs", lambda: (pins, bound, None))
-    monkeypatch.setattr(campaign, "REPO", args.repo)
-    monkeypatch.setattr(campaign, "PROFILE", args.repo / "configs/phase2/profile.json")
-    monkeypatch.setattr(campaign, "PINS", args.repo / "configs/phase2/pins.json")
+    monkeypatch.setattr(preflight, "qualification_inputs", lambda: (pins, bound, None))
+    monkeypatch.setattr(online_plan, "REPO", args.repo)
+    monkeypatch.setattr(online_plan, "PROFILE", args.repo / "configs/phase2/profile.json")
+    monkeypatch.setattr(preflight, "PINS", args.repo / "configs/phase2/pins.json")
     operator = args.repo / "scripts/phase2_online_campaign.py"
     operator.parent.mkdir(parents=True, exist_ok=True)
     operator.write_bytes(Path(campaign.__file__).read_bytes())
     monkeypatch.setattr(campaign, "__file__", str(operator))
-    write(campaign.PROFILE, profile)
-    write(campaign.PINS, {"test_only": True})
+    write(online_plan.PROFILE, profile)
+    write(preflight.PINS, {"test_only": True})
     _git(args.repo, "add", ".")
     _git(args.repo, "commit", "-qm", "operator profile")
     head = _git(args.repo, "rev-parse", "HEAD")
-    game = campaign.canonical_plan(plan, head, bound)
+    game = online_plan.canonical_plan(plan, head, bound)
     # Reconstruct instead of editing a frozen record/digest.
     from scripts.collect_games import plan_fields
     from werewolf.canonical_collection.attempt_ledger import construct_collection_plan
@@ -74,7 +74,7 @@ def setup(tmp_path, monkeypatch):
     dev_path = tmp_path / "development-plan.json"
     write(dev_path, development.to_record())
     publication = {"collection_plan_digest": development.plan_digest}
-    publication["manifest_digest"] = campaign.digest(publication)
+    publication["manifest_digest"] = online_plan.digest(publication)
     write(Path(paths["publication"]) / "manifest.json", publication)
     pins = {"development_game_plan": str(dev_path), "development_game_plan_digest": development.plan_digest,
             "publication_manifest_digest": publication["manifest_digest"]}
@@ -110,7 +110,7 @@ def test_prepare_exclusive_clean_head_and_untracked_allowed(setup, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result["source_commit"] == head
     assert result["seed_overlap_counts"] == {"qualification": 0, "development": 0, "calibration": 0}
-    game = collection_plan_from_record(campaign.read_json(profile["game_plan"]))
+    game = collection_plan_from_record(online_plan.read_json(profile["game_plan"]))
     from scripts.collect_games import derive_seed_pool
     assert game.source_revision == head
     assert game.ordered_seed_pool == derive_seed_pool(ARTIFACT_NAME, 122)
@@ -150,7 +150,7 @@ def test_seed_overlap_fails_no_reroll(setup, monkeypatch, pool):
     if pool == "qualification":
         seed = bound["canonical_game_plan"]["ordered_seed_pool"][0]
     elif pool == "development":
-        seed = campaign.read_json(pins["development_game_plan"])["ordered_seed_pool"][-1]
+        seed = online_plan.read_json(pins["development_game_plan"])["ordered_seed_pool"][-1]
     else:
         seed = 900000001
     import scripts.collect_games as collection
@@ -195,7 +195,7 @@ def test_resume_uses_exact_bound_inputs_without_rerandomization(setup):
     work.mkdir()
     write(work / "run_inputs.json", bound)
     ledger = OnlinePilotAssignmentLedgerV1(work / "assignment-ledger.jsonl",
-        plan=campaign.pilot_plan(profile), source_commit=head)
+        plan=online_plan.pilot_plan(profile), source_commit=head)
     ledger.start_game("g1")
     assignment = _game_assignment(ledger.plan, "g1")
     ledger.persist_assignment(assignment)
@@ -218,7 +218,7 @@ def test_status_readonly_not_started_and_partial_assignment(setup, monkeypatch):
     work = Path(profile["work_directory"])
     write(work / "run_inputs.json", bound)
     ledger = OnlinePilotAssignmentLedgerV1(work / "assignment-ledger.jsonl",
-        plan=campaign.pilot_plan(profile), source_commit=head)
+        plan=online_plan.pilot_plan(profile), source_commit=head)
     ledger.start_game("g1")
     assigned = _game_assignment(ledger.plan, "g1")
     ledger.persist_assignment(assigned)
@@ -237,7 +237,7 @@ def test_status_readonly_not_started_and_partial_assignment(setup, monkeypatch):
 
 @pytest.mark.parametrize("command", ("prepare", "preflight", "run", "resume"))
 def test_qualification_only_readonly_status(setup, command, monkeypatch):
-    monkeypatch.setattr(campaign, "qualification_inputs", lambda: pytest.fail("no qualification execution"))
+    monkeypatch.setattr(preflight, "qualification_inputs", lambda: pytest.fail("no qualification execution"))
     assert campaign.main([command, "qualification"]) == 1
 
 
@@ -245,7 +245,7 @@ def test_formal_paths_cannot_mutate_qualification(setup):
     profile, bound, *_ = setup
     profile["work_directory"] = str(Path(bound["paths"]["work_directory"]) / "new")
     with pytest.raises(ValueError, match="qualification"):
-        campaign.protect_qualification(profile, bound)
+        preflight.protect_qualification(profile, bound)
 
 
 def test_verified_qualification_pins_and_digest_tamper(tmp_path, monkeypatch):
@@ -262,7 +262,7 @@ def test_verified_qualification_pins_and_digest_tamper(tmp_path, monkeypatch):
         "source_commit": "a" * 40, "paths": {"destination": str(destination), "work_directory": str(work)},
         "mapper_manifest_digest": "b" * 64, "reference_tables_digest": "c" * 64,
         "smoke_v3_manifest_digest": "d" * 64, "q_seal_digest": "e" * 64}
-    bound["inputs_digest"] = campaign.digest(bound)
+    bound["inputs_digest"] = online_plan.digest(bound)
     write(work / "run_inputs.json", bound)
     ledger = OnlinePilotAssignmentLedgerV1(work / "assignment-ledger.jsonl", plan=plan, source_commit="a" * 40)
     for index in range(10):
@@ -284,9 +284,9 @@ def test_verified_qualification_pins_and_digest_tamper(tmp_path, monkeypatch):
     pins = {"schema_version": "phase2_online_campaign_runtime_pins_v1",
         "qualification_artifact": str(destination), "qualification_manifest_digest": artifact.manifest_digest,
         "qualification_run_inputs": str(work / "run_inputs.json"), "qualification_inputs_digest": bound["inputs_digest"]}
-    monkeypatch.setattr(campaign, "PINS", tmp_path / "pins.json")
-    write(campaign.PINS, pins)
-    assert campaign.qualification_inputs()[1] == bound
+    monkeypatch.setattr(preflight, "PINS", tmp_path / "pins.json")
+    write(preflight.PINS, pins)
+    assert preflight.qualification_inputs()[1] == bound
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", "unchanged-for-readonly-status")
     monkeypatch.setattr(OnlinePilotAssignmentLedgerV1, "_append", lambda *_: pytest.fail("readonly"))
@@ -300,4 +300,4 @@ def test_verified_qualification_pins_and_digest_tamper(tmp_path, monkeypatch):
     bound["mapper_manifest_digest"] = "f" * 64
     write(work / "run_inputs.json", bound)
     with pytest.raises(ValueError, match="binding"):
-        campaign.qualification_inputs()
+        preflight.qualification_inputs()

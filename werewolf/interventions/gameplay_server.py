@@ -222,8 +222,7 @@ def server_inputs(plan, repo):
     import yaml
     from scripts.qwen3_gameplay_predictor import FIT_DIGEST, SEAL_DIGEST
     from scripts.collect_games import derive_seed_pool, plan_fields, model_manifest
-    from scripts.phase2_online_campaign import qualification_inputs
-    from werewolf.interventions.online.preflight import _smoke_v3_gate
+    from werewolf.interventions.online.preflight import _smoke_v3_gate, qualification_inputs
     from werewolf.interventions.online.server import _verify_smoke_source
     from werewolf.interventions.mapper.runtime import load_runtime_mapper
     from werewolf.interventions.offline import build_development_layer
