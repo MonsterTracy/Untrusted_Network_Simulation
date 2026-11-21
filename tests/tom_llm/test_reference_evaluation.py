@@ -363,3 +363,268 @@ def test_partial_nu_game_set_never_zero_fills_absent_games(sealed_reference):
     assert result["nu_game_ids"]
     for cell in result["cells"].values():
         assert cell["nu_game_count"] == len(result["nu_game_ids"])
+
+
+def _mock_epoch35():
+    from types import SimpleNamespace
+
+    from werewolf.tom.dataset import ExperimentCapacity
+
+    class MockEpoch35(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+            self.capacity = ExperimentCapacity(1024)
+            self.temporal = SimpleNamespace(day=range(6), artifact_digest="d" * 64)
+            self.graph = {"architecture": "synthetic"}
+            logits = torch.zeros(7, 7)
+            seats = torch.arange(7)
+            logits[seats, seats] = -torch.inf
+            logits[seats, (seats + 1) % 7] = 2
+            self.logp = logits.log_softmax(dim=-1)
+
+        def forward(self, **public):
+            assert torch.is_inference_mode_enabled() and not self.training
+            assert set(public) == {"event_ids", "source_ids", "action_ids", "target_ids",
+                                   "day_ids", "phase_ids", "attention_mask"}
+            assert public["attention_mask"].any()
+            self.calls += 1
+            return self.logp.unsqueeze(0)
+
+    return MockEpoch35().eval()
+
+
+def test_epoch35_v1_comparison_cli_preserves_seals_and_pairs_scores(sealed_reference, tmp_path, monkeypatch, capsys):
+    import json
+
+    from werewolf.artifact_io import canonical_json_bytes, canonical_jsonl_bytes, publish_artifact, sha256_bytes
+    from werewolf.cli import main
+    from werewolf.tom import makto
+    from werewolf.tom.protocol import bootstrap_indices
+    from werewolf.tom_llm import baseline_analysis as analysis, operations
+    from werewolf.tom_llm.common import digest
+    from werewolf.tom_llm.multimodel import COHORT_VERSION
+    from werewolf.tom_llm.multimodel_evaluation import reference_binding
+    from werewolf.tom_llm.policy import POLICY
+    from werewolf.tom_llm.task import VERSION, public_tasks
+
+    ref, publication, evaluation, _ = sealed_reference
+    prefixes = [p for game in publication.public_view.games for p in game.authoritative_pre_prefixes]
+    tasks = public_tasks(prefixes, {g: fold["fold"] for fold in ref.folds for g in fold["held_out_game_ids"]})
+    # 将重复 PRE 的不同观察者分开，检验前向复用和原始请求顺序。
+    tasks = tasks[::2] + tasks[1::2]
+    key_digest = digest([identity(t) for t in tasks])
+    task_digests = [digest(t) for t in tasks]
+    reference = reference_binding(ref)
+    selection = {"game_ids": list(ref.game_ids)}
+    cohort = publish_artifact(tmp_path / "cohort", manifest_fields={
+        "artifact_type": "llm_multimodel_public_cohort", "schema_version": COHORT_VERSION,
+        "task": {"schema_version": VERSION}, "reference": reference, "selection": selection,
+        "requests_digest": digest(tasks), "row_identity_digest": key_digest,
+    }, files={"requests.jsonl": canonical_jsonl_bytes(tasks)})
+
+    def record(path, kind, body):
+        payload = canonical_json_bytes(body)
+        return publish_artifact(path, manifest_fields={"artifact_type": kind,
+            "schema_version": analysis.V1_EXPERIMENT, "record_digest": sha256_bytes(payload)},
+            files={"record.json": payload})
+
+    paths, seals = {}, {}
+    model_spec_digest = "b" * 64
+    historical_source = {"source_revision": analysis.V1_SOURCE_REVISION}
+    for key in analysis.V1_RUN_SEALS:
+        root = tmp_path / key
+        paths[key] = root
+        contract = record(root / "contract", "mm_baseline_experiment", {
+            "source": historical_source, "protocol": {"schema_version": analysis.V1_EXPERIMENT},
+            "run_id": key, "mode": "formal", "models": {key: model_spec_digest},
+            "cohort_root": str(cohort.path), "cohort_digest": cohort.manifest_digest, "selection": selection,
+            "reference": reference, "publication": str(publication.path), "evaluation": str(evaluation),
+            "games": list(ref.game_ids), "game_count": len(ref.game_ids), "request_count": len(tasks),
+            "row_identity_digest": key_digest, "task_digests": task_digests,
+        })
+        indexed = {identity(row): row for row in predictions_for(ref, failure=key == "yi")}
+        rows = [{**indexed[identity(t)], "task_digest": td} for t, td in zip(tasks, task_digests, strict=True)]
+        prediction = record(root / "models" / key / "seal", "mm_baseline_predictions", {
+            "run_digest": contract.manifest_digest, "model": key, "mode": "formal", "formal_result": True,
+            "model_spec_digest": model_spec_digest, "task_digests": task_digests, "rows": rows,
+        })
+        seals[key] = record(root / "seal", "mm_baseline_run_seal", {
+            "mode": "formal", "source": historical_source, "run_digest": contract.manifest_digest,
+            "models": {key: prediction.manifest_digest},
+        }).manifest_digest
+
+    bootstrap = bootstrap_indices(ref.game_ids, 10000, POLICY["bootstrap"]["seed"])
+    nu_count = sum(sum(q > 0 for q in row["q"]) < 6 for row in ref.primary_rows)
+    monkeypatch.setattr(analysis, "V1_RUN_SEALS", seals)
+    monkeypatch.setattr(analysis, "V1_COHORT_DIGEST", cohort.manifest_digest)
+    monkeypatch.setattr(analysis, "V1_PRE_COUNT", len(prefixes))
+    monkeypatch.setattr(analysis, "V1_PRIMARY_COUNT", len(ref.primary_rows))
+    monkeypatch.setattr(analysis, "V1_NU_COUNT", nu_count)
+    monkeypatch.setattr(analysis, "V1_PRIMARY_ROWS_DIGEST", digest([identity(r) for r in ref.primary_rows]))
+    monkeypatch.setattr(analysis, "V1_BOOTSTRAP_DIGEST", sha256_bytes(bootstrap.tobytes()))
+    # 人工封存仅替换正式人口的规模检查，保留真实文件校验和行对齐。
+    monkeypatch.setattr(analysis, "require_formal_cohort", lambda *_: None)
+    current_source = {"source_revision": "c" * 40}
+    monkeypatch.setattr(analysis, "source_identity", lambda: current_source)
+    monkeypatch.setattr(operations, "load_config", lambda *_: pytest.fail("LLM service config must stay closed"))
+    model = _mock_epoch35()
+    loaded = []
+
+    def load_model(checkpoint, temporal):
+        loaded.append((checkpoint, temporal))
+        return model
+
+    def open_after_prediction(*args, **kwargs):
+        assert model.calls == len(prefixes)
+        return open_reference(*args, **kwargs)
+
+    monkeypatch.setattr(makto, "load_epoch35_model", load_model)
+    monkeypatch.setattr(analysis, "open_reference", open_after_prediction)
+    source_files = [p for p in tmp_path.rglob("*") if p.is_file()]
+    before = {p: p.read_bytes() for p in source_files}
+    destination = tmp_path / "paired"
+    args = ["tom-llm", "compare-epoch35", "--checkpoint", str(tmp_path / "checkpoint"),
+            "--temporal", str(tmp_path / "temporal"), "--output", str(destination)]
+    for key, path in paths.items():
+        args.extend(["--sealed-run", f"{key}={path}"])
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["path"] == str(destination)
+    assert loaded == [(tmp_path / "checkpoint", tmp_path / "temporal")]
+    assert {p: p.read_bytes() for p in source_files} == before
+    assert set(p.name for p in destination.iterdir()) == {"manifest.json", "predictions.jsonl", "analysis.json"}
+
+    predicted = [json.loads(line) for line in (destination / "predictions.jsonl").read_bytes().splitlines()]
+    assert [identity(row) for row in predicted] == [identity(t) for t in tasks]
+    assert [row["task_digest"] for row in predicted] == task_digests
+    for row in predicted:
+        seat = row["observer"]
+        assert set(row) == {*analysis.ROW_FIELDS, *analysis.PROBABILITY_FIELDS, "task_digest",
+                            "canonical_shift", "checkpoint_digest", "temporal_condition"}
+        assert row["checkpoint_digest"] == makto.EPOCH35_DIGEST
+        assert row["probability"] == model.logp[seat].exp().tolist()
+        assert row["non_self_log_probability"] == [model.logp[seat, j].item() for j in range(7) if j != seat]
+
+    result = json.loads((destination / "analysis.json").read_bytes())
+    assert result["prediction_source"] == result["analysis_source"] == current_source
+    assert result["v1_runs"]["yi"]["execution_source"] == historical_source
+    assert result["historical_qwen3_oof"] == ref.provenance
+    assert result["failure_counts"]["yi"]["primary_failure_types"] == {"invalid_json": len(ref.primary_rows)}
+    assert result["failure_counts"]["yi"]["public_alive_failure_types"] == {"invalid_json": len(tasks)}
+    assert set(result["cells"]) == {"epoch35", "uniform_non_self", "historical_qwen3_oof", "qwen3", "yi", "mistral"}
+    expected = compare(ref, predictions_for(ref, failure=True), ref.game_ids)
+    assert result["cells"]["yi"]["row_count"] == expected["cells"]["llm"]["row_count"] == len(ref.primary_rows)
+    assert result["cells"]["yi"]["nu_row_count"] == nu_count
+    for metric in ("kl", "tv", "top1_nu"):
+        uniform = result["cells"]["uniform_non_self"][metric]["point"]
+        assert result["cells"]["yi"][metric]["point"] == pytest.approx(uniform)
+        assert uniform == pytest.approx(expected["cells"]["uniform_non_self"][metric]["point"])
+    large = result["cells"]["epoch35"]
+    yi = result["cells"]["yi"]
+    for metric, game_metric in (("kl", "kl"), ("tv", "total_variation")):
+        assert result["paired"]["yi"][metric] == paired_summary(
+            [yi["game_scores"][g][game_metric] for g in ref.game_ids],
+            [large["game_scores"][g][game_metric] for g in ref.game_ids], bootstrap, .95)
+    assert result["paired"]["yi"]["top1_nu"] == paired_summary(
+        [large["nu_game_scores"][g] for g in ref.game_ids], [yi["nu_game_scores"][g] for g in ref.game_ids], bootstrap, .95)
+
+    with pytest.raises(ValueError, match="output exists"):
+        main(args)
+    with pytest.raises(ValueError, match="inside frozen evidence"):
+        analysis.analyze_epoch35_v1(paths, tmp_path / "checkpoint", tmp_path / "temporal", paths["yi"] / "extra")
+    with pytest.raises(ValueError, match="seal/inventory mismatch"):
+        analysis._read_v1_comparison_inputs({**paths, "yi": paths["qwen3"]})
+    prediction_file = paths["yi"] / "models" / "yi" / "seal" / "record.json"
+    prediction_file.write_bytes(before[prediction_file] + b"\n")
+    with pytest.raises(ValueError, match="(file|payload)"):
+        analysis._read_v1_comparison_inputs(paths)
+
+
+def _synthetic_public_plan():
+    from werewolf.structured_history import STRUCTURED_TOKEN_PLANNER_VERSION, StructuredTokenDescriptor
+    from werewolf.tom_llm.common import digest
+
+    plan = {"planner_version": STRUCTURED_TOKEN_PLANNER_VERSION, "prefix_digest": "a" * 64, "token_count": 2,
+            "tokens": [StructuredTokenDescriptor(0, "phase_change", None, None, None, 1, "discussion", "phase", 0, 0).to_record(),
+                       StructuredTokenDescriptor(1, "turn_start", "player1", None, None, 1, "discussion", "turn", 1, 0).to_record()]}
+    return {**plan, "plan_digest": digest(plan)}
+
+
+@pytest.mark.parametrize("fault", ["label", "conflicting_plan", "temporal"])
+def test_epoch35_public_predictor_rejects_inconsistent_or_nonpublic_inputs(monkeypatch, fault):
+    from werewolf.tom_llm import baseline_analysis as analysis
+    from werewolf.tom_llm.common import digest
+
+    plan = _synthetic_public_plan()
+    task = {"game_id": "game", "boundary_id": "pre", "observer": 0, "fold": 0,
+            "prefix_digest": plan["prefix_digest"], "plan_digest": plan["plan_digest"],
+            "public_plan": plan, "messages": [], "response_schema": {}}
+    tasks = [task, {**task, "observer": 1}]
+    model = _mock_epoch35()
+    monkeypatch.setattr(analysis, "V1_PRE_COUNT", 1)
+    if fault == "label":
+        tasks[1]["q"] = [0.] * 7
+    elif fault == "conflicting_plan":
+        tasks[1]["public_plan"] = {**plan, "token_count": 3}
+    else:
+        model.temporal.day = range(1)
+    with pytest.raises(ValueError, match="public tasks|inconsistent public plan|Temporal mismatch"):
+        analysis._predict_epoch35(tasks, [digest(t) for t in tasks], model, "cpu")
+    assert model.calls == 0
+
+
+def test_epoch35_full_shape_keeps_every_public_and_primary_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    from werewolf.artifact_io import sha256_bytes
+    from werewolf.tom_llm import baseline_analysis as analysis
+    from werewolf.tom_llm.common import digest
+
+    base_plan = _synthetic_public_plan()
+    games = [f"game-{i:03}" for i in range(150)]
+    tasks, refs, primary = [], [], []
+    for i in range(1886):
+        game, boundary = games[i % 150], f"pre-{i}"
+        public_plan = {**base_plan, "prefix_digest": digest([game, boundary])}
+        public_plan.pop("plan_digest")
+        public_plan["plan_digest"] = digest(public_plan)
+        for seat in range(5 if i < 602 else 6):
+            task = {"game_id": game, "boundary_id": boundary, "observer": seat, "fold": (i % 150) // 30,
+                    "prefix_digest": public_plan["prefix_digest"], "plan_digest": public_plan["plan_digest"],
+                    "public_plan": public_plan, "messages": [], "response_schema": {}}
+            row = {k: task[k] for k in analysis.ROW_FIELDS}
+            q = [0. if k == seat else 1/6 for k in range(7)]
+            if seat < (2 if i < 156 else 3):
+                q = [float(k == (seat + 1) % 7) for k in range(7)]
+            ref = {**row, "observer_alive": True, "q": q, **analysis.uniform_prediction_rows([row])[0]}
+            refs.append(ref)
+            tasks.append(task)
+            if seat < (3 if i < 64 else 4):
+                primary.append(ref)
+    model = _mock_epoch35()
+    predictions = analysis._predict_epoch35(tasks, [digest(t) for t in tasks], model, "cpu")
+    assert model.calls == 1886
+    assert len(predictions) == len({identity(t) for t in tasks}) == 10714
+    assert [identity(r) for r in predictions] == [identity(t) for t in tasks]
+
+    # 缩短合成测试抽样，真实 10,000 次抽样由上面的配对测试覆盖。
+    indices = np.arange(150, dtype="<i4").reshape(1, 150)
+    monkeypatch.setattr(analysis, "bootstrap_indices", lambda *_: indices)
+    monkeypatch.setattr(analysis, "V1_BOOTSTRAP_DIGEST", sha256_bytes(indices.tobytes()))
+    monkeypatch.setattr(analysis, "V1_PRIMARY_ROWS_DIGEST", digest([identity(r) for r in primary]))
+    reference = SimpleNamespace(rows=refs, selected=lambda _: primary)
+    passed = []
+    score = analysis.probability_cell
+
+    def score_aligned(rows, *args):
+        assert [identity(r) for r in rows] == [identity(r) for r in primary]
+        passed.append(len(rows))
+        return score(rows, *args)
+
+    monkeypatch.setattr(analysis, "probability_cell", score_aligned)
+    v1_rows = {key: [{"prediction": {**row, "status": "valid"}} for row in predictions] for key in analysis.V1_RUN_SEALS}
+    result = analysis._score_epoch35_v1(reference, games, tasks, predictions, v1_rows)
+    assert passed == [7480] * 6 and result["nu_row_count"] == 5502
+    assert result["nu_game_ids"] == games
+    with pytest.raises(ValueError, match="ordered prediction coverage"):
+        analysis._score_epoch35_v1(reference, games, tasks, predictions[:-1], v1_rows)

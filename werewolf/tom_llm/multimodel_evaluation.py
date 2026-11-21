@@ -19,9 +19,15 @@ def validate_public_coverage(tasks, reference, games):
     require(tasks and len({identity(t) for t in tasks}) == len(tasks), 'duplicate/empty public cohort')
     for task in tasks:
         validate_task(task)
-    expected = {identity(r): r for r in reference.rows if r['observer_alive'] and r['game_id'] in set(games)}
+    validate_reference_coverage(tasks, reference, games)
+
+
+def validate_reference_coverage(tasks, reference, games):
+    """将已验证的公开请求与原 Reference 精确配对。"""
+    game_set = set(games)
+    expected = {identity(r): r for r in reference.rows if r['observer_alive'] and r['game_id'] in game_set}
     require(set(expected) == {identity(t) for t in tasks}, 'public-alive cohort mismatch; no intersection')
-    require({t['game_id'] for t in tasks} == set(games), 'selection game coverage mismatch')
+    require({t['game_id'] for t in tasks} == game_set, 'selection game coverage mismatch')
     for task in tasks:
         ref = expected[identity(task)]
         require(task['plan_digest'] == ref['plan_digest'] and task['fold'] == ref['fold'], 'cohort PRE/fold mismatch')

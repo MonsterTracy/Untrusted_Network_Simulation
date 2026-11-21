@@ -101,6 +101,9 @@ def execute(c, args):
 
 
 def dispatch(args):
+    if args.operation == 'compare-epoch35':
+        from werewolf.tom_llm.baseline_analysis import analyze_epoch35_v1
+        return analyze_epoch35_v1(keyed(args.sealed_run), args.checkpoint, args.temporal, args.output, device=args.device)
     c = load_config(args.config)
     if args.operation=='report':
         from werewolf.tom_llm.baseline_analysis import analyze_cross_runs

@@ -38,6 +38,29 @@ def _aligned_predictions(reference, predictions, game_ids):
     return games, expected, indexed
 
 
+def uniform_prediction_rows(rows):
+    return [{**row, "probability": [0. if j == row["observer"] else 1/6 for j in range(7)],
+             "non_self_log_probability": [-math.log(6)] * 6} for row in rows]
+
+
+def probability_cell(rows, games, indices, nu_games, nu_indices):
+    """共用历史概率计分及游戏等权聚合，NU 只在有合格行的局上计算。"""
+    scores, game_scores = score_prediction_rows(rows, games)
+    nu_hits = defaultdict(list)
+    for row, score in zip(rows, scores, strict=True):
+        if sum(q > 0 for q in row["q"]) < 6:
+            nu_hits[row["game_id"]].append(int(score["argmax_in_target_support"]))
+    nu_scores = {g: float(np.mean(nu_hits[g])) for g in nu_games}
+    cell = {
+        "kl": game_macro_summary([game_scores[g]["kl"] for g in games], indices, .95),
+        "tv": game_macro_summary([game_scores[g]["total_variation"] for g in games], indices, .95),
+        "top1_nu": game_macro_summary(list(nu_scores.values()), nu_indices, .95) if nu_scores else None,
+        "game_scores": game_scores, "row_count": len(rows), "game_count": len(games),
+        "nu_row_count": sum(map(len, nu_hits.values())), "nu_game_count": len(nu_games),
+    }
+    return cell, nu_scores
+
+
 def compare(reference, predictions, game_ids):
     """All public-alive requests must match exactly; Primary is selected afterwards."""
     games, expected, indexed = _aligned_predictions(reference, predictions, game_ids)
@@ -49,29 +72,13 @@ def compare(reference, predictions, game_ids):
         statuses.append((ref, prediction))
     indices = (reference.bootstrap_indices if games == reference.game_ids else
         bootstrap_indices(list(games), POLICY["bootstrap"]["replicates"], POLICY["bootstrap"]["seed"]))
-    cells, row_scores = {}, {}
-    uniform = [{**r, "probability": [0. if j == r["observer"] else 1/6 for j in range(7)],
-                "non_self_log_probability": [-math.log(6)] * 6} for r in expected]
-    for name, rows in (("llm", selected), ("qwen3_oof", expected), ("uniform_non_self", uniform)):
-        scores, game_scores = score_prediction_rows(rows, games)
-        row_scores[name] = scores
-        cells[name] = {"kl": game_macro_summary([game_scores[g]["kl"] for g in games], indices, .95),
-            "tv": game_macro_summary([game_scores[g]["total_variation"] for g in games], indices, .95),
-            "game_scores": game_scores, "row_count": len(rows), "game_count": len(games)}
-    delta = paired_summary([cells["llm"]["game_scores"][g]["kl"] for g in games],
-        [cells["qwen3_oof"]["game_scores"][g]["kl"] for g in games], indices, .95)
     nu_games = sorted({r["game_id"] for r in expected if sum(q > 0 for q in r["q"]) < 6})
     nu_indices = bootstrap_indices(nu_games, POLICY["bootstrap"]["replicates"], POLICY["bootstrap"]["seed"]) if nu_games else None
-    nu_rows = sum(sum(q > 0 for q in r["q"]) < 6 for r in expected)
-    for name, scores in row_scores.items():
-        counts = defaultdict(list)
-        for ref, score in zip(expected, scores, strict=True):
-            if sum(q > 0 for q in ref["q"]) < 6:
-                counts[ref["game_id"]].append(int(score["argmax_in_target_support"]))
-        cells[name]["top1_nu"] = (game_macro_summary([np.mean(counts[g]) for g in nu_games], nu_indices, .95)
-                                   if nu_games else None)
-        cells[name]["nu_row_count"] = nu_rows
-        cells[name]["nu_game_count"] = len(nu_games)
+    cells = {}
+    for name, rows in (("llm", selected), ("qwen3_oof", expected), ("uniform_non_self", uniform_prediction_rows(expected))):
+        cells[name], _ = probability_cell(rows, games, indices, nu_games, nu_indices)
+    delta = paired_summary([cells["llm"]["game_scores"][g]["kl"] for g in games],
+        [cells["qwen3_oof"]["game_scores"][g]["kl"] for g in games], indices, .95)
     failures = Counter(p["failure_type"] for _, p in statuses if p["status"] == "fallback_uniform")
     per_game = {g: np.mean([p["status"] == "fallback_uniform" for r, p in statuses if r["game_id"] == g]) for g in games}
     failure_summary = {"primary_failure_types": dict(failures), "primary_row_failure_rate": sum(failures.values()) / len(expected),
