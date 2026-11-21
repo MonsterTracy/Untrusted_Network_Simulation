@@ -127,7 +127,7 @@ def test_serialized_support_rejects_tampering_and_cli_reports(tmp_path):
     path = tmp_path / "dataset.json"
     path.write_text(json.dumps(dataset.to_record()), encoding="utf-8")
     output = subprocess.check_output((sys.executable,
-        "scripts/analyze_phase2_consequence_support.py", str(path)), text=True)
+        "scripts/diagnostics/phase2_pilot_support.py", str(path)), text=True)
     assert json.loads(output)["action_counts"] == {"PUSH": 1}
     corrupted = dataset.to_record()
     corrupted["terminal"][0]["offline_audit"]["l_ref"] = 0

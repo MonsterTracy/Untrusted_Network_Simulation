@@ -119,7 +119,7 @@ perceiver 身份、verified envelope、一次性消费及失败原子性；当�
 仓库提供可直接执行的合成演示入口（stdout 输出三域 private audit，全部身份均为内置合成值）：
 
 ```bash
-python -B -m scripts.check_observer_dtrs_contextual_policy
+python -B -m scripts.diagnostics.dtrs_contextual_demo
 ```
 
 该命令只用 30 个合成训练行进行既有 D2 内存统计拟合，再遍历三种合成 Q，验证

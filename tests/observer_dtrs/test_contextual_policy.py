@@ -250,7 +250,7 @@ def test_entry_imports_no_restricted_supervision_and_runs_no_service():
 
 def test_synthetic_command_is_real_entrypoint_without_formal_inputs():
     root = Path(__file__).resolve().parents[2]
-    run = subprocess.run([sys.executable, "-B", "-m", "scripts.check_observer_dtrs_contextual_policy"],
+    run = subprocess.run([sys.executable, "-B", "-m", "scripts.diagnostics.dtrs_contextual_demo"],
                          cwd=root, capture_output=True, text=True, check=True)
     output = json.loads(run.stdout)
     assert output["scope"] == "synthetic_only_not_formal_or_gameplay"

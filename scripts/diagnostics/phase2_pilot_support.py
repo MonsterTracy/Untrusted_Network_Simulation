@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from werewolf.interventions.online.pilot_dataset import (
     ONLINE_VERSION, analyze_phase2_consequence_support_record,

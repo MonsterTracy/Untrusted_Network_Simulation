@@ -21,11 +21,11 @@ and the [README](../README.md) for existing installation and execution commands.
 
 ## Operator and research entrypoints
 
-The 2026-11-16 tracked inventory contains 59 Python files and one Shell script
-under `scripts/`: 50 Python files have executable entry guards; nine are package
-or library files. This is a classification of source, not a count of validated
-experiments. The single installed console entry is `uns=werewolf.cli:main`;
-`python -m werewolf.cli` uses the same command implementation.
+Under `scripts/`, 50 Python files have executable entry guards, seven provide
+callable or compatibility code, and two initialize packages. The Shell launcher
+is counted separately. These counts describe source files. The single installed
+console entry is `uns=werewolf.cli:main`. The module command
+`python -m werewolf.cli` uses the same implementation.
 
 | Responsibility | Representative implementation and usage boundary |
 | --- | --- |
@@ -35,6 +35,7 @@ experiments. The single installed console entry is `uns=werewolf.cli:main`;
 | Phase-2 operations | [Mapper study](../scripts/run_phase2_mapper_study.py), [Mapper final fit](../scripts/run_phase2_mapper_final_fit.py), [language Smoke](../scripts/run_phase2_language_smoke.py), [Online campaign](../scripts/phase2_online_campaign.py) and [Gameplay campaign](../scripts/phase2_gameplay_campaign.py) retain source/configuration and artifact requirements. The [Phase-2 navigation](research/phase2-current-status.md) distinguishes Pilot and Gameplay endpoints. |
 | Historical statistics | [OOF metrics](../scripts/paper_tom_metrics.py), [Backbone contrasts](../scripts/paper_backbone_contrasts.py), [Experiment A analysis](../scripts/experiment_a_mapper_contrasts.py), [Terminal ITT](../scripts/phase2_terminal_itt_analysis.py), [Probe ITT](../scripts/phase2_probe_itt_analysis.py) and [Gameplay analysis](../scripts/analyze_tom_gameplay_ablation.py) read distinct evidence and do not imply interchangeable populations or outcomes. |
 | Controlled research demonstrations | [Synthetic comparison](../scripts/compare_observer_dtrs_synthetic.py), [S1a comparison](../scripts/compare_observer_dtrs_s1a.py), [candidate appraisal](../scripts/compare_observer_dtrs_appraisal.py) and controlled check tools use artificial inputs. See the [research scope](research/observer-dtrs-contextual-speech-prototype.md); these are not formal strategy-effect evidence. |
+| Development diagnostics | [Contextual DTRS demo](../scripts/diagnostics/dtrs_contextual_demo.py) prints decisions for built-in synthetic cases. [Phase-2 pilot support](../scripts/diagnostics/phase2_pilot_support.py) summarizes an existing dataset JSON. Both print to stdout and can be run as modules in `scripts.diagnostics`. |
 | Result display | [Matrix tables](../scripts/show_tom_game_matrices.py) and [single-game visualization](../scripts/visualize_tom_single_game.py) consume existing exports. See the [table guide](tom-game-matrices-cli.md) and [visualization guide](tom-single-game-visualization.md); role information is offline display evidence, not model input. |
 | Historical transport adapter | [remote_tom_worker.py](../scripts/remote_tom_worker.py) checks a fixed detached planner Source and its adapter bytes before loading. The [Remote-ToM protocol](research/phase4bi-remote-tom-protocol.md) describes this historical deployment design, not a current-HEAD quick start. |
 
@@ -43,6 +44,7 @@ Non-CLI files under `scripts/` have the following current import roles.
 | Files | Role and consumers |
 | --- | --- |
 | [__init__.py](../scripts/__init__.py) | Installable operator-package boundary; importing it starts no runtime. |
+| [diagnostics/__init__.py](../scripts/diagnostics/__init__.py) | Package marker for the local diagnostic commands. |
 | [constrained_speech.py](../scripts/constrained_speech.py), [speech_realization.py](../scripts/speech_realization.py), [verified_speech_commit.py](../scripts/verified_speech_commit.py) | Callable eligibility, realization/verification and commit research logic used by opt-in Runtime and DTRS research paths. These are not standalone command entrypoints. |
 | [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Thin exports for Phase-2 speech preparation. [verified_speech.py](../werewolf/interventions/language/verified_speech.py) owns the shared realization workflow. |
 | [remote_tom_protocol.py](../scripts/remote_tom_protocol.py), [remote_tom_provider.py](../scripts/remote_tom_provider.py) | Shared wire validation and injected Gameplay-side provider; neither is a model-service launcher. |
