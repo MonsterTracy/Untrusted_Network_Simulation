@@ -1,10 +1,8 @@
 # Project module ownership and Phase-1 responsibilities
 
-The current ownership map below was updated on 2026-11-16 after Strategy and
-Game Runtime consolidation. It locates existing implementations; it does not
-establish that every research connection or experiment has been validated.
-See the [research overview](research-overview.md) for evidence and study status,
-and the [README](../README.md) for existing installation and execution commands.
+This map locates current implementations and operator entrypoints. See the
+[research overview](research-overview.md) for study status and evidence, and the
+[README](../README.md) for installation and execution commands.
 
 ## Current ownership
 
@@ -16,9 +14,9 @@ and the [README](../README.md) for existing installation and execution commands.
 | Observer-DTRS | [observer_dtrs](../werewolf/observer_dtrs/) owns conditional event estimation, cognitive risks and three-way judgments. Its evidence does not itself define language-action utility. |
 | Strategy | [strategy](../werewolf/strategy/) owns reusable candidate and planning research implementations. The retained MCTS prototype is not the current paper's strategy method. |
 | Speech | [Constrained speech](../werewolf/speech/constrained.py) checks public eligibility. [Realization](../werewolf/speech/realization.py) verifies one V1 speech action. The [commit workflow](../werewolf/speech/commit_workflow.py) uses the [canonical speech binding](../werewolf/speech/verified_commit.py) and the existing recorder transaction. |
-| Phase-2 | [interventions](../werewolf/interventions/) owns shared actions and evidence, [Mapper](../werewolf/interventions/mapper/), [Language](../werewolf/interventions/language/), [Online](../werewolf/interventions/online/), and Terminal statistics. Gameplay and shared modules sit at the package root. The development layout includes all 30 modules. See the [Phase-2 navigation](research/phase2-current-status.md) for execution entrypoints and Source requirements. |
+| Phase-2 | [interventions](../werewolf/interventions/) owns shared actions and evidence, [Mapper](../werewolf/interventions/mapper/), [Language](../werewolf/interventions/language/), [Online](../werewolf/interventions/online/), and Terminal statistics. Gameplay and shared modules sit at the package root. See the [Phase-2 navigation](research/phase2-current-status.md) for execution entrypoints and Source inventories. |
 | Evaluation | [ToM reporting](../werewolf/tom/reporting.py), [Baseline analysis](../werewolf/tom_llm/baseline_analysis.py), [Terminal statistics](../werewolf/interventions/terminal_estimator.py) and [Gameplay results](../werewolf/interventions/gameplay.py) retain their distinct populations and endpoints. |
-| scripts | [scripts](../scripts/) supplies operators, analyses and some callable research libraries. Shared Phase-2 implementations remain in place under their Source contracts; see the [Phase-2 navigation](research/phase2-current-status.md). |
+| scripts | [scripts](../scripts/) supplies operator and analysis commands, experiment setup and the study-specific support modules listed below. |
 
 ## Operator and research entrypoints
 
@@ -37,7 +35,7 @@ console entry is `uns=werewolf.cli:main`. The module command
 | Historical statistics | [OOF metrics](../scripts/paper_tom_metrics.py), [Backbone contrasts](../scripts/paper_backbone_contrasts.py), [Experiment A analysis](../scripts/experiment_a_mapper_contrasts.py), [Terminal ITT](../scripts/phase2_terminal_itt_analysis.py), [Probe ITT](../scripts/phase2_probe_itt_analysis.py) and [Gameplay analysis](../scripts/analyze_tom_gameplay_ablation.py) read distinct evidence and do not imply interchangeable populations or outcomes. |
 | Controlled research demonstrations | [Synthetic comparison](../scripts/compare_observer_dtrs_synthetic.py), [S1a comparison](../scripts/compare_observer_dtrs_s1a.py), [candidate appraisal](../scripts/compare_observer_dtrs_appraisal.py) and controlled check tools use artificial inputs. See the [research scope](research/observer-dtrs-contextual-speech-prototype.md); these are not formal strategy-effect evidence. |
 | Development diagnostics | [Contextual DTRS demo](../scripts/diagnostics/dtrs_contextual_demo.py) prints decisions for built-in synthetic cases. [Phase-2 pilot support](../scripts/diagnostics/phase2_pilot_support.py) summarizes an existing dataset JSON. Both print to stdout and can be run as modules in `scripts.diagnostics`. |
-| Result display | [Matrix tables](../scripts/show_tom_game_matrices.py) and [single-game visualization](../scripts/visualize_tom_single_game.py) consume existing exports. See the [table guide](tom-game-matrices-cli.md) and [visualization guide](tom-single-game-visualization.md); role information is offline display evidence, not model input. |
+| Result display | [Matrix tables](../scripts/show_tom_game_matrices.py) and [single-game visualization](../scripts/visualize_tom_single_game.py) consume existing exports through the shared [review reader](../werewolf/tom/single_game_review.py). The [table guide](tom-game-matrices-cli.md) and [visualization guide](tom-single-game-visualization.md) explain which evidence each command can display. |
 | Historical transport adapter | [remote_tom_worker.py](../scripts/remote_tom_worker.py) checks a fixed detached planner Source and its adapter bytes before loading. The [Remote-ToM protocol](research/phase4bi-remote-tom-protocol.md) describes this historical deployment design, not a current-HEAD quick start. |
 
 Non-CLI files under `scripts/` have the following current import roles.
@@ -46,7 +44,7 @@ Non-CLI files under `scripts/` have the following current import roles.
 | --- | --- |
 | [__init__.py](../scripts/__init__.py) | Installable operator-package boundary; importing it starts no runtime. |
 | [diagnostics/__init__.py](../scripts/diagnostics/__init__.py) | Package marker for the local diagnostic commands. |
-| [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Thin exports for Phase-2 speech preparation. [verified_speech.py](../werewolf/interventions/language/verified_speech.py) owns the shared realization workflow. |
+| [phase2_integration_seam.py](../scripts/phase2_integration_seam.py) | Thin exports listed in the Pilot Source inventory. [language/execution.py](../werewolf/interventions/language/execution.py) owns speech preparation and calls the verifier. |
 | [remote_tom_protocol.py](../scripts/remote_tom_protocol.py), [remote_tom_provider.py](../scripts/remote_tom_provider.py) | Shared wire validation and injected Gameplay-side provider; neither is a model-service launcher. |
 | [tom_gameplay_ablation.py](../scripts/tom_gameplay_ablation.py) | Callable experiment integration used by the existing paired collection/smoke operators; preserves their original scientific contract. |
 

@@ -57,7 +57,7 @@ line; `main` remains the stable-release branch. See the
 | Phase-2 | Action/opportunity contracts, Mapper, verified language, canonical commit and Terminal/Probe/fixed-Router experiments: [module navigation and evidence limits](docs/research/phase2-current-status.md) |
 | Contextual speech research | Opt-in contextual losses and strategy intents through existing Actor/Parser/verified speech, with three-condition synthetic comparisons: [prototype and evidence limits](docs/research/observer-dtrs-contextual-speech-prototype.md) |
 | Experiment A | Paired Qwen3 temporal conditions, continuous/competition-top1 Q and fixed-M3 development contrasts: [temporal contract](docs/adr/0005-isolate-direct-day-phase-features-in-temporal-ablation.md), [paired preparation](werewolf/tom/backbone_study.py), [mapper runner](scripts/run_phase2_mapper_study.py), [statistical consumer](scripts/experiment_a_mapper_contrasts.py) |
-| Evaluation and entrypoints | Task-specific ToM/Baseline metrics, ITT and full-game outcomes remain distinct. [scripts](scripts/) contains operator, experiment and analysis entrypoints; remaining ownership issues are listed in the [Phase-2 navigation](docs/research/phase2-current-status.md). |
+| Evaluation and entrypoints | ToM/Baseline metrics, ITT and full-game outcomes answer different research questions. The [module and entrypoint map](docs/repository_structure.md) locates operator commands and shared implementations. |
 
 Strategy and Game Runtime ownership consolidation is complete. Unified Final-D2
 EQ1/EQ0 candidates have been fitted, published and read back; applicability to
@@ -167,9 +167,8 @@ and runtime. Live vLLM Baselines require their registered Linux/GPU environment
 and model weights. The serving environment is separate from the scientific
 client; see the existing
 [environment and deployment instructions](docs/server-execution.md#local-qwen-service).
-Final-ToM Capsule CPU inference instead requires its matching assets, runtime
-and qualification evidence. None of these requirements is satisfied by a help
-command or a synthetic test.
+Final-ToM Capsule CPU inference uses matching assets and runtime. The qualified
+resident client also verifies qualification evidence and execution scope.
 
 ## Entrypoint navigation
 

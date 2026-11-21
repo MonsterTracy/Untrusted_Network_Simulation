@@ -1,6 +1,6 @@
 # 全项目科研架构与模块导航
 
-本文连接现有科研模块、数据流和文档，不新增开发规范、执行协议或实验门禁。2026-11-11 的审阅为历史基线；2026-11-16 根据后续已完成的结构整理和执行记录补充导航，代码基准为 `1c201972cd790f68a0a61069f5304184c217d4ca`。当时的整理仅更新文档，未重新访问服务器或执行实验。本文的 Phase-2 源码路径按当前开发工作区更新，各实验继续以原始 Source、冻结合同和封存证据为准。
+本文连接现有科研模块、数据流和文档。2026-11-11 的审阅为历史基线。2026-11-16 以 `1c201972cd790f68a0a61069f5304184c217d4ca` 为代码基准补充当时的状态记录。源码导航反映现行目录，各实验以原始 Source、冻结合同和封存证据为准。
 
 ## 1. 项目目标与科研问题
 
@@ -45,10 +45,10 @@ Publication 中的观察报告在下游用于训练监督、离线标签或评�
 | Observer-DTRS | 条件事件估计、显式损失与静态三支风险比较，以及 D4 工程证据链 | [werewolf/observer_dtrs](../werewolf/observer_dtrs/) | PRE、Q、离线事件标签、显式 LossSpec | 条件概率、风险、POS/BND/NEG、部署与审计证据 | 历史D2/D3与新Final-D2候选分开；候选已发布，Final-Q适用性待迁移评价；D4工程与独立CAL/TEST分开 | [D1 事件](research/observer-dtrs-v1-d1a.md)、[D2 结果归档](research/observer-dtrs-v1-d2-results.md)、[D3 方法草案](research/observer-dtrs-v1-d3a-protocol.md)、[D3 受控实现](research/observer-dtrs-v1-d3b.md)、[D4 工程](research/observer-dtrs-v1-d4c2b2-resident-service.md) |
 | Phase-2 Mapper | 从 Q 和合法竞争状态构造 R2，估计社会状态 score | [offline.py](../werewolf/interventions/offline.py)、[mapper/runtime.py](../werewolf/interventions/mapper/runtime.py) | 离线 OOF Q / 标签；运行时 Final Q 与合法状态 | Mapper、p_tilde score panel | 离线 Study、Final Fit 与运行时路径已实现；不授予行动效果解释 | [离线数据合同](research/phase2-offline-data-contract.md)、[当前导航](research/phase2-current-status.md) |
 | Terminal / Probe / Router | 研究终止行动后果、固定序贯策略及游戏级策略比较 | [online/runner.py](../werewolf/interventions/online/runner.py)、[gameplay.py](../werewolf/interventions/gameplay.py) | 冻结预测器、Mapper、合法机会、实验 Plan 与 Ledger | Assignment、日终后果、ITT、完整游戏结果 | Terminal 有正式 ITT 归档；Probe ITT 获用户确认、优势未确证；Router 是固定策略工程实现，尚无正式完整游戏胜率结果证据 | [Terminal 协议](research/phase2-terminal-estimator-protocol-v1.md)、[Probe 协议](research/phase2-probe-policy-protocol-v1.md)、[Router 合同](research/phase2-router-v1-contract.md) |
-| Language / Speech | 采集期 V1 语义感知；下游预定行动的语言实现、独立解析和验证 | [speech](../werewolf/speech/)、[language/verified_speech.py](../werewolf/interventions/language/verified_speech.py) | 合法观察、原始公开发言或冻结行动 Plan | V1 注释或经验证的行动发言、审计 | 两种职责均已实现，合同独立；语言层不替代实际投票 | [采集合同](collection_contract.md)、[Action 合同](research/phase2-action-contract-v1.md) |
+| Language / Speech | 采集期 V1 语义感知，以及下游预定行动的语言实现、独立解析和验证 | [V1 发言实现](../werewolf/speech/realization.py)、[V1 提交流程](../werewolf/speech/commit_workflow.py)、[Phase-2 验证流程](../werewolf/interventions/language/verified_speech.py) | 合法观察、原始公开发言或冻结行动 Plan | V1 注释或经验证的行动发言、审计 | V1 发言与 Phase-2 干预使用各自的验证合同，提交复用 Canonical Recorder | [采集合同](collection_contract.md)、[Action 合同](research/phase2-action-contract-v1.md) |
 | Strategy与规划研究 | 可复用候选、反事实续接、受控评分与行动选择研究；DTRS情境研究是其消费者 | [werewolf/strategy](../werewolf/strategy/)、[planning_research.py](../werewolf/observer_dtrs/planning_research.py) | 合法 PRE / 视角、Q、显式研究假设 | 候选、受控评分、策略意图和原型比较 | Strategy归属整理已完成；MCTS保留为受控原型，不作为当前论文的策略规划方法 | [动态规划研究](research/observer-dtrs-dynamic-planning-phase1.md)、[情境发言原型](research/observer-dtrs-contextual-speech-prototype.md) |
 | Evaluation / Reporting | 按各任务固定人口和终点进行评分、统计及可视化 | [tom/reporting.py](../werewolf/tom/reporting.py)、[baseline_analysis.py](../werewolf/tom_llm/baseline_analysis.py)、[统计脚本](../scripts/) | 对应任务的封存预测、标签、Assignment 或游戏结果 | 认知指标、配对统计、ITT、游戏结果报告 | 实现存在不代表每份正式报告已生成 | [ToM 合同](tom_contract.md)、[Baseline 操作](operations/tom-llm-unified.md)、[Phase-2 导航](research/phase2-current-status.md) |
-| scripts入口 | 实际操作、实验执行与分析命令 | [scripts](../scripts/) | 显式参数、配置和对应科研资产 | 运行或分析产物 | 入口与包内实现并存；部分共享业务仍位于脚本，待分批整理，不据目录名声称已全部解耦 | [Phase-2职责补充](research/phase2-current-status.md#2026-11-16-职责与结构导航补充) |
+| scripts 入口 | 操作命令、实验装配和分析 | [scripts](../scripts/) | 显式参数、配置和对应科研资产 | 运行或分析产物 | 发言流程、Campaign 共享输入和 ToM 单局读取由正式包维护。脚本保留实验专用支撑代码 | [入口与库清单](repository_structure.md#operator-and-research-entrypoints) |
 
 ## 4. 各研究阶段的当前状态
 

@@ -6,7 +6,7 @@
 
 ## 2026-11-16 职责与结构导航补充
 
-本节最初依据 `1c201972cd790f68a0a61069f5304184c217d4ca` 的 30 文件结构审阅补充导航。下表的路径按当前开发工作区更新。迁移后的正式运行仍需与新路径和源码字节一致的 Source 证据。冻结 M3、Smoke V3 和 Probe 证据保留各自的原 Source，上文及后续 2026-11-10 快照的日期和科研合同沿用原记录。工作区中的 Capsule 和 Gameplay 接入仍有未提交改动。
+本节最初依据 `1c201972cd790f68a0a61069f5304184c217d4ca` 的 30 文件结构审阅补充导航，下表反映现行目录。正式运行按适用合同核验 Source、Artifact 和资格。冻结 M3、Smoke V3 和 Probe 证据各自绑定原 Source，后文的 2026-11-10 快照沿用原记录。
 
 | 职责组 | 现有模块定位 | 职责与终点 |
 | --- | --- | --- |
@@ -21,13 +21,12 @@
 
 Strategy和Game Runtime归属整理已完成；MCTS保留为人工响应树受控原型，不作为当前论文主线策略规划方法。统一Final-D2的拟合、发布、回读与尚未执行的Final-Q Development迁移评价，见[科研总览](../research-overview.md#4-各研究阶段的当前状态)。这些状态不授予新的Phase-2策略效果或完整游戏胜率结论。
 
-原 30 个 Phase-2 模块已迁入 `werewolf/interventions/`。共享模块、Terminal Estimator 和 Gameplay 位于包根目录，Mapper、Language 和 Online 位于各自的子包。现行静态预检入口为 `python -m werewolf.interventions.online.preflight`，操作脚本沿用原入口。以下模块继续按现有调用关系工作。
+原 30 个 Phase-2 模块已迁入 `werewolf/interventions/`。共享模块、Terminal Estimator 和 Gameplay 位于包根目录，Mapper、Language 和 Online 位于各自的子包。静态预检入口为 `python -m werewolf.interventions.online.preflight`。
 
-- 可复用语言执行流程由 [verified_speech.py](../../werewolf/interventions/language/verified_speech.py) 持有，[Smoke 脚本](../../scripts/run_phase2_language_smoke.py) 继续负责样本准备、执行入口和报告发布。
-- [Campaign脚本](../../scripts/phase2_online_campaign.py)中的共享输入、来源绑定逻辑被Server反向调用；脚本应保留操作入口，共享业务按现有Server/Preflight职责整理。
-- [Terminal ITT脚本](../../scripts/phase2_terminal_itt_analysis.py)的共享Reader被`werewolf.interventions.terminal_estimator_io`调用；需区分可复用读取实现与历史分析/恢复合同。
-
-Mapper、Smoke和Terminal Estimator已有源码路径/字节绑定。普通文件迁移不能被当作旧资产自动兼容，也不能改写旧Manifest来适配目录；具体兼容问题与上述结构整理分别判断。
+- [Online Campaign](../../scripts/phase2_online_campaign.py) 负责编排命令。[online/plan.py](../../werewolf/interventions/online/plan.py) 构造计划，[online/preflight.py](../../werewolf/interventions/online/preflight.py) 提供共享输入与来源核验，[online/server.py](../../werewolf/interventions/online/server.py) 装配运行时。Online 的 `SOURCE_FILES` 位于预检模块，包含 [Phase-2 历史导出](../../scripts/phase2_integration_seam.py)。实际 Runner 从 [language/execution.py](../../werewolf/interventions/language/execution.py) 导入发言准备函数。
+- [Gameplay Campaign](../../scripts/phase2_gameplay_campaign.py) 负责命令与参数，[gameplay.py](../../werewolf/interventions/gameplay.py) 管理计划、Ledger 和发布。其 `freeze_source()` 从已跟踪的文件中冻结正式运行所需源码、配置和合同。
+- [Language Smoke](../../scripts/run_phase2_language_smoke.py) 负责样本准备、执行和发布，由 [verified_speech.py](../../werewolf/interventions/language/verified_speech.py) 提供可复用的语言实现与验证。`--preflight` 读取经可信摘要核验的 Mapper，在校验选例和输入后返回。正式 Smoke 使用脚本中的 `SOURCE_FILES` 冻结执行来源，再调用 LLM 并发布结果。
+- [Terminal Estimator I/O](../../werewolf/interventions/terminal_estimator_io.py) 按原合同调用 [Terminal ITT](../../scripts/phase2_terminal_itt_analysis.py) 核验封存输入和恢复证据，其 `SOURCE_FILES` 仍登记该入口。严格 JSON 解析由 [artifact_io](../../werewolf/artifact_io/strict_json.py) 共享。
 
 以下原章节保留2026-11-10快照；其中“当前”“本轮”和后续研究安排均指原审阅时点，现行职责与结构整理范围见上面的补充。
 
