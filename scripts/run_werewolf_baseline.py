@@ -197,10 +197,11 @@ def _game_status(game, plan, scene, method):
         if not terminal or replay != winner or not 0 < steps == len(actions):
             raise ValueError("replay does not agree with the native terminal and actions")
         require_sha256(game["public_event_digest"], "public_event_digest")
-        return "completed" if not unknown_request else "unknown"
-    if unknown_request or interrupted or failure is None:
+    if unknown_request or interrupted:
         return "unknown"
-    return "failed"
+    if failure is not None:
+        return "failed"
+    return "completed" if replay is not None else "unknown"
 
 
 def _read_task(plan, scene, method, attempt_path, result_path):

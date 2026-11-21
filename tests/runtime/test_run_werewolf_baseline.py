@@ -204,6 +204,31 @@ def test_transport_unknown_is_archived_and_never_redispatched(frozen_plan, mock_
     assert stats["cost"]["total_tokens"] == {"sum": None, "games_available": 0}
 
 
+def test_summary_excludes_failures_after_confirmed_replay(frozen_plan, capsys):
+    plan_path, _, plan = frozen_plan
+    scene = plan["scenarios"][0]
+    cases = (
+        ("react", "RuntimeError", "failed"),
+        ("dpins:no", "KeyboardInterrupt", "unknown"),
+    )
+    archived = {}
+    for method, failure, _ in cases:
+        _, result = _publish_sample(plan_path, plan, scene, method, _sample_result(
+            plan, scene, method, failure_type=failure, failure_stage="result_assembly",
+        ))
+        archived[result] = result.read_bytes()
+
+    summary = _summary(plan_path, capsys)
+    assert summary["record_errors"] == []
+    for method, _, status in cases:
+        stats = summary["methods"][method]
+        assert stats[status] == 1
+        assert stats["completed"] == stats["wolf_wins"] == 0
+        assert stats["native_terminal"] == stats["replay_passed"] == 1
+        assert stats["conditional_wolf_win_rate"] is None
+    assert {path: path.read_bytes() for path in archived} == archived
+
+
 def test_restart_preserves_completed_failed_and_claim_only_tasks(frozen_plan, mock_sdk, capsys):
     plan_path, config_path, plan = frozen_plan
     _, _, games = mock_sdk
