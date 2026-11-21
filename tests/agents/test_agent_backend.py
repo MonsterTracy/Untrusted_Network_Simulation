@@ -487,10 +487,10 @@ class GameplayCognitionTest(unittest.TestCase):
             "dpins:llm": ["belief_report", "discussion_tactic"],
             "dpins:random": ["belief_report"],
         }
-        speech = "我怀疑 player3 是狼人。"
+        speech = "第一天2号公开质疑过 player3。如果第三天 player3 还在场，我会请他解释。"
         for method, speech_steps in methods.items():
             cases = [
-                ("1_day_speech", ("speech", speech), speech_steps + ["direct_gameplay_speech"]),
+                ("2_day_speech", ("speech", speech), speech_steps + ["direct_gameplay_speech"]),
                 ("1_day_speech_pk", ("speech_pk", speech), speech_steps + ["direct_gameplay_speech"]),
                 ("1_day_vote", ("vote", 0), speech_steps[:1] + ["vote"]),
                 ("1_day_vote_pk", ("vote_pk", 3), speech_steps[:1] + ["vote"]),
@@ -503,6 +503,7 @@ class GameplayCognitionTest(unittest.TestCase):
             for phase, expected_action, stages in cases:
                 with self.subTest(method=method, phase=phase):
                     observation = _baseline_observation(phase)
+                    observation["authoritative_public_state"]["day"] = int(phase.split("_", 1)[0])
                     if "vote" in stages:
                         replies["vote"] = json.dumps({"target": expected_action[1]})
                     backend = MetadataBackend([replies[stage] for stage in stages])
@@ -1983,14 +1984,19 @@ class GameplayCognitionTest(unittest.TestCase):
         self.assertFalse(any("belief" in name for name in vars(agent)))
 
     def test_speech_integrity_checks_are_deterministic(self):
-        for content, finish_reason in (("", "stop"), ("发言", "length"), ('{"speech":"发言"}', "stop")):
+        cases = (
+            ("", "stop", "empty gameplay public speech"),
+            ("第一天的发言", "length", "truncated gameplay public speech"),
+            ('{"speech":"第一天的发言"}', "stop", "structured gameplay public speech"),
+        )
+        for content, finish_reason, reason in cases:
             with self.subTest(content=content):
-                with self.assertRaises(GameplaySpeechQualityError):
+                with self.assertRaisesRegex(GameplaySpeechQualityError, reason):
                     validate_gameplay_public_speech(
                         content,
                         finish_reason=finish_reason,
                         player_id=1,
-                        phase="1_day_speech",
+                        phase="2_day_speech",
                     )
 
     def test_noncanonical_player_like_references_are_rejected(self):
@@ -2001,6 +2007,7 @@ class GameplayCognitionTest(unittest.TestCase):
             "我认为 player12 是狼人。",
             "我支持 player_2。",
             "我暂时观察 player。",
+            "第一天我怀疑8号玩家。",
         )
         for content in invalid_speeches:
             with self.subTest(content=content), self.assertRaisesRegex(
@@ -2011,7 +2018,7 @@ class GameplayCognitionTest(unittest.TestCase):
                     content,
                     finish_reason="stop",
                     player_id=1,
-                    phase="1_day_speech",
+                    phase="2_day_speech",
                 )
 
         valid = "我支持 player1，也质疑 PLAYER7。"
@@ -2060,66 +2067,52 @@ class GameplayCognitionTest(unittest.TestCase):
             _act(agent, observation)
         self.assertEqual(len(backend.calls), 4)
 
-    def test_public_speech_allows_ordinary_english_but_rejects_wrong_day(self):
-        speech = "Day1 我会直接把 target 放在 player2，他是 first speaker。"
-        self.assertEqual(
-            validate_gameplay_public_speech(
-                speech,
-                finish_reason="stop",
-                player_id=1,
-                phase="1_day_speech",
-            ),
-            speech,
+    def test_second_day_speech_accepts_historical_hypothetical_and_current_day_references(self):
+        speeches = (
+            "第一天，3号公开说过自己会先听完发言。",
+            "如果 Day3 player3 还在场，我会请他重新说明。",
+            "Day2 我先听 player3 的意见，他是 first speaker。",
         )
-
-        for content in ("Day3 我质疑 player2。", "第3天我质疑 player2。"):
-            with self.subTest(content=content), self.assertRaisesRegex(
-                GameplaySpeechQualityError,
-                "current day is 1",
-            ):
-                validate_gameplay_public_speech(
-                    content,
-                    finish_reason="stop",
-                    player_id=1,
-                    phase="1_day_speech",
+        for speech in speeches:
+            with self.subTest(speech=speech):
+                self.assertEqual(
+                    validate_gameplay_public_speech(
+                        speech, finish_reason="stop", player_id=2, phase="2_day_speech",
+                    ),
+                    speech,
                 )
 
+    def test_speech_with_history_still_requires_frozen_discussion_target(self):
         with self.assertRaisesRegex(
             GameplaySpeechQualityError,
             "omitted frozen discussion target",
         ):
             validate_gameplay_public_speech(
-                "我今天先保留意见。",
+                "第一天我先保留意见。",
                 finish_reason="stop",
                 player_id=1,
-                phase="1_day_speech",
+                phase="2_day_speech",
                 required_player_ids=(2,),
             )
 
-    def test_wrong_day_retries_public_realization_with_validation_feedback(self):
-        observation = _observation()
+    def test_second_day_public_realization_accepts_history_without_retry(self):
+        observation = _observation("2_day_speech")
+        observation["authoritative_public_state"]["day"] = 2
+        speech = "第一天 player2 公开质疑过3号，我今天仍支持 player2。"
         backend = ScriptedRealizationBackend(
             _day_cognition(
                 observation,
                 content_actions=(DiscussionAct("support", 2),),
             ),
-            (
-                "Day3 我支持 player2。",
-                "我支持 player2。",
-            ),
+            (speech,) * 3,
         )
         agent = self._agent(backend)
 
-        self.assertEqual(_act(agent, observation), ("speech", "我支持 player2。"))
-        self.assertEqual(len(backend.calls), 3)
+        self.assertEqual(_act(agent, observation), ("speech", speech))
+        self.assertEqual(len(backend.calls), 2)
         first_prompt = backend.calls[1]["messages"][0]["content"]
-        retry_prompt = backend.calls[2]["messages"][0]["content"]
-        self.assertIn("当前天数：第1天", first_prompt)
+        self.assertIn("当前天数：第2天", first_prompt)
         self.assertIn("当前阶段：白天普通发言", first_prompt)
-        self.assertNotIn("当前天数：Day", first_prompt)
-        self.assertIn("current day is 1", retry_prompt)
-        self.assertIn("完整重新生成", retry_prompt)
-        self.assertNotIn("Day3 我支持 player2。", retry_prompt)
 
     def test_active_prompt_control_markers_cannot_be_public_speech(self):
         for marker in (
