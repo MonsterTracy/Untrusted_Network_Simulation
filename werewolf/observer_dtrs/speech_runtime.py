@@ -190,11 +190,10 @@ class ReportEventArm(str, Enum):
 _REPORT_EVENT_OPPORTUNITY = 'ALL_LEGAL_WOLF_SPEECH_PRE'
 
 
-def _report_event_panel(pre, contexts, prediction, *, m1_parameters, arm):
+def report_event_probabilities(pre, contexts, matrix, *, m1_parameters):
     from scripts import analyze_observer_dtrs_report_event as study
     from scripts.fit_observer_dtrs_report_event import legal_features
 
-    matrix, provenance = prediction
     if (type(matrix) is not ProbabilityMatrix
             or (matrix.game_id, matrix.boundary_id, matrix.prefix_digest) !=
             (pre.game_id, pre.boundary_id, pre.prefix_digest)):
@@ -202,7 +201,12 @@ def _report_event_panel(pre, contexts, prediction, *, m1_parameters, arm):
     # 复用固定特征和校准公式，推理行不携带监督标签。
     rows = tuple(SimpleNamespace(sample_id=c.observer_id, features=x)
                  for c, _, x in legal_features(contexts, matrix))
-    probabilities = study.rebuild_probabilities(rows, 'M1', m1_parameters)
+    return study.rebuild_probabilities(rows, 'M1', m1_parameters)
+
+
+def report_event_directions(probabilities, arm):
+    from scripts import analyze_observer_dtrs_report_event as study
+
     panel = {}
     for seat, probability in probabilities.items():
         if arm is ReportEventArm.THREE_WAY:
@@ -214,11 +218,36 @@ def _report_event_panel(pre, contexts, prediction, *, m1_parameters, arm):
         else:
             directions = [Region.POS.value, Region.NEG.value]
         panel[seat] = {'probability': probability, 'adoptable_directions': directions}
+    return panel
+
+
+def report_event_plan_input(pre, team, panel, candidates):
+    public_events = pre.public_event_history.to_records()
+    context = {
+        'speaker': pre.current_speaker, 'alive_players': pre.alive_observer_ids,
+        'known_wolf_team': team, 'public_events': public_events,
+        'report_predictions': panel,
+        'candidates': [plan.public_payload() for plan in candidates],
+    }
+    basis_refs = (
+        'independent', 'keep_both',
+        *(f"public:{event['event_id']}" for event in public_events),
+        *(f'prediction:{seat}:{direction}' for seat, row in panel.items()
+          for direction in row['adoptable_directions']),
+    )
+    return context, basis_refs
+
+
+def _report_event_panel(pre, contexts, prediction, *, m1_parameters, arm):
+    from scripts import analyze_observer_dtrs_report_event as study
+
+    matrix, provenance = prediction
+    probabilities = report_event_probabilities(pre, contexts, matrix, m1_parameters=m1_parameters)
     return {
         'model_digest': study.FIT_DIGEST,
         'loss': study.LOSS.to_record(),
         'prediction': {'source': provenance, 'matrix_digest': sha256_bytes(canonical_json_bytes(matrix.values))},
-        'panel': panel,
+        'panel': report_event_directions(probabilities, arm),
     }
 
 
@@ -286,19 +315,7 @@ class ReportEventGamePolicy:
             evidence = _report_event_panel(pre, contexts, prediction,
                                            m1_parameters=self._m1_parameters, arm=self._arm)
             audit.update(evidence)
-            public_events = pre.public_event_history.to_records()
-            plan_context = {
-                'speaker': pre.current_speaker, 'alive_players': pre.alive_observer_ids,
-                'known_wolf_team': team, 'public_events': public_events,
-                'report_predictions': evidence['panel'],
-                'candidates': [plan.public_payload() for plan in candidates],
-            }
-            basis_refs = (
-                'independent', 'keep_both',
-                *(f"public:{event['event_id']}" for event in public_events),
-                *(f'prediction:{seat}:{direction}' for seat, row in evidence['panel'].items()
-                  for direction in row['adoptable_directions']),
-            )
+            plan_context, basis_refs = report_event_plan_input(pre, team, evidence['panel'], candidates)
             with call_audit.action_context(acting_player_id=observation['current_act_idx'],
                     boundary_id=pre.boundary_id, is_public_speech=False):
                 index, basis_ref = actor.select_report_event_plan(plan_context, basis_refs=basis_refs)
