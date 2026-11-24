@@ -173,6 +173,8 @@ def test_capsule_predict_interface_Q_identity_duplicate_and_close(capsule_client
         assert _frozen_q_runtime_ready(c,controlled=True)
         assert not _frozen_q_runtime_ready(c)
         with pytest.raises(ValueError,match='SCOPE_NOT_QUALIFIED'):predict_q(c,p)
+        with pytest.raises(ValueError, match='report event pilot source evidence required'):
+            c.predict_report_event(p)
         q=predict_q(c,p,controlled=True)
         assert q==model.predict(p).probabilities and len(q)==7 and all(len(row)==7 for row in q)
         assert q[2][1]>0 and predictor_source_digest(c)!=c.identity['model_origin']['seal_digest']
@@ -327,3 +329,17 @@ def test_interface_requires_pinned_qualified_core(qualified_metadata,tmp_path,ch
     if change=='none':assert check()['capsule_identity']['capsule_digest']==a.manifest_digest
     else:
         with pytest.raises(ValueError):check()
+
+
+def test_capsule_accepts_only_the_verified_snapshot_as_alternate_service_root(qualified_metadata, tmp_path):
+    from werewolf.artifact_io import canonical_json_bytes, publish_artifact
+    from werewolf.observer_dtrs.final_tom_client import _qualified_capsule
+
+    _, capsule, source, report, reference, manifest = qualified_metadata
+    qual = publish_artifact(tmp_path / 'qualification', manifest_fields=manifest, files={
+        'report.json': canonical_json_bytes(report), 'reference.json': canonical_json_bytes(reference),
+    })
+    args = (capsule.path, capsule.manifest_digest, qual.path, qual.manifest_digest, source.path)
+    assert _qualified_capsule(*args, execution_root=source.path / 'sources') == report
+    with pytest.raises(ValueError, match='snapshot service root'):
+        _qualified_capsule(*args, execution_root=tmp_path)

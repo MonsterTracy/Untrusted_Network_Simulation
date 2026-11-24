@@ -60,6 +60,7 @@ class _RecordedRuntime:
     call_audit: CanonicalCallAudit
     replay_executor: Any
     f0_control: Any = None
+    online_pilot: Any = None
 
     def run_f0_slice(self):
         if self.f0_control is None:
@@ -86,6 +87,7 @@ class _RecordedRuntime:
                 self.roles,
                 canonical_recorder=self.recorder,
                 call_audit=self.call_audit,
+                online_pilot=self.online_pilot,
             )
             evidence = self.recorder.complete_evidence()
         except CanonicalAttemptFailure:

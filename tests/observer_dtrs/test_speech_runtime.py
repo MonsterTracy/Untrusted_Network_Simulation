@@ -1,11 +1,13 @@
 """Synthetic source + real PRE/Actor/parser/verified env commit, no model service."""
+from collections import Counter
 from dataclasses import replace
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
-from werewolf.strategy.speech_planning import PlanningAction as A
+from werewolf.strategy.speech_planning import PlanningAction as A, generate_candidates
 from tests.observer_dtrs.conftest import prefix_for
 from tests.observer_dtrs.test_contextual_policy import fitted
 from tests.tom.test_counterfactual_consumer import PublicWitness, P
@@ -15,13 +17,16 @@ from tests.canonical_collection.test_runtime_game_evidence import _runtime, ROLE
 from tests.canonical_collection.test_final_capacity import _night
 from werewolf.agents.gpt_agent import GPTAgent
 from werewolf.artifact_io import canonical_json_bytes
+from werewolf.canonical_collection.call_audit import AuditedBackend
+from werewolf.observer_dtrs.context import contexts_for_pre
 from werewolf.observer_dtrs.d3_protocol import load_protocol
 from werewolf.observer_dtrs.decision import Region, TiePolicy
 from werewolf.observer_dtrs.estimation import FittedModel
 from werewolf.observer_dtrs.probabilities import ProbabilityMatrix
 from werewolf.observer_dtrs.speech_runtime import (
-    Comparison, ResearchPolicy, SealedQwen3Source, SpeechStrategy, SyntheticPrediction,
-    _legal_team, execute_pending_speech, select_observer, strategy_plan,
+    Comparison, ControlledReportEventSpeech, ReportEventArm, ResearchPolicy, SealedQwen3Source,
+    SpeechStrategy, SyntheticPrediction,
+    _legal_team, _report_event_panel, execute_pending_speech, select_observer, strategy_plan,
 )
 
 
@@ -58,8 +63,12 @@ def source(pre, r=.4):
     return SyntheticPrediction(ProbabilityMatrix(pre.game_id, pre.boundary_id, pre.prefix_digest, tuple(rows)))
 
 
-def runtime(phase='discussion', target=P[0]):
-    _, _, env, _, audit, recorder, backend = _runtime()
+def runtime(phase='discussion', target=P[0], *, native=False):
+    _, claim, env, _, audit, recorder, backend = _runtime()
+    if native:
+        from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
+        env = WerewolfTextEnvV0(speech_perceiver=env.speech_perceiver, random_seed=claim.seed,
+                                log_save_path=None)
     env.reset(roles=ROLES)  # Synthetic fixture only; runtime adapter never receives this table.
     _night(env, 0)
     def prior_speech(text):
@@ -292,3 +301,338 @@ def test_explicit_self_accusation_precedes_newer_teammate_accusation():
         w.speech(observer, 'point_as_werewolf', target, f'我认为{target}是狼人。')
     w.event('turn_start', speaker=P[0])
     assert select_observer(w.pre(), P[:2]).observer_id == P[2]
+
+
+@pytest.fixture
+def report_event_parameters():
+    from scripts import fit_observer_dtrs_report_event as fit
+
+    features = fit.FEATURES['M1']
+    slope = [8. if name == 'actor_mass' else 0. for name in features]
+    return {'features': features, 'standardization': {'mean': [0.] * 3, 'std': [1.] * 3},
+            'base': {'intercept': -4., 'coefficients': slope},
+            'calibrator': {'intercept': 0., 'coefficients': [1.]}}
+
+
+def report_event_source(pre):
+    matrix = source(pre).matrix
+    rows = list(matrix.values)
+    for observer in P[2:]:
+        rows[P.index(observer)] = (.5, .5, 0., 0., 0., 0., 0.)
+    return SyntheticPrediction(replace(matrix, values=tuple(rows))).probabilities
+
+
+class ReportEventBackend(ActorBackend):
+    supports_json_schema = True
+
+    def __init__(self, speech, choose):
+        super().__init__(speech)
+        self.choose = choose
+
+    def chat_with_metadata(self, **kwargs):
+        if 'response_format' not in kwargs:
+            return super().chat_with_metadata(**kwargs)
+        assert kwargs['response_format']['json_schema']['name'] == 'report_event_plan'
+        self.calls.append(kwargs)
+        context = json.loads(kwargs['messages'][0]['content'].rsplit('\n\n', 1)[1])
+        return json.dumps(self.choose(context)), {'finish_reason': 'stop'}
+
+
+def plan_choice(context, action, target, basis_ref):
+    index = context['candidates'].index({'action': action, 'target': target})
+    return {'candidate_index': index, 'basis_ref': basis_ref}
+
+
+@pytest.mark.parametrize(('arm', 'directions'), [
+    (ReportEventArm.TOM_ONLY, [['POS', 'NEG']] * 5),
+    (ReportEventArm.TWO_WAY, [['NEG'], ['NEG'], ['NEG'], ['POS'], ['POS']]),
+    (ReportEventArm.THREE_WAY, [['NEG'], [], [], [], ['POS']]),
+])
+def test_report_event_commitments_at_frozen_boundaries(monkeypatch, report_event_parameters, arm, directions):
+    from scripts import analyze_observer_dtrs_report_event as study
+
+    probabilities = dict(zip(P[2:], [.10, .25, .50, .75, .90], strict=True))
+    monkeypatch.setattr(study, 'rebuild_probabilities', lambda *_: probabilities)
+    pre = witness().pre()
+    result = _report_event_panel(pre, contexts_for_pre(pre, P[:2]), report_event_source(pre),
+                                 m1_parameters=report_event_parameters, arm=arm)
+    assert result['loss'] == study.LOSS.to_record()
+    assert result['panel'] == {
+        seat: {'probability': p, 'adoptable_directions': allowed}
+        for (seat, p), allowed in zip(probabilities.items(), directions, strict=True)
+    }
+
+
+@pytest.mark.parametrize('phase', ['discussion', 'pk_discussion'])
+@pytest.mark.parametrize('target', [None, P[1], P[0]])
+def test_report_event_arms_share_the_public_opportunity(report_event_parameters, phase, target):
+    common_inputs, public_requests = [], []
+    for arm in ReportEventArm:
+        env, recorder, backend = runtime(phase, target, native=True)
+        handoff = recorder._pending.handoff
+        pre = recorder.public_pre_for_handoff(handoff)
+        public_ref = f'public:{select_observer(pre, P[:2]).event_id}'
+        predict = Mock(side_effect=report_event_source(pre))
+        backend.perception_response = 'player1 | point_as_non_werewolf | player1'
+        actor_backend = ReportEventBackend('我认为player1不是狼人。',
+            lambda context: plan_choice(context, 'SELF_DEFEND', None, public_ref))
+        actor = GPTAgent(backend=actor_backend, model_name='controlled')
+        policy = ControlledReportEventSpeech(recorder, arm=arm, assignment_ref='control-fixture',
+                                             predict=predict, m1_parameters=report_event_parameters)
+        before = snapshot(env, recorder)
+        execution = policy.execute_pending(env=env, actor=actor, handoff=handoff)
+        if target != P[0]:
+            assert execution is None and policy.audit is None
+            assert snapshot(env, recorder) == before and not actor_backend.calls
+            predict.assert_not_called()
+            continue
+        predict.assert_called_once_with(pre)
+        private, public = actor_backend.calls
+        prompt, raw_context = private['messages'][0]['content'].rsplit('\n\n', 1)
+        context = json.loads(raw_context)
+        assert context['candidates'] == [plan.public_payload() for plan in generate_candidates(pre)]
+        assert context['known_wolf_team'] == list(P[:2])
+        assert context['public_events'] == pre.public_event_history.to_records()
+        assert context['report_predictions'] == execution.audit['panel']
+        assert {seat: row['probability'] for seat, row in context['report_predictions'].items()} == dict.fromkeys(P[2:], .5)
+        assert execution.audit['public_payload'] == {'action': 'SELF_DEFEND', 'target': None}
+        assert execution.audit['basis_ref'] == public_ref
+        assert execution.step_result[2] is False
+        for row in context['report_predictions'].values():
+            del row['adoptable_directions']
+        call_settings = {key: private[key] for key in ('model', 'temperature', 'max_tokens', 'extra_body')}
+        common_inputs.append((prompt, context, call_settings, execution.audit['selection']))
+        public_requests.append(public)
+    if target == P[0]:
+        assert len(common_inputs) == 3
+        assert common_inputs[0] == common_inputs[1] == common_inputs[2]
+        assert public_requests[0] == public_requests[1] == public_requests[2]
+
+
+@pytest.mark.parametrize('problem', ['index', 'bnd_prediction'])
+def test_report_event_rejects_invalid_private_selection(report_event_parameters, problem):
+    env, recorder, backend = runtime(native=True)
+    handoff = recorder._pending.handoff
+    pre = recorder.public_pre_for_handoff(handoff)
+
+    def choose(context):
+        if problem == 'index':
+            return {'candidate_index': len(context['candidates']), 'basis_ref': 'independent'}
+        return plan_choice(context, 'SELF_DEFEND', None, 'prediction:player3:NEG')
+
+    actor_backend = ReportEventBackend('不会生成这段发言。', choose)
+    actor = GPTAgent(backend=actor_backend, model_name='controlled')
+    policy = ControlledReportEventSpeech(recorder, arm=ReportEventArm.THREE_WAY,
+        assignment_ref='bad-choice', predict=report_event_source(pre), m1_parameters=report_event_parameters)
+    before, parser_calls = snapshot(env, recorder), len(backend.requests)
+    with pytest.raises(ValueError, match='合法候选索引和相容的依据引用'):
+        policy.execute_pending(env=env, actor=actor, handoff=handoff)
+    assert snapshot(env, recorder) == before and len(backend.requests) == parser_calls
+    assert len(actor_backend.calls) == 1
+    assert policy.audit['status'] == 'FAILED' and 'public_payload' not in policy.audit
+
+
+def test_report_event_semantic_failure_does_not_reopen_opportunity(report_event_parameters):
+    env, recorder, backend = runtime(native=True)
+    handoff = recorder._pending.handoff
+    pre = recorder.public_pre_for_handoff(handoff)
+    actor_backend = ReportEventBackend('我认为player1不是狼人。',
+        lambda context: plan_choice(context, 'SELF_DEFEND', None, 'independent'))
+    actor = GPTAgent(backend=actor_backend, model_name='controlled')
+    backend.perception_response = 'player1 | point_as_werewolf | player4'
+    policy = ControlledReportEventSpeech(recorder, arm=ReportEventArm.TOM_ONLY,
+        assignment_ref='failed-controlled-assignment', predict=report_event_source(pre),
+        m1_parameters=report_event_parameters)
+    before = snapshot(env, recorder)
+    with pytest.raises(ValueError, match='does not exactly match'):
+        policy.execute_pending(env=env, actor=actor, handoff=handoff)
+    assert snapshot(env, recorder) == before
+    assert policy.audit['status'] == 'FAILED' and 'commit' not in policy.audit
+    with pytest.raises(ValueError, match='已尝试'):
+        policy.execute_pending(env=env, actor=actor, handoff=handoff)
+    replacement = ControlledReportEventSpeech(recorder, arm=ReportEventArm.TOM_ONLY,
+        assignment_ref='another-controlled-assignment', predict=report_event_source(pre),
+        m1_parameters=report_event_parameters)
+    with pytest.raises(ValueError, match='已尝试'):
+        replacement.execute_pending(env=env, actor=actor, handoff=handoff)
+    assert len(actor_backend.calls) == 2 and snapshot(env, recorder) == before
+
+
+def test_report_event_wrong_q_binding_stops_before_language(report_event_parameters):
+    env, recorder, _ = runtime(native=True)
+    handoff = recorder._pending.handoff
+    actor_backend = ActorBackend('unused')
+    actor = GPTAgent(backend=actor_backend, model_name='controlled')
+    other = replace(source(recorder.public_pre_for_handoff(handoff)).matrix, boundary_id='unrelated-pre')
+    policy = ControlledReportEventSpeech(recorder, arm=ReportEventArm.THREE_WAY, assignment_ref='wrong-q',
+        predict=lambda _: (other, {'scope': 'SYNTHETIC_TEST_ONLY'}), m1_parameters=report_event_parameters)
+    before = snapshot(env, recorder)
+    with pytest.raises(ValueError, match='Q 与当前 PRE 不一致'):
+        policy.execute_pending(env=env, actor=actor, handoff=handoff)
+    assert snapshot(env, recorder) == before and not actor_backend.calls
+    assert policy.audit['status'] == 'FAILED'
+
+
+@pytest.mark.parametrize('arm', list(ReportEventArm))
+def test_report_event_game_hook_records_assignment_and_intent_before_language(
+        monkeypatch, report_event_parameters, arm):
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+    from werewolf.observer_dtrs.speech_runtime import ReportEventGamePilot
+
+    env, recorder, parser = runtime(native=True)
+    handoff = recorder._pending.handoff
+    pre = recorder.public_pre_for_handoff(handoff)
+    selection = select_observer(pre, P[:2])
+    public_ref = f'public:{selection.event_id}'
+
+    def choose(context):
+        if context['report_predictions'][selection.observer_id]['adoptable_directions'] == ['NEG']:
+            return plan_choice(context, 'ACCUSE_WOLF', P[2], f'prediction:{selection.observer_id}:NEG')
+        basis_ref = 'keep_both' if context['report_predictions'][selection.observer_id]['adoptable_directions'] else public_ref
+        return plan_choice(context, 'SELF_DEFEND', None, basis_ref)
+
+    binary = arm is ReportEventArm.TWO_WAY
+    text = '我认为player3是狼人。' if binary else '我认为player1不是狼人。'
+    parser.perception_response = ('player1 | point_as_werewolf | player3' if binary
+                                  else 'player1 | point_as_non_werewolf | player1')
+    parser_calls = len(parser.requests)
+    actor_backend = ReportEventBackend(text, choose)
+    actor = GPTAgent(backend=AuditedBackend(actor_backend, recorder.call_audit), model_name='controlled')
+    predictor = object.__new__(CapsuleGameplayPredictor)
+    monkeypatch.setattr(CapsuleGameplayPredictor, 'require_report_event_ready', lambda _self: None)
+    requests = []
+
+    def predict(_self, pre):
+        requests.append(pre.boundary_id)
+        return report_event_source(pre)(pre)
+
+    monkeypatch.setattr(CapsuleGameplayPredictor, 'predict_report_event', predict)
+    evidence = {}
+
+    def record(stage, row):
+        if stage == 'assignment':
+            assert not actor_backend.calls
+        elif stage == 'intent':
+            assert len(actor_backend.calls) == 1 and len(parser.requests) == parser_calls
+        assert stage not in evidence
+        evidence[stage] = row
+
+    pilot = ReportEventGamePilot(recorder=recorder, agents=(actor,) * 7, predictor=predictor,
+                                arm=arm, probability=1/3, m1_parameters=report_event_parameters,
+                                record_evidence=record)
+    kwargs = dict(env=env, recorder=recorder, call_audit=recorder.call_audit,
+                  observation=env.get_observation(), handoff=handoff)
+    assert pilot.handle_pre(**kwargs)[2] is False
+    assert pilot.handle_pre(**kwargs) is None
+    assert requests == [handoff.boundary_id]
+    assert [stage for stage in evidence] == ['assignment', 'intent', 'execution']
+    assert evidence['assignment']['arm'] == arm.value and evidence['assignment']['probability'] == 1/3
+    expected_plan = {'action': 'ACCUSE_WOLF', 'target': P[2]} if binary else {'action': 'SELF_DEFEND', 'target': None}
+    assert evidence['intent']['public_payload'] == expected_plan
+    if arm is ReportEventArm.THREE_WAY:
+        assert evidence['intent']['basis_ref'] == public_ref
+    execution = evidence['execution']
+    assert execution['status'] == 'COMMITTED' and execution['prefix_digest'] == pre.prefix_digest
+    assert [execution[k] for k in ('q_requests', 'plan_calls', 'actor_calls', 'parser_calls')] == [1, 1, 1, 1]
+    submitted, = recorder.submitted_gameplay_actions
+    annotation = env.speech_annotations[-1]
+    assert execution['commit'] == {'action_id': submitted.action_id, 'event_id': annotation.event_id,
+                                   'annotation_digest': annotation.annotation_digest}
+    assert execution['assignment_ref'] == evidence['intent']['assignment_ref']
+    assert submitted.action_payload.to_value() == text and recorder._pending is None
+    assert len(actor_backend.calls) == 2 and len(parser.requests) == parser_calls + 1
+    public_transcript = json.dumps([actor_backend.calls[1], parser.requests[-1], env.public_events])
+    for private_value in ('report_predictions', 'known_wolf_team', 'adoptable_directions',
+                          'basis_ref', execution['assignment_ref'], execution['model_digest'], arm.value):
+        assert private_value not in public_transcript
+
+
+def test_report_event_entry_assigns_three_arms_with_actual_probabilities(monkeypatch, tmp_path, report_event_parameters):
+    from scripts import analyze_observer_dtrs_report_event as study
+    from tests.canonical_collection.test_attempt_ledger import _claim, _plan
+    from werewolf.canonical_collection import attempt_ledger, collector, production_runtime
+    from werewolf.interventions import gameplay_server
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+
+    seeds = (101, 202, 303, 404)
+    plan = _plan(ordered_seed_pool=seeds, target_canonical_success_count=len(seeds))
+    reference = SimpleNamespace(collection_id='paper-canonical-qwen35-9b-5800-v1', ordered_seed_pool=(1, 2),
+        plan_digest='ccc63353fe626ba5b76b06174a94272874a650f9a12b404de7c98c646b1e6bbe')
+    monkeypatch.setattr(attempt_ledger, 'load_collection_plan', lambda _: reference)
+    load_frozen = Mock(return_value={'models': {'M1': report_event_parameters}})
+    monkeypatch.setattr(study, 'open_fitted_models', load_frozen)
+    predictor = object.__new__(CapsuleGameplayPredictor)
+    predictor._owner = SimpleNamespace(limits=SimpleNamespace(max_requests=4))
+    monkeypatch.setattr(CapsuleGameplayPredictor, 'require_report_event_ready', lambda _self: None)
+    monkeypatch.setattr(CapsuleGameplayPredictor, 'identity', property(lambda _self: {'fixture': 'Q'}))
+    runtime_factory = object.__new__(production_runtime.Classic7RuntimeFactory)
+    runtime_factory.f0_control = None
+    monkeypatch.setattr(production_runtime.Classic7RuntimeFactory, '__call__', lambda _self, *, plan, claim:
+        SimpleNamespace(agents=(None,) * 7, recorder=SimpleNamespace(claim=claim, plan=plan,
+            game_id=f'fixture-{claim.ordinal}', runtime_configuration={})))
+    replay = object()
+    monkeypatch.setattr(production_runtime, 'classic7_full_game_replay_executor', lambda _: replay)
+    writes = {}
+    monkeypatch.setattr(gameplay_server, 'write_once', writes.__setitem__)
+    result = object()
+
+    def collect(*, plan, runtime_factory, destination):
+        assert destination == tmp_path / 'pilot'
+        for ordinal in range(len(seeds)):
+            runtime = runtime_factory(plan=plan, claim=_claim(plan, ordinal=ordinal, attempt_id=f'attempt-{ordinal}'))
+            assert runtime.replay_executor is replay
+        return result
+
+    monkeypatch.setattr(collector, 'collect', collect)
+    assert gameplay_server.execute_report_event_games(plan=plan, reference_collection=tmp_path / 'reference',
+        assignment_seed=1729, destination=tmp_path / 'pilot', runtime_factory=runtime_factory, predictor=predictor) is result
+    load_frozen.assert_called_once_with()
+    allocations = writes[tmp_path / 'pilot' / 'assignments.json']['allocations']
+    assert tuple(row['seed'] for row in allocations) == seeds
+    counts = Counter(row['arm'] for row in allocations)
+    assert set(counts) == {arm.value for arm in ReportEventArm} and sorted(counts.values()) == [1, 1, 2]
+    for ordinal, row in enumerate(allocations):
+        actual = writes[tmp_path / 'pilot' / 'speech-evidence' / f'fixture-{ordinal}' / 'assignment.json']
+        assert {key: actual[key] for key in row} == row
+        assert actual['probability'] == counts[row['arm']] / len(seeds)
+    predictor._owner.limits.max_requests = 3
+    with pytest.raises(ValueError, match='Q 请求预算'):
+        gameplay_server.execute_report_event_games(plan=plan, reference_collection=tmp_path / 'reference',
+            assignment_seed=1729, destination=tmp_path / 'too-many', runtime_factory=runtime_factory, predictor=predictor)
+    load_frozen.assert_called_once_with()
+
+
+def test_report_event_no_opportunity_preserves_native_game_and_full_replay(monkeypatch, tmp_path, report_event_parameters):
+    from tests.runtime.test_runtime_config import new_config
+    from werewolf.canonical_collection.game_bundle import publish_canonical_game_bundle
+    from werewolf.canonical_collection.production_runtime import _RecordedRuntime, classic7_full_game_replay_executor
+    from werewolf.envs.werewolf_text_env_v0 import WerewolfTextEnvV0
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor
+    from werewolf.observer_dtrs.speech_runtime import ReportEventGamePilot
+
+    plan, claim, setup, agents, audit, recorder, _ = _runtime()
+    env = WerewolfTextEnvV0(random_seed=claim.seed, log_save_path=None, speech_perceiver=setup.speech_perceiver)
+    for agent in agents:
+        original = agent.act
+
+        def act(observation, original=original):
+            if 'skill_wolf' in observation['phase'] or 'vote' in observation['phase']:
+                return next(action for action in observation['valid_action'] if action[1] != 0)
+            return original(observation)
+
+        agent.act = act
+    predictor = object.__new__(CapsuleGameplayPredictor)
+    monkeypatch.setattr(CapsuleGameplayPredictor, 'require_report_event_ready', lambda _self: None)
+    monkeypatch.setattr(CapsuleGameplayPredictor, 'predict_report_event', lambda *_: pytest.fail('unexpected Q'))
+    rows = {}
+    pilot = ReportEventGamePilot(recorder=recorder, agents=agents, predictor=predictor,
+                                arm=ReportEventArm.THREE_WAY, probability=1/3, m1_parameters=report_event_parameters,
+                                record_evidence=rows.__setitem__)
+    replay = classic7_full_game_replay_executor(new_config())
+    product = _RecordedRuntime(env, agents, list(ROLES), recorder, audit, replay, online_pilot=pilot).run()
+    assert rows['execution']['status'] == 'NO_COMMON_OPPORTUNITY'
+    assert rows['execution']['q_requests'] == 0 and 'intent' not in rows
+    assert env.phase == 'end_game' and env.is_done()[1:] == (True, {'Werewolf': -1})
+    bundle = publish_canonical_game_bundle(tmp_path / recorder.game_id, plan=plan, claim=claim,
+                                          evidence=product.evidence, replay_executor=product.replay_executor)
+    assert bundle.manifest['canonical_eligibility'] is True

@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import re
 
+from werewolf.strategy.counterfactual_tom import derive_public_phase_speaker_order
 from werewolf.strategy.speech_planning import PlanningAction as A, SpeechPlan, generate_candidates
 from werewolf.strategy.speech_versions import CANDIDATE_ORDER_VERSION
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
@@ -33,7 +34,7 @@ def select_observer(pre, known_wolf_ids):
     contexts = contexts_for_pre(pre, known_wolf_ids)
     if not contexts:
         raise ValueError('no legal wolf-speech observers')
-    generate_candidates(pre)
+    derive_public_phase_speaker_order(pre)
     day = pre.public_temporal_state.day
     annotations = {a.event_id: a for a in pre.v1_annotations}
     ranked = []

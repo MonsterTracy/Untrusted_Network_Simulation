@@ -20,10 +20,78 @@ from werewolf.interventions.gameplay import (
     GameplayLedger, digest, freeze_source, policy_for, publish_campaign, recover,
     REQUIRED_PILOT_EXCLUSIONS, TOM_GAMEPLAY_SEED_COUNT, TOM_GAMEPLAY_SEED_SOURCE,
     collection_plan_inputs, qualification_source_matches, read_qualification_plan, tom_seed_exclusion,
-    safe_path, verify_results, bind_campaign_profile,
+    safe_path, verify_results, bind_campaign_profile, write_once,
 )
 from werewolf.interventions.online.plan import probe_candidate_pool, router_assignment_from_record
 from werewolf.interventions.online.records import validate_probe_lifecycle_record
+
+
+def execute_report_event_games(*, plan, reference_collection, assignment_seed,
+                               destination, runtime_factory, predictor):
+    """在 Canonical Collection 中按游戏预先分配三臂，各局最多干预一次。"""
+    from collections import Counter
+    from random import Random
+    from scripts import analyze_observer_dtrs_report_event as study
+    from werewolf.canonical_collection.attempt_ledger import (
+        CollectionSeedPoolExhausted, load_collection_plan, validate_attempt_ledger, validate_collection_plan,
+    )
+    from werewolf.canonical_collection.collector import CollectionResult, collect
+    from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory, classic7_full_game_replay_executor
+    from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor, REPORT_EVENT_PILOT_SCOPE
+    from werewolf.observer_dtrs.speech_runtime import ReportEventArm, ReportEventGamePilot
+
+    validate_collection_plan(plan)
+    dest = safe_path(destination)
+    arm_order = tuple(ReportEventArm)
+    game_count = len(plan.ordered_seed_pool)
+    if (type(runtime_factory) is not Classic7RuntimeFactory or runtime_factory.f0_control is not None
+            or type(predictor) is not CapsuleGameplayPredictor or type(assignment_seed) is not int
+            or assignment_seed < 0 or not len(arm_order) <= game_count <= predictor.request_limit
+            or plan.target_canonical_success_count != game_count
+            or dest.exists()):
+        raise ValueError('需要新的 Canonical 目录、研究专用预测器及覆盖三臂且符合 Q 请求预算的固定种子计划')
+    prior = load_collection_plan(safe_path(reference_collection))
+    if (prior.collection_id != 'paper-canonical-qwen35-9b-5800-v1'
+            or prior.plan_digest != 'ccc63353fe626ba5b76b06174a94272874a650f9a12b404de7c98c646b1e6bbe'
+            or set(prior.ordered_seed_pool).intersection(plan.ordered_seed_pool)
+            or plan.collection_id == prior.collection_id):
+        raise ValueError('试运行须排除 5800 局 Development/Test 的计划种子')
+    predictor.require_report_event_ready()
+    m1_parameters = study.open_fitted_models()['models']['M1']
+    shuffled_seeds = list(plan.ordered_seed_pool)
+    Random(assignment_seed).shuffle(shuffled_seeds)
+    arms = {seed: arm_order[index % len(arm_order)] for index, seed in enumerate(shuffled_seeds)}
+    arm_counts = Counter(arms.values())
+    # 随机排列令每个种子对各臂可交换，边际分配概率为该臂的名额比例。
+    probabilities = {arm: count / game_count for arm, count in arm_counts.items()}
+    write_once(dest / 'assignments.json', {
+        'scope': REPORT_EVENT_PILOT_SCOPE, 'plan_digest': plan.plan_digest,
+        'reference_plan_digest': prior.plan_digest, 'assignment_seed': assignment_seed,
+        'predictor_identity': predictor.identity, 'm1_manifest_digest': study.FIT_DIGEST,
+        'allocations': [{'seed': seed, 'arm': arms[seed].value, 'probability': probabilities[arms[seed]]}
+                        for seed in plan.ordered_seed_pool],
+    })
+
+    def with_pilot(*, plan, claim):
+        runtime = runtime_factory(plan=plan, claim=claim)
+        evidence = dest / 'speech-evidence' / runtime.recorder.game_id
+
+        def record(stage, row):
+            write_once(evidence / f'{stage}.json', row)
+
+        arm = arms[claim.seed]
+        runtime.online_pilot = ReportEventGamePilot(
+            recorder=runtime.recorder, agents=runtime.agents, predictor=predictor, arm=arm,
+            probability=probabilities[arm], m1_parameters=m1_parameters, record_evidence=record,
+        )
+        runtime.replay_executor = classic7_full_game_replay_executor(runtime.recorder.runtime_configuration)
+        return runtime
+
+    try:
+        return collect(plan=plan, runtime_factory=with_pilot, destination=dest)
+    except CollectionSeedPoolExhausted:
+        # 已分配种子用尽，失败保留在原 Attempt Ledger 中。
+        return CollectionResult(dest, validate_attempt_ledger(dest / 'attempt_ledger', plan))
 
 
 def verify_router(ledger, allocation, history, bundle):

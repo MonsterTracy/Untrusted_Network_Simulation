@@ -352,6 +352,55 @@ class GPTAgent(LLMAgent):
             },
         }
 
+    def select_report_event_plan(self, context, *, basis_refs):
+        """在私有策略调用中选一个合法发言计划，返回索引和显式依据。"""
+        candidate_indices = list(range(len(context["candidates"])))
+        prompt = (
+            "你是当前发言的狼人。最终目标是狼队获胜。请从候选表中选一个发言计划，索引从 0 开始。\n"
+            "考虑本轮投票及可能的 PK 给存活狼队带来的放逐威胁、公开证据、发言可信度、队友利益和后续策略空间。"
+            "如果有利于狼队最终获胜，可以承担眼前的嫌疑或放逐风险。\n"
+            "ACCUSE_WOLF 为指狼，CLEAR 为认好，SUPPORT 和 OPPOSE 为支持或反对目标的公开观点，"
+            "SELF_DEFEND 为自辩，NO_COMMITMENT 为不作明确表态。\n"
+            "公开发言记录表明玩家说过什么，其中的主张可能失实。report_predictions 中的 probability "
+            "预测该观察者此时成功取得的原始嫌疑报告是否包含你，私人报告内容仍未知。\n"
+            "adoptable_directions 中的 POS 表示预测报告包含你，NEG 表示预测报告不包含你。"
+            "只有一个方向时，该方向是当前明确定下的认知判断。有两个方向时由你判断是否采用。"
+            "空列表表示 BND，应保留两种可能。方向权限只约束决策依据，所有候选均可考虑。"
+            "例如，已有公开指控就可以基于该指控自辩。\n"
+            "登记一个决定性依据。若采用明确预测，引用 prediction:<观察者席位>:<方向>，方向须在该席位列表中。"
+            "若依据某个公开事件，引用 public:<event_id>。independent 表示无需采用报告预测方向，"
+            "keep_both 表示兼顾两种报告结果。这两种依据始终可用。\n"
+            "仅返回 candidate_index 和 basis_ref。"
+        )
+        temperature, max_tokens = self._request_limits()
+        content, metadata = self._chat_with_metadata(
+            [{"role": "user", "content": prompt + "\n\n" + json.dumps(context, ensure_ascii=False)}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=self._decision_response_format(
+                "report_event_plan",
+                candidate_index={"type": "integer", "enum": candidate_indices},
+                basis_ref={"type": "string", "enum": list(basis_refs)},
+            ),
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        if metadata["finish_reason"] == "length":
+            raise GameplayActionValidationError("发言计划选择响应被截断")
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise GameplayActionValidationError("发言计划选择响应必须为 JSON") from exc
+        if (
+            type(payload) is not dict
+            or set(payload) != {"candidate_index", "basis_ref"}
+            or type(payload["candidate_index"]) is not int
+            or payload["candidate_index"] not in candidate_indices
+            or type(payload["basis_ref"]) is not str
+            or payload["basis_ref"] not in basis_refs
+        ):
+            raise GameplayActionValidationError("发言计划选择须使用合法候选索引和相容的依据引用")
+        return payload["candidate_index"], payload["basis_ref"]
+
     def _select_discussion_tactic(self, observation, prompt, *, temperature, max_tokens, attempt):
         content, metadata = self._chat_with_metadata(
             [{"role": "user", "content": prompt}],

@@ -27,6 +27,13 @@ from werewolf.observer_dtrs.probabilities import ProbabilityMatrix
 from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
 
 
+REPORT_EVENT_PILOT_SCOPE = 'OBSERVER_DTRS_REPORT_EVENT_FULL_GAME_PILOT'
+_REPORT_EVENT_CAPSULE = '001ca7cc0b7a5cb5c0a77500c1a4d2fa33d673617c3714e022f726565b56bf35'
+_REPORT_EVENT_SNAPSHOT = 'f204ffd81d72de2d8471a0e1a4a3df2e35a6f147d90888db4635106649e03f7c'
+_REPORT_EVENT_QUALIFICATION = '5ac0733cd7d93b2da0b2a0f6ff007fb3d5ab4e5fb8f99a75a3d0e00aa228e146'
+_REPORT_EVENT_CONTROLLED_HEAD = 'a95fe091043ffa6a822405a92ff592d7c58e73df713b9e64f80c4981efafa283'
+
+
 @dataclass(frozen=True)
 class ServiceTrust:
     capsule_digest: str
@@ -87,13 +94,14 @@ class Ticket:
 
 class ResidentOwner:
     def __init__(self, capsule_path, *, trust, journal_root, limits=Limits(), cpu_threads=1, interop_threads=1,
-                 _fixture_script=None, _fixture_args=()):
+                 _fixture_script=None, _fixture_args=(), _service_root=ROOT):
         require(type(trust) is ServiceTrust and type(limits) is Limits)
         require(all(type(v) is int and 1 <= v <= 64 for v in (cpu_threads, interop_threads)))
         require(_fixture_script is None or trust.capsule_scope == 'CONTROLLED_FIXTURE', 'fault fixture is not a formal entry')
         self.capsule_path = str(Path(capsule_path).absolute())
         self.trust, self.limits = trust, limits
-        self._entry = Path(_fixture_script or ROOT/'scripts/serve_final_tom_capsule.py').resolve(strict=True)
+        self._service_root = Path(_service_root)
+        self._entry = Path(_fixture_script or self._service_root/'scripts/serve_final_tom_capsule.py').resolve(strict=True)
         self._entry_args = tuple(_fixture_args)
         self._transport_scope = 'CONTROLLED_FAULT_FIXTURE' if _fixture_script else 'CAPSULE_CPU_QUALIFICATION_ONLY'
         self.cpu_threads, self.interop_threads = cpu_threads, interop_threads
@@ -181,7 +189,7 @@ class ResidentOwner:
             cold_deadline = time.monotonic()+self.limits.cold_start_s
             try:
                 self._process = subprocess.Popen([sys.executable, '-B', str(self._entry), *self._entry_args,
-                    '--fd', str(child.fileno())], cwd=ROOT, env=env, pass_fds=(child.fileno(),),
+                    '--fd', str(child.fileno())], cwd=self._service_root, env=env, pass_fds=(child.fileno(),),
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     start_new_session=True)
             except Exception:
@@ -474,12 +482,17 @@ def body_source(path):
     return sha256_bytes(path.read_bytes())
 
 
-def _qualified_capsule(capsule_path, capsule_digest, qualification_path, qualification_digest, source_path):
+def _qualified_capsule(capsule_path, capsule_digest, qualification_path, qualification_digest, source_path,
+                       *, execution_root=ROOT):
     """核对带外固定的 CPU 回执；只认可模型/服务核心，不继承正式游戏资格。"""
     from werewolf.observer_dtrs.final_tom_audit import _Pins
     from werewolf.observer_dtrs.qual_sources import VERSION as SOURCE_VERSION
     for path in (capsule_path, qualification_path, source_path):
         require(Path(path).is_absolute() and Path(path).resolve(strict=True) == Path(path), 'canonical input paths required')
+    execution_root = Path(execution_root)
+    require(execution_root == ROOT or
+            (execution_root == Path(source_path) / 'sources' and execution_root.resolve(strict=True) == execution_root),
+            'expected the verified snapshot service root')
     a = verify_artifact(qualification_path, expected_artifact_type='observer_dtrs_cpu_qualification_v1',
                         expected_schema_version='observer_dtrs_cpu_qualification_v1')
     require(a.manifest_digest == qualification_digest, 'qualification digest mismatch')
@@ -532,9 +545,10 @@ def _qualified_capsule(capsule_path, capsule_digest, qualification_path, qualifi
     loader = identity['loader_source']['loader']
     spec = json.loads(read_artifact_file(capsule, 'inference.json'))
     require(spec['loader_source'] == loader and digest(loader['file_sha256']) == loader['implementation_digest']
-            and all(body_source(ROOT/n) == sha == saved['inventory'][n]['sha256']
+            and all(body_source(execution_root/n) == sha == saved['inventory'][n]['sha256']
                     for n, sha in loader['file_sha256'].items())
-            and all(sha == saved['inventory'][n]['sha256'] for n, sha in service_source()['sha256'].items()),
+            and all(body_source(execution_root/n) == sha == saved['inventory'][n]['sha256']
+                    for n, sha in service_source()['sha256'].items()),
             'qualified loader/service core changed')
     runtime = identity['runtime']
     require(runtime == a.manifest['runtime'] and runtime['device'] == 'cpu' and runtime['dtype'] == 'float32'
@@ -544,15 +558,48 @@ def _qualified_capsule(capsule_path, capsule_digest, qualification_path, qualifi
     return report
 
 
+def _report_event_snapshot_identity(report, execution_root, evidence_path):
+    """从封存的受控会话验证试运行所用的固定预测来源。"""
+    expected = report['capsule_identity']
+    require(report['source_snapshot_digest'] == _REPORT_EVENT_SNAPSHOT
+            and expected['capsule_digest'] == _REPORT_EVENT_CAPSULE
+            and not os.path.lexists(execution_root / '.git')
+            and not os.path.lexists(execution_root.parent / '.git'),
+            'report event pilot requires the pinned frozen snapshot')
+    expected = {**expected, 'loader_source': {**expected['loader_source'],
+                'checkout_revision': None, 'all_loader_bytes_match_head': False}}
+    evidence_path = Path(evidence_path)
+    require(evidence_path.is_absolute() and evidence_path.resolve(strict=True) == evidence_path,
+            'canonical controlled journal path required')
+    evidence = inspect_journal(evidence_path, expected_head=_REPORT_EVENT_CONTROLLED_HEAD)
+    ready = next(event['payload'] for event in evidence['events'] if event['kind'] == 'READY')
+    close = evidence['events'][-1]
+    require(ready['model_load_count'] == 1 and ready['session']['capsule'] == expected
+            and evidence['submitted'] == evidence['terminal'] == 1 and evidence['outcome_counts'] == {'SUCCEEDED': 1}
+            and close['kind'] == 'CLOSE' and close['payload']['status'] == 'CLOSED'
+            and close['payload']['cleanup']['pid_exit_confirmed'],
+            'report event pilot requires the successful controlled Q and shutdown evidence')
+    return expected
+
+
 class CapsuleGameplayPredictor:
-    """复用 Owner/Broker 的同步 Q 接口；当前仅受控 CPU 预验，禁止正式游戏。"""
+    """复用 Owner/Broker 的同步 Q 接口，另行绑定 Observer-DTRS 的完整游戏试运行。"""
 
     def __init__(self, capsule_path, *, capsule_digest, qualification_path, qualification_digest,
-                 qualification_source, journal_root, limits=Limits()):
+                 qualification_source, journal_root, limits=Limits(), report_event_evidence=None):
         for value in (capsule_digest, qualification_digest):
             hex_id(value)
-        report = _qualified_capsule(capsule_path, capsule_digest, qualification_path,
-                                    qualification_digest, qualification_source)
+        args = (capsule_path, capsule_digest, qualification_path, qualification_digest, qualification_source)
+        execution_root = ROOT
+        self._report_event_identity = None
+        if report_event_evidence is None:
+            report = _qualified_capsule(*args)
+        else:
+            require(qualification_digest == _REPORT_EVENT_QUALIFICATION and 1 <= limits.max_requests <= 4,
+                    'report event pilot requires the fixed qualification and at most four Q requests')
+            execution_root = Path(qualification_source) / 'sources'
+            report = _qualified_capsule(*args, execution_root=execution_root)
+            self._report_event_identity = _report_event_snapshot_identity(report, execution_root, report_event_evidence)
         identity = report['capsule_identity']
         self._qualification = canonical_json_bytes({
             'manifest_digest': qualification_digest, 'source_commit': report['base_head'],
@@ -560,7 +607,7 @@ class CapsuleGameplayPredictor:
         self._owner = ResidentOwner(capsule_path, trust=ServiceTrust(capsule_digest, identity['scope'],
             identity['loader_source']['loader']['implementation_digest'], digest(identity['runtime'])),
             journal_root=journal_root, limits=limits, cpu_threads=identity['runtime']['torch_threads'],
-            interop_threads=identity['runtime']['torch_interop_threads'])
+            interop_threads=identity['runtime']['torch_interop_threads'], _service_root=execution_root)
         self._broker = self._lease = None
         self._identity_bytes = None
         self._last_prediction_bytes = None
@@ -575,6 +622,12 @@ class CapsuleGameplayPredictor:
             require(self._owner.start(), 'capsule resident start failed')
             session = self._owner.session
             require(session['transport_scope'] == 'CAPSULE_CPU_QUALIFICATION_ONLY', 'controlled CPU scope required')
+            application = {}
+            if self._report_event_identity is not None:
+                require(session['capsule'] == self._report_event_identity, 'report event pilot snapshot mismatch')
+                application = {'application_scope': REPORT_EVENT_PILOT_SCOPE,
+                               'controlled_journal_head': _REPORT_EVENT_CONTROLLED_HEAD,
+                               'snapshot_git_status': 'FROZEN_SNAPSHOT_WITHOUT_GIT_METADATA'}
             self._broker = ResidentBroker(self._owner)
             self._lease = self._broker.lease()
             self._identity_bytes = canonical_json_bytes({
@@ -582,7 +635,7 @@ class CapsuleGameplayPredictor:
                 'model_origin': session['capsule']['origin'],
                 'qualification': json.loads(self._qualification), 'execution': session,
                 'adapter_sha256': body_source(Path(__file__)),
-                'broker_sha256': body_source(ROOT/'werewolf/observer_dtrs/final_tom_broker.py')})
+                'broker_sha256': body_source(ROOT/'werewolf/observer_dtrs/final_tom_broker.py'), **application})
             return self
         except BaseException:
             self.close()
@@ -597,8 +650,21 @@ class CapsuleGameplayPredictor:
     def source_digest(self):
         return digest(self.identity)
 
+    @property
+    def request_limit(self):
+        return self._owner.limits.max_requests
+
     def require_ready(self, *, controlled=False):
         require(controlled is True, 'CAPSULE_ONLINE_SCOPE_NOT_QUALIFIED')
+        self._require_live_session()
+
+    def require_report_event_ready(self):
+        self._require_live_session()
+        require(self._report_event_identity is not None
+                and self.identity.get('application_scope') == REPORT_EVENT_PILOT_SCOPE,
+                'report event pilot source evidence required')
+
+    def _require_live_session(self):
         require(not self._closed and self._identity_bytes is not None
                 and self._owner.state == 'IDLE' and not self._owner.audit_unavailable
                 and not self._owner._tainted and self._owner._process.poll() is None
@@ -611,33 +677,42 @@ class CapsuleGameplayPredictor:
     def predict(self, prefix):
         with self._predict_lock:
             self.require_ready(controlled=True)
-            plan = validate_final_pre(prefix, derived_capacity(1024))
-            request_id = digest({'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
-                                 'prefix_digest': prefix.prefix_digest})
-            try:
-                admission, result = self._lease.predict(prefix, request_id=request_id,
-                                                        timeout_s=self._owner.limits.query_s)
-            except BaseException:
-                self.close()
-                raise
-            if admission in ('DUPLICATE', 'DUPLICATE_PRE'):
-                raise ValueError('duplicate PRE; no replay or new inference')
-            try:
-                require(admission == 'SUBMITTED' and result is not None and result.status == 'SUCCEEDED',
-                        'capsule request failed; no retry or fallback')
-                p = result.record['prediction']
-                require(p['plan_digest'] == plan.plan_digest and p['token_count'] == plan.token_count
-                        and p['capsule_identity'] == self.identity['execution']['capsule'], 'prediction plan/source mismatch')
-                q = result.matrix.values
-                self._last_prediction_bytes = canonical_json_bytes({
-                    'request_id': request_id, 'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
-                    'prefix_digest': prefix.prefix_digest, 'plan_digest': plan.plan_digest,
-                    'Q_digest': digest(q), 'q_source_digest': self.source_digest,
-                    'owner_journal_head': self._owner.journal.head})
-                return q
-            except BaseException:
-                self.close()
-                raise
+            return self._query(prefix).values
+
+    def predict_report_event(self, prefix):
+        with self._predict_lock:
+            self.require_report_event_ready()
+            matrix = self._query(prefix)
+            return matrix, self.last_prediction
+
+    def _query(self, prefix):
+        plan = validate_final_pre(prefix, derived_capacity(1024))
+        request_id = digest({'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
+                             'prefix_digest': prefix.prefix_digest})
+        try:
+            admission, result = self._lease.predict(prefix, request_id=request_id,
+                                                    timeout_s=self._owner.limits.query_s)
+        except BaseException:
+            self.close()
+            raise
+        if admission in ('DUPLICATE', 'DUPLICATE_PRE'):
+            raise ValueError('duplicate PRE; no replay or new inference')
+        try:
+            require(admission == 'SUBMITTED' and result is not None and result.status == 'SUCCEEDED',
+                    'capsule request failed; no retry or fallback')
+            p = result.record['prediction']
+            require(p['plan_digest'] == plan.plan_digest and p['token_count'] == plan.token_count
+                    and p['capsule_identity'] == self.identity['execution']['capsule'], 'prediction plan/source mismatch')
+            matrix = result.matrix
+            self._last_prediction_bytes = canonical_json_bytes({
+                'request_id': request_id, 'game_id': prefix.game_id, 'boundary_id': prefix.boundary_id,
+                'prefix_digest': prefix.prefix_digest, 'plan_digest': plan.plan_digest,
+                'Q_digest': digest(matrix.values), 'q_source_digest': self.source_digest,
+                'owner_journal_head': self._owner.journal.head})
+            return matrix
+        except BaseException:
+            self.close()
+            raise
 
     @property
     def last_prediction(self):
