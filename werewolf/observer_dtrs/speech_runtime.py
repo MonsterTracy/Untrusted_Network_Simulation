@@ -3,13 +3,11 @@
 旧情境入口保留命中任一存活狼的事件。新受控入口使用原始报告包含当前
 发言狼的事件。两者都复用公开 V1 证据、Actor、Parser 和原子提交。
 """
-from copy import deepcopy
 from dataclasses import asdict, dataclass
 from enum import Enum
 import re
 from time import perf_counter
 from types import SimpleNamespace
-from weakref import WeakSet
 
 from werewolf.strategy.speech_planning import generate_candidates
 from werewolf.speech.commit_workflow import realize_and_commit
@@ -189,14 +187,14 @@ class ReportEventArm(str, Enum):
     THREE_WAY = 'tom_3wd'
 
 
-_REPORT_EVENT_OPPORTUNITY = 'FIRST_LIVE_WOLF_PRE_WITH_PUBLIC_SELF_ACCUSATION'
+_REPORT_EVENT_OPPORTUNITY = 'ALL_LEGAL_WOLF_SPEECH_PRE'
 
 
-def _report_event_panel(pre, contexts, predict, *, m1_parameters, arm):
+def _report_event_panel(pre, contexts, prediction, *, m1_parameters, arm):
     from scripts import analyze_observer_dtrs_report_event as study
     from scripts.fit_observer_dtrs_report_event import legal_features
 
-    matrix, provenance = predict(pre)
+    matrix, provenance = prediction
     if (type(matrix) is not ProbabilityMatrix
             or (matrix.game_id, matrix.boundary_id, matrix.prefix_digest) !=
             (pre.game_id, pre.boundary_id, pre.prefix_digest)):
@@ -224,75 +222,68 @@ def _report_event_panel(pre, contexts, predict, *, m1_parameters, arm):
     }
 
 
-class ControlledReportEventSpeech:
-    """在单个 Recorder 的现有 PRE 上验证新事件发言，不提供正式对局入口。
+class ReportEventGamePolicy:
+    """在整局内用同一实验臂处理每个合法狼人发言 PRE。"""
 
-    每个受控 attempt 由调用方装配一个实例。返回 None 表示沿用原策略，
-    已尝试的失败会保留审计并停止。Q 回调仅是受控输入，真实来源由其调用端验证。
-    """
+    def __init__(self, *, recorder, agents, predictor, arm, probability, m1_parameters, record_evidence):
+        from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor, REPORT_EVENT_PILOT_SCOPE
 
-    _attempted_recorders = WeakSet()
-
-    def __init__(self, recorder, *, arm, assignment_ref, predict, m1_parameters):
-        if (type(arm) is not ReportEventArm or type(assignment_ref) is not str or not assignment_ref.strip()
-                or not callable(predict)):
-            raise ValueError('受控发言需要显式分臂、分配引用及 PRE 预测接口')
+        if (type(predictor) is not CapsuleGameplayPredictor or type(arm) is not ReportEventArm
+                or len(agents) != len(PLAYER_IDS) or not callable(record_evidence)):
+            raise ValueError('整局策略需要固定分臂、研究专用预测器、原 Agent 和证据写入入口')
+        predictor.require_report_event_ready()
         self._recorder = recorder
+        self._agents = tuple(agents)
+        self._predictor = predictor
         self._arm = arm
-        self._assignment_ref = assignment_ref
-        self._predict = predict
         self._m1_parameters = m1_parameters
-        self._audit = None
+        self._record = record_evidence
+        self._q_requests, self._q_successes, self._q_seconds = 0, 0, 0.
+        self._started = perf_counter()
 
-    @property
-    def audit(self):
-        return deepcopy(self._audit)
+        self._assignment = {'scope': REPORT_EVENT_PILOT_SCOPE, 'game_id': recorder.game_id,
+                            'attempt_id': recorder.claim.attempt_id, 'seed': recorder.claim.seed,
+                            'plan_digest': recorder.plan.plan_digest, 'arm': arm.value,
+                            'probability': probability, 'opportunity_rule': _REPORT_EVENT_OPPORTUNITY}
+        self._assignment['assignment_ref'] = sha256_bytes(canonical_json_bytes(self._assignment))
+        self._record('assignment', dict(self._assignment))
 
-    def execute_pending(self, *, env, actor, handoff):
-        return self._execute_pending(env=env, actor=actor, handoff=handoff)
-
-    def _execute_pending(self, *, env, actor, handoff, record_intent=None):
-        recorder = self._recorder
-        if recorder._env is not env:
-            raise ValueError('Recorder 与当前环境不一致')
-        if self._audit is not None:
-            if self._audit['status'] != 'COMMITTED':
-                raise ValueError('受控机会已尝试且未确认成功')
+    def handle_pre(self, *, env, recorder, call_audit, observation, handoff):
+        if recorder is not self._recorder or call_audit is not recorder.call_audit or recorder._env is not env:
+            raise ValueError('分配与当前 Canonical Recorder 或环境不匹配')
+        if env.phase not in ('speech', 'speech_pk') or observation.get('identity') != 'Werewolf':
             return None
-        if recorder in self._attempted_recorders:
-            raise ValueError('此 Recorder 的受控机会已尝试')
 
         pre = recorder.public_pre_for_handoff(handoff)
         pending = recorder._pending
         if freeze_public_event_history(env.public_events).digest != pre.public_event_digest:
             raise ValueError('pending PRE 已失效')
-        observation = env.get_observation()
-        if observation.get('identity') != 'Werewolf':
-            return None
-        team = _legal_team(pre, observation)
-        contexts = contexts_for_pre(pre, team)
-        if not contexts or contexts[0].wolf_count >= len(contexts):
-            return None
-        selected = select_observer(pre, team)
-        if selected.relation != 'SELF_ACCUSED':
-            return None
-        candidates = generate_candidates(pre)
-
-        self._attempted_recorders.add(recorder)
-        audit = self._audit = {
-            'scope': 'CONTROLLED_REPORT_EVENT_SPEECH',
-            'status': 'ATTEMPTED',
-            'arm': self._arm.value,
-            'assignment_ref': self._assignment_ref,
-            'game_id': pre.game_id, 'attempt_id': recorder.claim.attempt_id,
+        audit = {
+            'scope': self._assignment['scope'], 'status': 'ATTEMPTED',
+            'arm': self._arm.value, 'assignment_ref': self._assignment['assignment_ref'],
+            'game_id': pre.game_id, 'attempt_id': self._assignment['attempt_id'],
             'boundary_id': pre.boundary_id, 'prefix_digest': pre.prefix_digest, 'step_index': pre.step_index,
-            'handoff_digest': handoff.handoff_digest, 'actor': pre.current_speaker,
-            'selection': asdict(selected), 'opportunity_rule': _REPORT_EVENT_OPPORTUNITY,
+            'handoff_digest': handoff.handoff_digest, 'acting_wolf': pre.current_speaker,
+            'day': pre.public_temporal_state.day, 'phase': pre.public_temporal_state.phase.value,
+            'q_requests': 0, 'q_successes': 0, 'q_seconds': 0.,
         }
         before = len(recorder.submitted_gameplay_actions)
         event_index = len(env.public_events)
         try:
-            evidence = _report_event_panel(pre, contexts, self._predict,
+            team = _legal_team(pre, observation)
+            contexts = contexts_for_pre(pre, team)
+            if not contexts:
+                raise ValueError('狼人发言 PRE 没有合格的存活非狼观察者')
+            candidates = generate_candidates(pre)
+            actor = self._agents[observation['current_act_idx'] - 1]
+            started = perf_counter()
+            audit['q_requests'] = 1
+            try:
+                prediction = self._predictor.predict_report_event(pre)
+            finally:
+                audit['q_seconds'] = perf_counter() - started
+            audit['q_successes'] = 1
+            evidence = _report_event_panel(pre, contexts, prediction,
                                            m1_parameters=self._m1_parameters, arm=self._arm)
             audit.update(evidence)
             public_events = pre.public_event_history.to_records()
@@ -308,15 +299,14 @@ class ControlledReportEventSpeech:
                 *(f'prediction:{seat}:{direction}' for seat, row in evidence['panel'].items()
                   for direction in row['adoptable_directions']),
             )
-            with recorder.call_audit.action_context(acting_player_id=observation['current_act_idx'],
+            with call_audit.action_context(acting_player_id=observation['current_act_idx'],
                     boundary_id=pre.boundary_id, is_public_speech=False):
                 index, basis_ref = actor.select_report_event_plan(plan_context, basis_refs=basis_refs)
             payload = candidates[index].public_payload()
             audit.update(candidate_index=index, basis_ref=basis_ref, public_payload=payload)
             if recorder._pending is not pending:
                 raise ValueError('发言选择期间 pending PRE 已变化')
-            if record_intent is not None:
-                record_intent(self.audit)
+            self._record('intent', dict(audit))
             step = realize_and_commit(payload, env=env, actor=actor, recorder=recorder)
             if recorder._pending is not None or len(recorder.submitted_gameplay_actions) != before + 1:
                 raise ValueError('原生提交数量或 pending 状态无法确认')
@@ -337,73 +327,20 @@ class ControlledReportEventSpeech:
                                and len(recorder.submitted_gameplay_actions) == before
                                and len(env.public_events) == event_index else 'COMMIT_UNKNOWN')
             audit['error_type'] = type(error).__name__
+            self._record_execution(audit)
             raise
         audit['commit'] = {'action_id': submitted.action_id, 'event_id': annotation.event_id,
                            'annotation_digest': annotation.annotation_digest}
         audit['status'] = 'COMMITTED'
-        return SpeechExecution(self.audit, step)
-
-
-class ReportEventGamePilot:
-    """将固定分臂接到原 Canonical PRE hook，沿用 Recorder 和单次提交。"""
-
-    def __init__(self, *, recorder, agents, predictor, arm, probability, m1_parameters, record_evidence):
-        from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor, REPORT_EVENT_PILOT_SCOPE
-
-        if (type(predictor) is not CapsuleGameplayPredictor or type(arm) is not ReportEventArm
-                or len(agents) != len(PLAYER_IDS) or not callable(record_evidence)):
-            raise ValueError('整局试运行需要固定分臂、研究专用预测器、原 Agent 和证据写入入口')
-        predictor.require_report_event_ready()
-        self._recorder = recorder
-        self._agents = tuple(agents)
-        self._record = record_evidence
-        self._scope = REPORT_EVENT_PILOT_SCOPE
-        self._q_requests, self._q_successes, self._q_seconds = 0, 0, 0.
-        self._started = perf_counter()
-
-        def predict(pre):
-            start = perf_counter()
-            self._q_requests += 1
-            try:
-                result = predictor.predict_report_event(pre)
-                self._q_successes += 1
-                return result
-            finally:
-                self._q_seconds += perf_counter() - start
-
-        self._assignment = {'scope': self._scope, 'game_id': recorder.game_id,
-                            'attempt_id': recorder.claim.attempt_id, 'seed': recorder.claim.seed,
-                            'plan_digest': recorder.plan.plan_digest, 'arm': arm.value,
-                            'probability': probability, 'opportunity_rule': _REPORT_EVENT_OPPORTUNITY}
-        reference = sha256_bytes(canonical_json_bytes(self._assignment))
-        self._assignment['assignment_ref'] = reference
-        self._record('assignment', dict(self._assignment))
-        self._speech = ControlledReportEventSpeech(recorder, arm=arm, assignment_ref=reference,
-                                                  predict=predict, m1_parameters=m1_parameters)
-
-    def _record_intent(self, audit):
-        self._record('intent', {**audit, 'scope': self._scope})
-
-    def handle_pre(self, *, env, recorder, call_audit, observation, handoff):
-        if recorder is not self._recorder or call_audit is not recorder.call_audit:
-            raise ValueError('分配与 Canonical Recorder 不匹配')
-        try:
-            executed = self._speech._execute_pending(env=env, actor=self._agents[observation['current_act_idx'] - 1],
-                                                     handoff=handoff, record_intent=self._record_intent)
-        except Exception:
-            if self._speech.audit is not None:
-                self._record_execution(self._speech.audit)
-            raise
-        if executed is not None:
-            self._record_execution(executed.audit)
-            return executed.step_result
-        return None
+        self._record_execution(audit)
+        return step
 
     def _record_execution(self, audit):
-        boundary = audit.get('boundary_id')
-        calls = tuple(call for call in self._recorder.call_audit.records if boundary and call.boundary_id == boundary)
-        self._record('execution', {**audit, 'scope': self._scope, 'q_requests': self._q_requests,
-                                   'q_successes': self._q_successes, 'q_seconds': self._q_seconds,
+        self._q_requests += audit['q_requests']
+        self._q_successes += audit['q_successes']
+        self._q_seconds += audit['q_seconds']
+        calls = tuple(call for call in self._recorder.call_audit.records if call.boundary_id == audit['boundary_id'])
+        self._record('execution', {**audit,
                                    'plan_calls': sum(c.purpose is BackendCallPurpose.GAMEPLAY_ACTION for c in calls),
                                    'actor_calls': sum(c.purpose is BackendCallPurpose.SPEECH_GENERATION for c in calls),
                                    'parser_calls': sum(c.purpose is BackendCallPurpose.SPEECH_PERCEPTION for c in calls)})
@@ -412,9 +349,9 @@ class ReportEventGamePilot:
         """保留 Canonical 的普通后续策略。"""
 
     def after_game(self, *, env, winner):
-        if self._speech.audit is None:
-            self._record_execution({**self._assignment, 'status': 'NO_COMMON_OPPORTUNITY'})
         # 完整游戏胜者由随后进行的原生 Replay 核验。
         summary = self._recorder.call_audit.summary()
         self._record('runtime', {**self._assignment, 'elapsed_seconds': perf_counter() - self._started,
+                                 'q_requests': self._q_requests, 'q_successes': self._q_successes,
+                                 'q_seconds': self._q_seconds,
                                  'backend_calls': summary.used_calls, 'backend_retries': summary.retry_calls})

@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 import multiprocessing as mp
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -24,9 +25,11 @@ def wait(predicate):
 
 
 def test_spawn_client_multiple_PRE_without_owner_pickle(factory,tmp_path):
-    make,model=factory;owner=make();assert owner.start()
+    limits = replace(Limits(), max_requests=6)
+    make,model=factory;owner=make(limits=limits);assert owner.start()
     broker=ResidentBroker(owner);lease=broker.lease()
     pres=[prefix_for(game_id='broker-a'),prefix_for(game_id='broker-b',phase='pk_discussion',dead=('player2',))]
+    pres.extend(prefix_for(game_id=f'broker-{i}') for i in range(len(pres), limits.max_requests))
     child=mp.get_context('spawn').Process(target=roundtrip,args=(lease,[p.to_record() for p in pres],tmp_path/'result.json'))
     try:
         child.start();broker.release_parent_copy(lease);child.join(timeout=15)
@@ -35,7 +38,7 @@ def test_spawn_client_multiple_PRE_without_owner_pickle(factory,tmp_path):
         assert r['restricted_imports'] is False
         assert all(x['admission']=='SUBMITTED' and x['status']=='SUCCEEDED' for x in r['rows'])
         assert [x['matrix'] for x in r['rows']]==[[list(row) for row in model.predict(p).probabilities] for p in pres]
-        assert owner.inspect()['submitted']==2
+        assert owner.inspect()['submitted']==limits.max_requests
     finally:
         if child.is_alive():child.kill();child.join(timeout=2)
         broker.close()
@@ -161,6 +164,25 @@ def capsule_client(artificial,tmp_path,monkeypatch):
         clients.append(result);return result
     yield make,model
     for c in clients:c.close()
+
+
+def test_report_event_client_passes_configured_request_budget_to_owner(monkeypatch, tmp_path):
+    from werewolf.observer_dtrs import final_tom_client as client
+
+    limits = replace(Limits(), max_requests=8)
+    identity = {'scope': 'PINNED_FINAL_INFERENCE_UNQUALIFIED',
+                'loader_source': {'loader': {'implementation_digest': 'a' * 64}},
+                'runtime': {'torch_threads': 1, 'torch_interop_threads': 1}}
+    monkeypatch.setattr(client, '_qualified_capsule', lambda *args, **kwargs: {
+        'capsule_identity': identity, 'base_head': 'b' * 40, 'source_snapshot_digest': 'c' * 64})
+    monkeypatch.setattr(client, '_report_event_snapshot_identity', lambda *args: identity)
+    owner = Mock()
+    monkeypatch.setattr(client, 'ResidentOwner', owner)
+    client.CapsuleGameplayPredictor(tmp_path / 'capsule', capsule_digest='d' * 64,
+        qualification_path=tmp_path / 'qual', qualification_digest=client._REPORT_EVENT_QUALIFICATION,
+        qualification_source=tmp_path / 'snapshot', journal_root=tmp_path / 'journal',
+        limits=limits, report_event_evidence=tmp_path / 'prior-journal')
+    assert owner.call_args.kwargs['limits'] is limits
 
 
 def test_capsule_predict_interface_Q_identity_duplicate_and_close(capsule_client):

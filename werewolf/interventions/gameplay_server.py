@@ -28,7 +28,7 @@ from werewolf.interventions.online.records import validate_probe_lifecycle_recor
 
 def execute_report_event_games(*, plan, reference_collection, assignment_seed,
                                destination, runtime_factory, predictor):
-    """在 Canonical Collection 中按游戏预先分配三臂，各局最多干预一次。"""
+    """按局预先分配三臂，同局所有合法狼人发言使用同一策略。"""
     from collections import Counter
     from random import Random
     from scripts import analyze_observer_dtrs_report_event as study
@@ -38,7 +38,7 @@ def execute_report_event_games(*, plan, reference_collection, assignment_seed,
     from werewolf.canonical_collection.collector import CollectionResult, collect
     from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory, classic7_full_game_replay_executor
     from werewolf.observer_dtrs.final_tom_client import CapsuleGameplayPredictor, REPORT_EVENT_PILOT_SCOPE
-    from werewolf.observer_dtrs.speech_runtime import ReportEventArm, ReportEventGamePilot
+    from werewolf.observer_dtrs.speech_runtime import ReportEventArm, ReportEventGamePolicy
 
     validate_collection_plan(plan)
     dest = safe_path(destination)
@@ -46,10 +46,10 @@ def execute_report_event_games(*, plan, reference_collection, assignment_seed,
     game_count = len(plan.ordered_seed_pool)
     if (type(runtime_factory) is not Classic7RuntimeFactory or runtime_factory.f0_control is not None
             or type(predictor) is not CapsuleGameplayPredictor or type(assignment_seed) is not int
-            or assignment_seed < 0 or not len(arm_order) <= game_count <= predictor.request_limit
+            or assignment_seed < 0 or game_count < len(arm_order)
             or plan.target_canonical_success_count != game_count
             or dest.exists()):
-        raise ValueError('需要新的 Canonical 目录、研究专用预测器及覆盖三臂且符合 Q 请求预算的固定种子计划')
+        raise ValueError('需要新的 Canonical 目录、研究专用预测器及覆盖三臂的固定种子计划')
     prior = load_collection_plan(safe_path(reference_collection))
     if (prior.collection_id != 'paper-canonical-qwen35-9b-5800-v1'
             or prior.plan_digest != 'ccc63353fe626ba5b76b06174a94272874a650f9a12b404de7c98c646b1e6bbe'
@@ -72,15 +72,18 @@ def execute_report_event_games(*, plan, reference_collection, assignment_seed,
                         for seed in plan.ordered_seed_pool],
     })
 
-    def with_pilot(*, plan, claim):
+    def with_policy(*, plan, claim):
         runtime = runtime_factory(plan=plan, claim=claim)
         evidence = dest / 'speech-evidence' / runtime.recorder.game_id
 
         def record(stage, row):
-            write_once(evidence / f'{stage}.json', row)
+            name = f'{stage}.json'
+            if stage in ('intent', 'execution'):
+                name = f"{row['step_index']:06d}-{name}"
+            write_once(evidence / name, row)
 
         arm = arms[claim.seed]
-        runtime.online_pilot = ReportEventGamePilot(
+        runtime.online_pilot = ReportEventGamePolicy(
             recorder=runtime.recorder, agents=runtime.agents, predictor=predictor, arm=arm,
             probability=probabilities[arm], m1_parameters=m1_parameters, record_evidence=record,
         )
@@ -88,7 +91,7 @@ def execute_report_event_games(*, plan, reference_collection, assignment_seed,
         return runtime
 
     try:
-        return collect(plan=plan, runtime_factory=with_pilot, destination=dest)
+        return collect(plan=plan, runtime_factory=with_policy, destination=dest)
     except CollectionSeedPoolExhausted:
         # 已分配种子用尽，失败保留在原 Attempt Ledger 中。
         return CollectionResult(dest, validate_attempt_ledger(dest / 'attempt_ledger', plan))

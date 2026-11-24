@@ -583,7 +583,7 @@ def _report_event_snapshot_identity(report, execution_root, evidence_path):
 
 
 class CapsuleGameplayPredictor:
-    """复用 Owner/Broker 的同步 Q 接口，另行绑定 Observer-DTRS 的完整游戏试运行。"""
+    """复用 Owner/Broker 的同步 Q 接口与 Report-Event 试运行的冻结来源。"""
 
     def __init__(self, capsule_path, *, capsule_digest, qualification_path, qualification_digest,
                  qualification_source, journal_root, limits=Limits(), report_event_evidence=None):
@@ -595,8 +595,8 @@ class CapsuleGameplayPredictor:
         if report_event_evidence is None:
             report = _qualified_capsule(*args)
         else:
-            require(qualification_digest == _REPORT_EVENT_QUALIFICATION and 1 <= limits.max_requests <= 4,
-                    'report event pilot requires the fixed qualification and at most four Q requests')
+            require(qualification_digest == _REPORT_EVENT_QUALIFICATION,
+                    'report event pilot requires the fixed qualification')
             execution_root = Path(qualification_source) / 'sources'
             report = _qualified_capsule(*args, execution_root=execution_root)
             self._report_event_identity = _report_event_snapshot_identity(report, execution_root, report_event_evidence)
@@ -649,10 +649,6 @@ class CapsuleGameplayPredictor:
     @property
     def source_digest(self):
         return digest(self.identity)
-
-    @property
-    def request_limit(self):
-        return self._owner.limits.max_requests
 
     def require_ready(self, *, controlled=False):
         require(controlled is True, 'CAPSULE_ONLINE_SCOPE_NOT_QUALIFIED')
