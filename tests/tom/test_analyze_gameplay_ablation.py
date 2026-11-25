@@ -11,7 +11,8 @@ import pytest
 
 from scripts import analyze_tom_gameplay_ablation as analysis
 from scripts import tom_gameplay_collection as collection
-from tests.canonical_collection.test_game_bundle import _fixture
+from tests.canonical_collection.test_game_bundle import _fixture, _public_events
+from tests.canonical_collection.test_public_history import _event, _phase
 from tests.tom.test_gameplay_ablation import _matrix, _wolf_observation
 from werewolf.agents.prompt_template_v0 import (
     build_day_cognition_prompt, build_public_claim_catalog, freeze_discussion_candidates,
@@ -22,8 +23,10 @@ from werewolf.artifact_io import (
 )
 from werewolf.canonical_collection.attempt_ledger import construct_attempt_claim
 from werewolf.canonical_collection.game_bundle import _bundle_files
+from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
 from werewolf.canonical_collection.trajectory_evidence import (
     BackendCallPurpose, BackendCallStatus, construct_backend_call_evidence,
+    construct_private_replay_evidence,
 )
 from scripts.tom_gameplay_ablation import tom_payload
 
@@ -211,8 +214,11 @@ def test_analysis_is_read_only_and_output_schema_is_json(formal, result):
     assert set(result) == {
         "experiment_id", "source_collection_digest", "N",
         "attempted_candidates", "invalid_candidate_count", "invalid_candidates",
-        "arms", "paired", "treatment", "analysis",
+        "arms", "paired", "treatment", "analysis", "games", "additional_attempts",
     }
+    tom = result["arms"][collection.TOM]
+    assert tom["votes"]["games"] == 40 and tom["votes"]["games_with_vote_evidence"] == 0
+    assert tom["votes"]["AVR"]["value"] == "UNKNOWN"
     assert result["source_collection_digest"] == digest
 
 
@@ -370,6 +376,20 @@ def _coverage_artifacts(root, record, ordinal, arm, status):
     entries = case.audit["treatments"] if treated else []
     base = collection._arm_path(root, ordinal, arm)
     files = _bundle_files(case.evidence)
+    ballots = {"player1": "player3", "player2": "player1", "player3": "player1"}
+    history = freeze_public_event_history([
+        *_public_events(), _phase(5, 1, "vote"),
+        _event(6, "vote_result", votes=[{"voter": seat, "target": ballots.get(seat)} for seat in PLAYER_IDS]),
+        _event(7, "exile_result", exiled_players=["player1"]),
+    ])
+    original = case.evidence.private_replay_evidence
+    private = construct_private_replay_evidence(
+        game_id=original.game_id, seed=original.seed, role_assignment=case.roles,
+        runtime_configuration=original.runtime_configuration, initial_runtime_state=original.initial_runtime_state,
+        replay_inputs=original.replay_inputs, expected_public_event_digest=history.digest,
+    )
+    files["public/public_event_stream.jsonl"] = canonical_jsonl_bytes(history.to_records())
+    files["private/private_replay_evidence.json"] = canonical_json_bytes(private.to_record())
     files["private/backend_call_evidence.jsonl"] = canonical_jsonl_bytes(call.to_record() for call in calls)
     bundle = publish_artifact(
         base / "games" / status["game_id"],
@@ -401,7 +421,7 @@ def _coverage_artifacts(root, record, ordinal, arm, status):
 
 
 def _count_case(case, *, prefixes=None, roles=None, audit=None, calls=None,
-                actions=None, arm=collection.TOM):
+                actions=None, arm=collection.TOM, reported_treatments=1):
     return analysis._coverage_counts(
         [case.prefix] if prefixes is None else prefixes,
         case.roles if roles is None else roles,
@@ -409,7 +429,7 @@ def _count_case(case, *, prefixes=None, roles=None, audit=None, calls=None,
         [case.call()] if calls is None else calls,
         [action.to_record() for action in case.evidence.submitted_gameplay_actions]
         if actions is None else actions,
-        game_id=case.prefix.game_id, arm=arm, reported_treatments=1,
+        game_id=case.prefix.game_id, arm=arm, reported_treatments=reported_treatments,
     )
 
 
@@ -422,10 +442,12 @@ def test_coverage_matches_full_payload_and_deduplicates_cognition_retries():
     assert result["coverage"] == 1.0
     assert result["response_and_submitted_action_decisions"] == 1
     assert result["anomalies"] == []
+    assert result["tom_integration"] == {"A": 1, "P": 1, "S": 1, "S_verified": 1}
     # 注入是后端提交，不要求模型已正常返回，更不等于证明认知采用。
     failed = _count_case(case, calls=[case.call(status="error")], actions=[])
     assert failed["U"] == 1
     assert failed["response_and_submitted_action_decisions"] == 0
+    assert failed["tom_integration"] == {"A": 1, "P": 1, "S": "UNKNOWN", "S_verified": 0}
 
 
 def test_coverage_opportunities_are_independent_of_treatment_and_arm():
@@ -486,6 +508,10 @@ def test_coverage_reports_anomalies_without_removing_games(change, kind):
     assert all(entry["game_id"] == case.prefix.game_id for entry in result["anomalies"])
     assert result["T"] == (2 if change == "duplicate" else 1)
     assert result["U"] == (1 if change == "duplicate" else 0)
+    if change == "missing_request":
+        assert result["tom_integration"] == {"A": 1, "P": 1, "S": 0, "S_verified": 0}
+    if change in {"duplicate", "wrong_prefix"}:
+        assert result["tom_integration"]["A"] == "UNKNOWN"
 
 
 def test_coverage_duplicate_with_different_payload_keeps_orphan_entry():
@@ -505,6 +531,7 @@ def test_coverage_missing_predictor_counter_is_unknown_not_inferred_from_treatme
     result = _count_case(case, audit=audit)
     assert result["C"] == "UNKNOWN"
     assert result["U"] == result["T"] == 1
+    assert result["tom_integration"] == {"A": "UNKNOWN", "P": "UNKNOWN", "S": "UNKNOWN", "S_verified": 1}
 
 
 def test_coverage_unparseable_payload_is_unknown_and_not_a_zero_injection():
@@ -556,9 +583,25 @@ def test_coverage_title_alone_or_invalid_json_never_proves_payload(replacement):
 
 def test_coverage_notom_contamination_is_reported_not_silently_zeroed():
     case = _coverage_case()
-    result = _count_case(case, arm=collection.NOTOM)
+    result = _count_case(case, arm=collection.NOTOM, actions=[])
     assert result["E"] == result["T"] == result["H"] == result["U"] == 1
     assert "unexpected_tom_in_notom" in {entry["kind"] for entry in result["anomalies"]}
+    assert result["tom_integration"] == {"A": 1, "P": 1, "S": 1, "S_verified": 1}
+    assert result["response_and_submitted_action_decisions"] == 0
+    row = {"arm": collection.NOTOM, "vote_counts": "UNKNOWN", **result}
+    summary = analysis._arm_gameplay_metrics(collection.NOTOM, [row], [])
+    assert summary["tom_integration"]["complete_games"]["integration_success_rate"]["value"] == 1
+
+
+def test_coverage_notom_response_without_bound_treatment_is_unverified():
+    case = _coverage_case()
+    audit = {"treatments": [], "treatment_count": 0, "predictor_requests": None}
+    result = _count_case(case, arm=collection.NOTOM, audit=audit, reported_treatments=0)
+    assert result["H"] == 1 and result["U"] == 0
+    assert result["tom_integration"] == {"A": "UNKNOWN", "P": "UNKNOWN", "S": "UNKNOWN", "S_verified": 0}
+    assert {entry["kind"] for entry in result["anomalies"]} >= {
+        "request_without_treatment", "unexpected_tom_in_notom",
+    }
 
 
 def test_coverage_zero_opportunities_are_not_zero_percent():
@@ -566,14 +609,72 @@ def test_coverage_zero_opportunities_are_not_zero_percent():
     roles = {**case.roles, "player1": "Villager"}
     result = _count_case(case, roles=roles,
                          audit={"treatments": [], "treatment_count": 0, "predictor_requests": None},
-                         calls=[case.call(value=None)], arm=collection.NOTOM)
+                         calls=[case.call(value=None)], arm=collection.NOTOM, reported_treatments=0)
     assert result["E"] == result["U"] == 0
     assert result["coverage"] == "NOT_APPLICABLE"
+    assert result["tom_integration"] == {"A": 0, "P": 0, "S": 0, "S_verified": 0}
 
 
 @pytest.fixture(scope="module")
 def coverage_formal(tmp_path_factory):
     return _formal_collection(tmp_path_factory.mktemp("coverage-analysis") / "collection", coverage=True)
+
+
+def test_paired_results_match_with_missing_vote_evidence(coverage_formal, tmp_path):
+    root, digest = coverage_formal
+    full = analysis.analyze_collection(root, expected_final_digest=digest)
+    partial = _copy_formal(coverage_formal, tmp_path)
+    arm_path = collection._arm_path(partial, 0, collection.NOTOM)
+    next(arm_path.rglob("public_event_stream.jsonl")).unlink()
+
+    result = analysis.analyze_collection(partial, expected_final_digest=digest)
+
+    assert result["N"] == full["N"] == 40
+    assert len(result["games"]) == len(full["games"]) == 80
+    assert result["paired"] == full["paired"]
+    assert result["invalid_candidates"] == full["invalid_candidates"]
+    for arm in collection.ARMS:
+        for field in ("wins", "losses", "win_rate"):
+            assert result["arms"][arm][field] == full["arms"][arm][field]
+    votes = result["arms"][collection.NOTOM]["votes"]
+    assert votes["games_with_vote_evidence"] == 39
+    assert votes["AVR"]["value"] == "UNKNOWN"
+    assert votes["available_evidence"]["AVR"] == {"numerator": 78, "denominator": 78, "value": 1}
+    assert result["arms"][collection.NOTOM]["tom_integration"] == full["arms"][collection.NOTOM]["tom_integration"]
+    coverage = analysis.analyze_coverage(partial, expected_final_digest=digest)
+    assert coverage["summary"]["arms"][collection.NOTOM]["votes"] == votes
+
+
+@pytest.mark.parametrize("missing,counts,submitted", (
+    ("private/backend_call_evidence.jsonl", (1, 1, "UNKNOWN"), "UNKNOWN"),
+    ("private/submitted_gameplay_actions.jsonl", (1, 1, 1), "UNKNOWN"),
+    ("private_treatment_audit/record.json", ("UNKNOWN", "UNKNOWN", "UNKNOWN"), "UNKNOWN"),
+))
+def test_primary_keeps_vote_evidence_without_full_integration_evidence(
+    coverage_formal, tmp_path, missing, counts, submitted,
+):
+    partial = _copy_formal(coverage_formal, tmp_path)
+    arm_path = collection._arm_path(partial, 1, collection.TOM)
+    next(arm_path.glob(missing) if missing.startswith("private_treatment_audit/")
+         else arm_path.glob(f"games/*/{missing}")).unlink()
+    result = analysis.analyze_collection(partial, expected_final_digest=coverage_formal[1])
+    assert result["N"] == 40 and result["arms"][collection.TOM]["win_rate"] == 0.5
+    assert result["arms"][collection.TOM]["votes"]["games_with_vote_evidence"] == 40
+    row = next(game for game in result["games"] if game["candidate_ordinal"] == 1 and game["arm"] == collection.TOM)
+    assert tuple(row["tom_integration"][field] for field in ("A", "P", "S")) == counts
+    assert row["response_and_submitted_action_decisions"] == submitted
+    assert missing in row["missing_evidence"]
+
+
+def test_missing_vote_evidence_does_not_hide_wrong_manifest_identity(coverage_formal, tmp_path):
+    partial = _copy_formal(coverage_formal, tmp_path)
+    arm_path = collection._arm_path(partial, 0, collection.NOTOM)
+    manifest = next(arm_path.glob("games/*/manifest.json"))
+    (manifest.parent / "public" / "public_event_stream.jsonl").unlink()
+    other_arm = collection._arm_path(partial, 1, collection.NOTOM)
+    manifest.write_bytes(next(other_arm.glob("games/*/manifest.json")).read_bytes())
+    with pytest.raises(ArtifactValidationError, match="auxiliary manifest identity"):
+        analysis.analyze_collection(partial, expected_final_digest=coverage_formal[1])
 
 
 def test_coverage_reads_only_included_artifacts_and_never_runs_models(coverage_formal, monkeypatch):
@@ -601,6 +702,22 @@ def test_coverage_reads_only_included_artifacts_and_never_runs_models(coverage_f
     }
     assert tom["coverage"] == tom["mean_per_game"]["U"] == 39 / 40
     assert tom["games_with_injection"] == 39
+    assert tom["votes"]["games_with_vote_evidence"] == 40
+    assert tom["votes"]["AVR"] == {"numerator": 80, "denominator": 80, "value": 1}
+    assert tom["votes"]["wolf_exile_rate"] == {"numerator": 40, "denominator": 80, "value": 0.5}
+    assert tom["coverage_counts"] == {"numerator": 39, "denominator": 40, "value": 39 / 40}
+    assert no["tom_integration"]["complete_games"]["integration_success_rate"]["value"] is None
+    completed = tom["tom_integration"]["complete_games"]
+    assert completed["A"] == completed["P"] == completed["S"] == 39
+    assert completed["integration_success_rate"]["value"] == 1
+    excluded = tom["tom_integration"]["excluded_attempts"]
+    assert excluded["records"] == excluded["unknown_records"]["A"] == 1
+    assert excluded["integration_success_rate"]["value"] == "UNKNOWN"
+    all_attempts = tom["tom_integration"]["all_observed_attempts"]
+    assert all_attempts["records"] == 41 and all_attempts["A"] == "UNKNOWN"
+    assert all_attempts["integration_success_rate"]["value"] == "UNKNOWN"
+    assert all_attempts["verified_minimum"] == dict.fromkeys(("A", "P", "S"), 39)
+    assert {row["candidate_ordinal"] for row in summary["additional_attempts"]} == {14, 15}
     assert no["unexpected_anomaly_count"] == 0
     assert no["anomaly_counts"]["eligible_without_treatment"] == 40
     assert tom["anomaly_counts"]["eligible_without_treatment"] == 1
@@ -627,8 +744,8 @@ def test_coverage_pools_opportunities_and_propagates_unknown_without_dropping_ga
 ):
     original = analysis._coverage_game
 
-    def varied(*args):
-        row = original(*args)
+    def varied(*args, **kwargs):
+        row = original(*args, **kwargs)
         if row["arm"] == collection.NOTOM:
             row["E"] = 3
         elif row["candidate_ordinal"] == 0:
@@ -664,6 +781,8 @@ def test_coverage_cli_separates_outputs_and_never_overwrites_history(
         rows = list(csv.DictReader(handle))
     assert len(rows) == 80
     assert len(json.loads(rows[0]["anomalies"])) == 1
+    assert json.loads(rows[0]["vote_counts"])["wolf_participations"] == 2
+    assert json.loads(rows[0]["tom_integration"])["A"] == 0
     assert analysis.main(arguments) == 0
     capsys.readouterr()
     assert _tree_hashes(root) == before

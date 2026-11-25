@@ -17,12 +17,22 @@ from scripts import collect_games as operator
 from scripts import tom_gameplay_collection as collection
 from werewolf import cli
 from werewolf.artifact_io import (
-    canonical_json_bytes, open_artifact_envelope, read_artifact_file, sha256_bytes,
+    ArtifactEnvelope, ArtifactValidationError, canonical_json_bytes, read_artifact_file,
+    sha256_bytes,
+)
+from werewolf.artifact_io.canonical import (
+    _actual_artifact_tree, _expected_directories, _load_canonical_json,
+    _validated_file_table,
 )
 from werewolf.canonical_collection.game_bundle import (
-    CANONICAL_GAME_BUNDLE_SCHEMA_VERSION, _backend_call_from_record,
-    _prefix_from_record, _private_replay_from_record,
+    CANONICAL_GAME_BUNDLE_SCHEMA_VERSION, _backend_call_from_record, _decode_jsonl,
+    _history_from_records, _prefix_from_record, _private_replay_from_record,
 )
+from werewolf.canonical_collection.public_history import PLAYER_IDS
+from werewolf.game_runtime import (
+    UNKNOWN, count_game_votes, gameplay_ratio, summarize_game_votes, summarize_tom_integration,
+)
+from werewolf.observer_dtrs.probabilities import ProbabilityRow
 
 
 EXPECTED_FINAL_DIGEST = "067e1f18ccb9dc684fe720d740ee7b3206d227a7f3ab2d49a3d3ffc747252a18"
@@ -146,6 +156,7 @@ def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True):
     included = []
     valid_pairs = []
     invalid = []
+    excluded_pairs = []
     seen_ordinals = set()
     seen_seeds = set()
     reasons = Counter()
@@ -199,6 +210,7 @@ def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True):
             included.append({"candidate_ordinal": ordinal, "seed": seed})
             valid_pairs.append(pair)
         else:
+            excluded_pairs.append(pair)
             item = {
                 "candidate_ordinal": ordinal, "seed": seed,
                 "failure_arm": pair["failure_arm"],
@@ -218,7 +230,7 @@ def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True):
         ) for item in invalid} != EXPECTED_INVALID
     ):
         raise ValueError("final inclusion or formal failure diagnostics mismatch")
-    return valid_pairs, invalid
+    return valid_pairs, invalid, excluded_pairs
 
 
 def _exact_mcnemar(n01: int, n10: int) -> float:
@@ -257,7 +269,7 @@ def analyze_collection(root: Path, *, expected_final_digest: str = EXPECTED_FINA
     root = Path(root)
     plan, plan_digest = _plan(root)
     final, final_digest = _final(root, plan, plan_digest, expected_final_digest)
-    valid_pairs, invalid = _pairs(root, plan, final)
+    valid_pairs, invalid, excluded_pairs = _pairs(root, plan, final)
     outcomes = Counter()
     effects = []
     treatment_counts = []
@@ -281,6 +293,7 @@ def analyze_collection(root: Path, *, expected_final_digest: str = EXPECTED_FINA
     delta = (wins[collection.TOM] - wins[collection.NOTOM]) / n
     if delta != (n01 - n10) / n or delta != sum(effects) / n:
         raise ValueError("paired effect disagrees with discordant counts")
+    games, additional_attempts = _gameplay_evidence(root, plan, final, valid_pairs, excluded_pairs)
     arm_results = {}
     for arm in collection.ARMS:
         arm_results[arm] = {
@@ -293,6 +306,7 @@ def analyze_collection(root: Path, *, expected_final_digest: str = EXPECTED_FINA
                 "mean": statistics.mean(speeches[arm]),
                 "median": statistics.median(speeches[arm]),
             },
+            **_arm_gameplay_metrics(arm, games, additional_attempts),
         }
     return {
         "experiment_id": collection.EXPERIMENT_ID,
@@ -307,6 +321,8 @@ def analyze_collection(root: Path, *, expected_final_digest: str = EXPECTED_FINA
             )} for item in invalid
         ],
         "arms": arm_results,
+        "games": games,
+        "additional_attempts": additional_attempts,
         "paired": {
             "n00": n00, "n01": n01, "n10": n10, "n11": n11,
             "discordant_count": n01 + n10,
@@ -328,13 +344,12 @@ def analyze_collection(root: Path, *, expected_final_digest: str = EXPECTED_FINA
     }
 
 
-UNKNOWN = "UNKNOWN"
-_COVERAGE_FILES = (
-    "public/authoritative_pre_prefixes.jsonl",
-    "private/backend_call_evidence.jsonl",
-    "private/submitted_gameplay_actions.jsonl",
-    "private/private_replay_evidence.json",
-)
+_PRE_FILE = "public/authoritative_pre_prefixes.jsonl"
+_CALL_FILE = "private/backend_call_evidence.jsonl"
+_ACTION_FILE = "private/submitted_gameplay_actions.jsonl"
+_REPLAY_FILE = "private/private_replay_evidence.json"
+_VOTE_FILE = "public/public_event_stream.jsonl"
+_COVERAGE_FILES = (_PRE_FILE, _CALL_FILE, _ACTION_FILE, _REPLAY_FILE)
 _COVERAGE_ANOMALIES = (
     "eligible_without_treatment", "treatment_without_matching_request",
     "treatment_payload_mismatch", "treatment_outside_eligible", "duplicate_treatment",
@@ -393,6 +408,26 @@ def _request_tom_payload(call):
     if len(found) > 1:
         raise ValueError("multiple ToM payload blocks in one request")
     return found[0] if found else None
+
+
+def _prediction_observers(prefix, roles):
+    return [seat for seat in PLAYER_IDS
+            if seat in prefix.alive_observer_ids and roles[seat] != "Werewolf"]
+
+
+def _valid_prediction_payload(payload, prefix, roles):
+    if (set(payload) != {"target_ids", "rows"}
+            or [row["observer_id"] for row in payload["rows"]] != _prediction_observers(prefix, roles)):
+        return False
+    for row in payload["rows"]:
+        if set(row) != {"observer_id", "probabilities"}:
+            return False
+        try:
+            ProbabilityRow(prefix.game_id, prefix.boundary_id, prefix.prefix_digest,
+                           row["observer_id"], row["probabilities"])
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
@@ -464,10 +499,14 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
     matched_entries = set()
     returned = set()
     uncertain = set()
+    confirmed_integration = set()
+    uncertain_integration = set()
+    invalid_predictions = set()
+    unbound_prediction_request = False
     payload_requests = 0
     request_unknown = False
     call_ids = set()
-    for call in calls:
+    for call in calls or ():
         if call.call_id in call_ids:
             raise ValueError("duplicate backend call_id")
         call_ids.add(call.call_id)
@@ -477,6 +516,10 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
         except (ValueError, TypeError, KeyError) as error:
             request_unknown = True
             uncertain.add(boundary)
+            prefix = by_boundary.get(boundary)
+            if (boundary in eligible and call.observer_id == prefix.current_speaker
+                    and call.purpose.value == "speech_generation"):
+                uncertain_integration.add(boundary)
             note("request_payload_unverifiable", boundary,
                  call_id=call.call_id, reason=str(error))
             continue
@@ -492,6 +535,7 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
             continue
         candidates = expected_payloads.get(boundary, [])
         if not candidates:
+            unbound_prediction_request = True
             note("request_without_treatment", boundary, call_id=call.call_id)
             continue
         observer_ids = [row.get("observer_id") for row in payload.get("rows", [])]
@@ -505,9 +549,18 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
             continue
         matched.add(boundary)
         matched_entries.update(matching_entries)
-        if call.status.value == "success" and call.private_payload.to_value().get("response") is not None:
+        response_received = (call.status.value == "success"
+                             and call.private_payload.to_value().get("response") is not None)
+        if response_received:
             returned.add(boundary)
-    if entries_known:
+        if not _valid_prediction_payload(payload, prefix, roles):
+            invalid_predictions.add(boundary)
+            note("invalid_prediction_payload", boundary, call_id=call.call_id)
+        elif response_received:
+            confirmed_integration.add(boundary)
+        else:
+            uncertain_integration.add(boundary)
+    if entries_known and calls is not None:
         for index, entry in enumerate(entries):
             boundary = entry.get("boundary_id")
             if index not in matched_entries and boundary not in uncertain:
@@ -515,31 +568,91 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
     if arm == collection.NOTOM and (entries or payload_requests or requests not in (0, UNKNOWN)):
         note("unexpected_tom_in_notom")
 
-    submitted = {action["boundary_id"] for action in actions
+    submitted = {action["boundary_id"] for action in actions or ()
                  if action.get("action_type") == "public_speech"
                  and action.get("boundary_id") in by_boundary
                  and action.get("actor_id") == by_boundary[action["boundary_id"]].current_speaker}
     # 无法解析且可能匹配的请求，不能悄悄当成“未注入”；已证明的匹配仍单列。
-    unknown_u = not entries_known or bool((uncertain & treated & eligible) - matched)
+    unknown_u = calls is None or not entries_known or bool((uncertain & treated & eligible) - matched)
     injected = UNKNOWN if unknown_u else len(matched)
+    integration = dict.fromkeys(("A", "P", "S"), UNKNOWN)
+    integration["S_verified"] = len(confirmed_integration)
+    # 以每个预测请求对应唯一的 PRE 审计条目确认 A，分臂只决定预期行为。
+    one_to_one = (
+        entries_known and treated <= eligible and not unbound_prediction_request
+        and requests == reported_treatments == audit.get("treatment_count") == len(entries) == len(expected_payloads)
+    )
+    if one_to_one:
+        integration["A"] = requests
+        if not invalid_predictions and all(
+            candidates[0][1].get("observer_ids") == _prediction_observers(by_boundary[boundary], roles)
+            for boundary, candidates in expected_payloads.items()
+        ):
+            integration["P"] = requests
+            if calls is not None and not (uncertain_integration - confirmed_integration):
+                integration["S"] = len(confirmed_integration)
     return {
         "E": len(eligible), "T": len(entries) if entries_known else UNKNOWN,
-        "C": requests, "H": UNKNOWN if request_unknown else payload_requests,
+        "C": requests, "H": UNKNOWN if calls is None or request_unknown else payload_requests,
         "U": injected, "U_verified": len(matched), "H_verified": payload_requests,
         "coverage": (UNKNOWN if injected == UNKNOWN else
                      injected / len(eligible) if eligible else "NOT_APPLICABLE"),
-        "response_and_submitted_action_decisions": UNKNOWN if unknown_u else len(returned & submitted),
+        "response_and_submitted_action_decisions": (
+            UNKNOWN if unknown_u or actions is None else len(returned & submitted)
+        ),
+        "tom_integration": integration,
         "anomalies": anomalies,
     }
 
 
-def _coverage_game(root, plan, pair, arm):
+def _game_row(plan, pair, arm):
+    status = pair["arms"][arm]
+    return {
+        "candidate_ordinal": pair["candidate_ordinal"], "seed": pair["seed"],
+        "arm": arm, "game_id": status.get("game_id"), "status": status["status"],
+        "source_revision": plan["source_revision"], "bundle_digest": status.get("bundle_digest"),
+        "treatment_audit_digest": status.get("treatment_audit_digest"),
+        "failure_type": status.get("failure_type"), "vote_counts": UNKNOWN,
+        "tom_integration": dict.fromkeys(("A", "P", "S"), UNKNOWN),
+        "response_and_submitted_action_decisions": UNKNOWN,
+        "missing_evidence": [],
+    }
+
+
+def _auxiliary_envelope(path, *, digest, artifact_type, schema_version):
+    """用 Pair 中的摘要校验辅助清单，允许离线副本仅含部分声明文件。"""
+    manifest_name = "manifest.json"
+    manifest_path = path / manifest_name
+    if path.is_symlink() or manifest_path.is_symlink():
+        raise ArtifactValidationError("symbolic link in auxiliary artifact identity")
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+    except FileNotFoundError:
+        return None, set()
+    manifest = _load_canonical_json(manifest_bytes)
+    if (not isinstance(manifest, dict)
+            or manifest.get("artifact_type") != artifact_type
+            or manifest.get("schema_version") != schema_version
+            or manifest.get("manifest_digest") != digest
+            or sha256_bytes(canonical_json_bytes({
+                key: value for key, value in manifest.items() if key != "manifest_digest"
+            })) != digest):
+        raise ArtifactValidationError("auxiliary manifest identity differs from frozen pair")
+    file_table = _validated_file_table(manifest.get("file_table"), manifest_name)
+    files, directories = _actual_artifact_tree(path, manifest_name)
+    if not files <= file_table.keys() or not directories <= _expected_directories(file_table):
+        raise ArtifactValidationError("unlisted path in auxiliary artifact")
+    return ArtifactEnvelope(path, manifest_name, manifest, digest), files
+
+
+def _coverage_game(root, plan, pair, arm, *, include_votes=True):
     status = pair["arms"][arm]
     base = collection._arm_path(root, pair["candidate_ordinal"], arm)
-    bundle = open_artifact_envelope(
-        base / "games" / status["game_id"],
-        expected_artifact_type="canonical_game_bundle",
-        expected_schema_version=CANONICAL_GAME_BUNDLE_SCHEMA_VERSION,
+    row = _game_row(plan, pair, arm)
+    bundle_path = base / "games" / status["game_id"]
+    bundle, files = _auxiliary_envelope(
+        bundle_path, digest=status["bundle_digest"], artifact_type="canonical_game_bundle",
+        schema_version=CANONICAL_GAME_BUNDLE_SCHEMA_VERSION,
     )
     expected = {
         "game_id": status["game_id"], "artifact_identity": status["game_id"],
@@ -550,11 +663,39 @@ def _coverage_game(root, plan, pair, arm):
         "runtime_provenance_digest": status["runtime_provenance_digest"],
         "canonical_eligibility": True,
     }
-    if (bundle.manifest_digest != status["bundle_digest"]
-            or any(bundle.manifest.get(key) != value for key, value in expected.items())):
+    if bundle is None:
+        row["missing_evidence"].append("bundle/manifest.json")
+    elif any(bundle.manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("coverage Bundle identity differs from frozen pair")
+    else:
+        evidence_files = (*_COVERAGE_FILES, _VOTE_FILE) if include_votes else _COVERAGE_FILES
+        row["missing_evidence"].extend(name for name in evidence_files if name not in files)
+
+    roles = status["roles"]
+    if _REPLAY_FILE in files:
+        private = _private_replay_from_record(json.loads(read_artifact_file(bundle, _REPLAY_FILE)))
+        if (private.game_id != status["game_id"] or private.seed != pair["seed"]
+                or dict(private.role_assignment) != roles):
+            raise ValueError("coverage frozen role assignment differs from pair")
+        if include_votes and _VOTE_FILE in files:
+            history = _history_from_records(_decode_jsonl(read_artifact_file(bundle, _VOTE_FILE), _VOTE_FILE))
+            if history.digest != private.expected_public_event_digest:
+                raise ValueError("public voting history differs from the bound Bundle history")
+            row["vote_counts"] = count_game_votes(history, roles)
+
+    audit_path = base / "private_treatment_audit"
+    audit_envelope, audit_files = _auxiliary_envelope(
+        audit_path, digest=status["treatment_audit_digest"],
+        artifact_type="tom_gameplay_treatment_audit", schema_version=collection._SCHEMA,
+    )
+    if "record.json" not in audit_files:
+        row["missing_evidence"].append(
+            "private_treatment_audit/manifest.json" if audit_envelope is None
+            else "private_treatment_audit/record.json"
+        )
+        return row
     audit, artifact = collection._read_record(
-        base / "private_treatment_audit", "tom_gameplay_treatment_audit"
+        audit_path, "tom_gameplay_treatment_audit"
     )
     audit_expected = {
         "experiment_id": collection.EXPERIMENT_ID,
@@ -568,37 +709,74 @@ def _coverage_game(root, plan, pair, arm):
     if (artifact.manifest_digest != status["treatment_audit_digest"]
             or any(audit.get(key) != value for key, value in audit_expected.items())):
         raise ValueError("coverage treatment audit identity differs from frozen pair")
+    if _PRE_FILE not in files:
+        return row
+
     # 只校验并读取统计所需文件；不启动完整游戏重放、预测器或模型验证。
-    records = {}
-    for name in _COVERAGE_FILES:
-        data = read_artifact_file(bundle, name)
-        records[name] = ([json.loads(line) for line in data.splitlines()]
-                         if name.endswith(".jsonl") else json.loads(data))
-    private = _private_replay_from_record(records["private/private_replay_evidence.json"])
-    roles = dict(private.role_assignment)
-    if private.game_id != status["game_id"] or private.seed != pair["seed"] or roles != status["roles"]:
-        raise ValueError("coverage frozen role assignment differs from pair")
-    prefixes = [_prefix_from_record(value)
-                for value in records["public/authoritative_pre_prefixes.jsonl"]]
-    calls = [_backend_call_from_record(value)
-             for value in records["private/backend_call_evidence.jsonl"]]
+    records = {name: _decode_jsonl(read_artifact_file(bundle, name), name)
+               for name in (_PRE_FILE, _CALL_FILE, _ACTION_FILE) if name in files}
+    prefixes = [_prefix_from_record(value) for value in records[_PRE_FILE]]
+    calls = [_backend_call_from_record(value) for value in records[_CALL_FILE]] if _CALL_FILE in records else None
     arm_plan = collection._arm_plan(plan, pair["candidate_ordinal"], arm)
-    for call in calls:
+    for call in calls or ():
         for key in ("backend_identity", "model_identity", "parser_identity", "prompt_identity",
                     "retry_policy_identity", "call_budget_identity"):
             if getattr(call, key) != getattr(arm_plan, key):
                 raise ValueError(f"coverage backend {key} differs from frozen plan")
     return {
-        "candidate_ordinal": pair["candidate_ordinal"], "seed": pair["seed"],
-        "arm": arm, "game_id": status["game_id"],
-        "source_revision": plan["source_revision"],
-        "bundle_digest": bundle.manifest_digest,
-        "treatment_audit_digest": artifact.manifest_digest,
+        **row,
         **_coverage_counts(
-            prefixes, roles, audit, calls, records["private/submitted_gameplay_actions.jsonl"],
+            prefixes, roles, audit, calls, records.get(_ACTION_FILE),
             game_id=status["game_id"], arm=arm,
             reported_treatments=status["treatment_count"],
         ),
+    }
+
+
+def _gameplay_evidence(root, plan, final, pairs, excluded_pairs):
+    digests = {item["candidate_ordinal"]: item["pair_digest"] for item in final["pair_record_digests"]}
+    games = [{"pair_digest": digests[pair["candidate_ordinal"]],
+              **_coverage_game(root, plan, pair, arm)}
+             for pair in pairs for arm in collection.ARMS]
+    additional_attempts = []
+    for pair in excluded_pairs:
+        for arm in collection.ARMS:
+            status = pair["arms"][arm]["status"]
+            if status == "not_run":
+                continue
+            if status == "success":
+                row = _coverage_game(root, plan, pair, arm, include_votes=False)
+            else:
+                # 旧失败文件没有完整的预测请求清单，无法推出 A、P 或 S。
+                row = _game_row(plan, pair, arm)
+                row["missing_evidence"].extend(("bundle/manifest.json", "private_treatment_audit/manifest.json"))
+            row.pop("vote_counts")
+            additional_attempts.append({"pair_digest": digests[pair["candidate_ordinal"]], **row})
+    return games, additional_attempts
+
+
+def _arm_gameplay_metrics(arm, games, additional_attempts):
+    complete = [row for row in games if row["arm"] == arm]
+    attempted = [row for row in additional_attempts if row["arm"] == arm]
+    vote_counts = [row["vote_counts"] for row in complete]
+    votes = summarize_game_votes(vote_counts)
+    available_votes = [counts for counts in vote_counts if counts != UNKNOWN]
+    if 0 < len(available_votes) < len(vote_counts):
+        votes["available_evidence"] = summarize_game_votes(available_votes)
+
+    integration = {}
+    for name, population in (
+        ("complete_games", complete),
+        ("excluded_attempts", attempted),
+        ("all_observed_attempts", complete + attempted),
+    ):
+        counts = [row["tom_integration"] for row in population]
+        integration[name] = summarize_tom_integration(
+            counts, applicable=any(row["A"] != 0 for row in counts)
+        )
+    return {
+        "votes": votes,
+        "tom_integration": integration,
     }
 
 
@@ -607,7 +785,7 @@ def analyze_coverage(root: Path, *, expected_final_digest=EXPECTED_FINAL_DIGEST)
     root = Path(root).resolve(strict=True)
     plan, plan_digest = _plan(root)
     final, final_digest = _final(root, plan, plan_digest, expected_final_digest)
-    pairs, _ = _pairs(root, plan, final, check_treatments=False)
+    pairs, _, excluded_pairs = _pairs(root, plan, final, check_treatments=False)
     missing = []
     for pair in pairs:
         for arm in collection.ARMS:
@@ -618,11 +796,7 @@ def analyze_coverage(root: Path, *, expected_final_digest=EXPECTED_FINAL_DIGEST)
             missing.extend(str(path) for path in required if not path.is_file())
     if missing:
         raise ValueError("coverage UNKNOWN: required Artifact files missing:\n" + "\n".join(missing))
-    pair_digests = {item["candidate_ordinal"]: item["pair_digest"]
-                    for item in final["pair_record_digests"]}
-    games = [{"pair_digest": pair_digests[pair["candidate_ordinal"]],
-              **_coverage_game(root, plan, pair, arm)}
-             for pair in pairs for arm in collection.ARMS]
+    games, additional_attempts = _gameplay_evidence(root, plan, final, pairs, excluded_pairs)
     if len({row["game_id"] for row in games}) != 80:
         raise ValueError("coverage requires 80 distinct included games")
     arms = {}
@@ -639,6 +813,7 @@ def analyze_coverage(root: Path, *, expected_final_digest=EXPECTED_FINAL_DIGEST)
         }
         totals["coverage"] = (UNKNOWN if totals["U"] == UNKNOWN else
                               totals["U"] / totals["E"] if totals["E"] else "NOT_APPLICABLE")
+        totals["coverage_counts"] = gameplay_ratio(totals["U"], totals["E"])
         totals["games_with_injection"] = (
             UNKNOWN if totals["U"] == UNKNOWN else sum(row["U"] > 0 for row in rows)
         )
@@ -648,7 +823,7 @@ def analyze_coverage(root: Path, *, expected_final_digest=EXPECTED_FINAL_DIGEST)
         counts = Counter(entry["kind"] for entry in anomalies)
         totals["anomaly_counts"] = {**dict.fromkeys(_COVERAGE_ANOMALIES, 0), **counts}
         totals["unexpected_anomaly_count"] = sum(not entry["expected_by_assignment"] for entry in anomalies)
-        arms[arm] = totals
+        arms[arm] = {**totals, **_arm_gameplay_metrics(arm, games, additional_attempts)}
     tom = arms[collection.TOM]
     return {
         "summary": {
@@ -663,11 +838,16 @@ def analyze_coverage(root: Path, *, expected_final_digest=EXPECTED_FINAL_DIGEST)
                 "H": "认知请求中可完整解析的ToM payload数，包含认知重试及不匹配payload",
                 "U": "合格决策点中完整canonical payload摘要及观察者行身份匹配的后端提交，按决策点去重",
                 "coverage": "各组sum(U)/sum(E)，E=0为NOT_APPLICABLE；UNKNOWN不按0处理",
+                "A/P/S": "逻辑预测尝试、合法预测、经响应确认传入决策请求的次数，均按决策点去重",
+                "integration_evidence": "S须匹配同一决策点的完整合法payload及响应。证据仅证明传入，未知回执记UNKNOWN",
+                "integration_population": "complete_games限于有效配对，excluded_attempts仅含被排除但已尝试的臂",
+                "vote_evidence": "覆盖有效配对中可校验公开投票及放逐的游戏，证据覆盖不全时全人口指标记UNKNOWN",
                 "response_and_submitted_action_decisions": "匹配请求成功返回且同边界有已提交发言；不证明逐响应采用或模型内在利用",
                 "expected_by_assignment": "NoToM的eligible_without_treatment是预期结果，仍逐点记录",
                 "verification": "Final/pair/audit摘要链及选取的Bundle文件SHA；不重新执行游戏或完整Bundle replay",
             },
             "arms": arms,
+            "additional_attempts": additional_attempts,
             "historical_166_treatments_confirmed": tom["T"] == 166 if tom["T"] != UNKNOWN else UNKNOWN,
             "actual_injection_equals_166": tom["U"] == 166 if tom["U"] != UNKNOWN else UNKNOWN,
         },
@@ -713,7 +893,8 @@ def main(argv=None):
         writer = csv.DictWriter(stream, fieldnames=list(coverage["games"][0]), lineterminator="\n")
         writer.writeheader()
         for row in coverage["games"]:
-            writer.writerow({**row, "anomalies": json.dumps(row["anomalies"], ensure_ascii=False, sort_keys=True)})
+            writer.writerow({key: json.dumps(value, ensure_ascii=False, sort_keys=True)
+                             if isinstance(value, (dict, list)) else value for key, value in row.items()})
         details_payload = stream.getvalue().encode("utf-8")
     else:
         result = analyze_collection(root, expected_final_digest=EXPECTED_FINAL_DIGEST)
