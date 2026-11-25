@@ -404,6 +404,7 @@ def test_report_event_arms_share_unaccused_pre_and_legal_inputs(report_event_par
         assert {seat: row['probability'] for seat, row in context['report_predictions'].items()} == dict.fromkeys(P[2:], .5)
         assert evidence['execution']['public_payload'] == {'action': 'SELF_DEFEND', 'target': None}
         assert evidence['execution']['basis_ref'] == 'independent'
+        assert evidence['execution']['tom_integration'] == {'A': 1, 'P': 1, 'S': 'UNKNOWN'}
         for row in context['report_predictions'].values():
             del row['adoptable_directions']
         call_settings = {key: private[key] for key in ('model', 'temperature', 'max_tokens', 'extra_body')}
@@ -473,6 +474,42 @@ def test_report_event_wrong_q_binding_stops_before_language(report_event_paramet
         handle_report_event(policy, env, recorder)
     assert snapshot(env, recorder) == before and not actor_backend.calls
     assert evidence['execution']['status'] == 'FAILED'
+    assert evidence['execution']['tom_integration'] == {'A': 1, 'P': 0, 'S': 0}
+
+
+@pytest.mark.parametrize("problem", ["unknown_response", "missing_payload"])
+def test_report_event_requires_actual_matching_decision_request(
+        report_event_parameters, report_event_predictor, problem, monkeypatch):
+    env, recorder, parser = runtime(native=True)
+    predictor, _ = report_event_predictor
+    parser.perception_response = 'player1 | point_as_non_werewolf | player1'
+
+    def choose(context):
+        if problem == "unknown_response":
+            raise TimeoutError("no decision receipt")
+        assert not context['report_predictions']
+        return plan_choice(context, 'SELF_DEFEND', None, 'independent')
+
+    backend = ReportEventBackend('我认为player1不是狼人。', choose)
+    actor = GPTAgent(backend=AuditedBackend(backend, recorder.call_audit), model_name='controlled')
+    original = actor.select_report_event_plan
+    if problem == "missing_payload":
+        def without_payload(context, *, basis_refs):
+            return original({**context, 'report_predictions': {}}, basis_refs=basis_refs)
+        monkeypatch.setattr(actor, 'select_report_event_plan', without_payload)
+    evidence = {}
+    policy = ReportEventGamePolicy(recorder=recorder, agents=(actor,) * 7, predictor=predictor,
+        arm=ReportEventArm.TOM_ONLY, probability=1/3, m1_parameters=report_event_parameters,
+        record_evidence=evidence.__setitem__)
+    if problem == "unknown_response":
+        with pytest.raises(TimeoutError, match="no decision receipt"):
+            handle_report_event(policy, env, recorder)
+    else:
+        assert handle_report_event(policy, env, recorder)[2] is False
+    row = evidence['execution']
+    assert row['tom_integration'] == {'A': 1, 'P': 1, 'S': 'UNKNOWN' if problem == "unknown_response" else 0}
+    assert not row['decision_call_ids'] and row['plan_calls'] == 1
+    assert len(row['unconfirmed_decision_call_ids']) == (1 if problem == "unknown_response" else 0)
 
 
 @pytest.mark.parametrize('arm', list(ReportEventArm))
@@ -524,6 +561,8 @@ def test_report_event_game_hook_records_assignment_and_intent_before_language(
     execution = evidence['execution']
     assert execution['status'] == 'COMMITTED' and execution['prefix_digest'] == pre.prefix_digest
     assert [execution[k] for k in ('q_requests', 'plan_calls', 'actor_calls', 'parser_calls')] == [1, 1, 1, 1]
+    assert execution['tom_integration'] == {'A': 1, 'P': 1, 'S': 1}
+    assert len(execution['decision_call_ids']) == 1
     submitted, = recorder.submitted_gameplay_actions
     annotation = env.speech_annotations[-1]
     assert execution['commit'] == {'action_id': submitted.action_id, 'event_id': annotation.event_id,
@@ -670,6 +709,7 @@ def test_report_event_full_game_tracks_each_wolf_pre(
         executions = [row for stage, row in rows if stage == 'execution']
         assert [row['status'] for row in executions] == ['COMMITTED'] * (fail_at - 1) + ['FAILED']
         assert executions[-1]['q_requests'] == 1 and executions[-1]['q_successes'] == 0
+        assert executions[-1]['tom_integration'] == {'A': 1, 'P': 0, 'S': 0}
         assert len(private_inputs) == fail_at - 1 and predict.call_count == fail_at
         assert recorder._pending.prefix.boundary_id == executions[-1]['boundary_id']
         assert [stage for stage, _ in rows].count('runtime') == 0 and env.phase != 'end_game'
@@ -685,6 +725,7 @@ def test_report_event_full_game_tracks_each_wolf_pre(
     assert [stage for stage, _ in rows] == ['assignment'] + ['intent', 'execution'] * len(wolf_pres) + ['runtime']
     summary = rows[-1][1]
     assert summary['q_requests'] == summary['q_successes'] == len(wolf_pres)
+    assert summary['tom_integration']['S'] == len(wolf_pres)
     submitted = {action.boundary_id: action for action in product.evidence.submitted_gameplay_actions}
     wolf_submissions = [action for action in product.evidence.submitted_gameplay_actions
                         if action.actor_id in P[:2] and action.action_type == 'public_speech']

@@ -5,6 +5,7 @@
 """
 from dataclasses import asdict, dataclass
 from enum import Enum
+import json
 import re
 from time import perf_counter
 from types import SimpleNamespace
@@ -13,8 +14,10 @@ from werewolf.strategy.speech_planning import generate_candidates
 from werewolf.speech.commit_workflow import realize_and_commit
 from werewolf.speech.realization import expected_action
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
+from werewolf.canonical_collection.call_audit import AuditedBackend
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
 from werewolf.canonical_collection.trajectory_evidence import BackendCallPurpose
+from werewolf.game_runtime import UNKNOWN, summarize_tom_integration
 from werewolf.observer_dtrs.context import contexts_for_pre
 from werewolf.observer_dtrs.contextual_policy import contextual_loss, estimate_event
 from werewolf.observer_dtrs.decision import LossSpec, Region, TiePolicy, candidate_losses, decide, forced_binary
@@ -190,13 +193,17 @@ class ReportEventArm(str, Enum):
 _REPORT_EVENT_OPPORTUNITY = 'ALL_LEGAL_WOLF_SPEECH_PRE'
 
 
+def _report_event_q_matches(pre, matrix):
+    return (type(matrix) is ProbabilityMatrix
+            and (matrix.game_id, matrix.boundary_id, matrix.prefix_digest) ==
+            (pre.game_id, pre.boundary_id, pre.prefix_digest))
+
+
 def report_event_probabilities(pre, contexts, matrix, *, m1_parameters):
     from scripts import analyze_observer_dtrs_report_event as study
     from scripts.fit_observer_dtrs_report_event import legal_features
 
-    if (type(matrix) is not ProbabilityMatrix
-            or (matrix.game_id, matrix.boundary_id, matrix.prefix_digest) !=
-            (pre.game_id, pre.boundary_id, pre.prefix_digest)):
+    if not _report_event_q_matches(pre, matrix):
         raise ValueError('Q 与当前 PRE 不一致')
     # 复用固定特征和校准公式，推理行不携带监督标签。
     rows = tuple(SimpleNamespace(sample_id=c.observer_id, features=x)
@@ -251,6 +258,32 @@ def _report_event_panel(pre, contexts, prediction, *, m1_parameters, arm):
     }
 
 
+def _report_event_decision_receipts(calls, actor, context):
+    """对齐认知后端请求中的完整输入，保留可确认与未确认的真实调用 ID。"""
+    confirmed, unconfirmed = [], []
+    if context is None:
+        return confirmed, unconfirmed
+    expected = canonical_json_bytes(context)
+    for call in calls:
+        if call.purpose is not BackendCallPurpose.GAMEPLAY_ACTION or call.observer_id != actor:
+            continue
+        request = call.private_payload.to_value()
+        try:
+            kwargs = request['kwargs']
+            response_format = kwargs.get('response_format') or {}
+            if response_format.get('json_schema', {}).get('name') != 'report_event_plan':
+                continue
+            content = kwargs['messages'][0]['content']
+            actual = canonical_json_bytes(json.loads(content.rsplit('\n\n', 1)[-1]))
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            unconfirmed.append(call.call_id)
+            continue
+        if actual == expected:
+            receipts = confirmed if request.get('response') is not None else unconfirmed
+            receipts.append(call.call_id)
+    return confirmed, unconfirmed
+
+
 class ReportEventGamePolicy:
     """在整局内用同一实验臂处理每个合法狼人发言 PRE。"""
 
@@ -268,6 +301,7 @@ class ReportEventGamePolicy:
         self._m1_parameters = m1_parameters
         self._record = record_evidence
         self._q_requests, self._q_successes, self._q_seconds = 0, 0, 0.
+        self._tom_integration = []
         self._started = perf_counter()
 
         self._assignment = {'scope': REPORT_EVENT_PILOT_SCOPE, 'game_id': recorder.game_id,
@@ -298,6 +332,8 @@ class ReportEventGamePolicy:
         }
         before = len(recorder.submitted_gameplay_actions)
         event_index = len(env.public_events)
+        legal_prediction = False
+        plan_context = None
         try:
             team = _legal_team(pre, observation)
             contexts = contexts_for_pre(pre, team)
@@ -305,6 +341,10 @@ class ReportEventGamePolicy:
                 raise ValueError('狼人发言 PRE 没有合格的存活非狼观察者')
             candidates = generate_candidates(pre)
             actor = self._agents[observation['current_act_idx'] - 1]
+            # 与 Capsule 客户端的 PRE 请求 ID 一致，即使调用未返回也可关联 Owner 日志。
+            audit['q_request_id'] = sha256_bytes(canonical_json_bytes({
+                'game_id': pre.game_id, 'boundary_id': pre.boundary_id, 'prefix_digest': pre.prefix_digest,
+            }))
             started = perf_counter()
             audit['q_requests'] = 1
             try:
@@ -312,6 +352,8 @@ class ReportEventGamePolicy:
             finally:
                 audit['q_seconds'] = perf_counter() - started
             audit['q_successes'] = 1
+            matrix, _ = prediction
+            legal_prediction = _report_event_q_matches(pre, matrix)
             evidence = _report_event_panel(pre, contexts, prediction,
                                            m1_parameters=self._m1_parameters, arm=self._arm)
             audit.update(evidence)
@@ -344,20 +386,35 @@ class ReportEventGamePolicy:
                                and len(recorder.submitted_gameplay_actions) == before
                                and len(env.public_events) == event_index else 'COMMIT_UNKNOWN')
             audit['error_type'] = type(error).__name__
-            self._record_execution(audit)
+            self._record_execution(audit, legal_prediction, plan_context)
             raise
         audit['commit'] = {'action_id': submitted.action_id, 'event_id': annotation.event_id,
                            'annotation_digest': annotation.annotation_digest}
         audit['status'] = 'COMMITTED'
-        self._record_execution(audit)
+        self._record_execution(audit, legal_prediction, plan_context)
         return step
 
-    def _record_execution(self, audit):
+    def _record_execution(self, audit, legal_prediction, plan_context):
         self._q_requests += audit['q_requests']
         self._q_successes += audit['q_successes']
         self._q_seconds += audit['q_seconds']
         calls = tuple(call for call in self._recorder.call_audit.records if call.boundary_id == audit['boundary_id'])
+        confirmed, unconfirmed = _report_event_decision_receipts(calls, audit['acting_wolf'], plan_context)
+        actor = self._agents[PLAYER_IDS.index(audit['acting_wolf'])]
+        backend = getattr(actor, 'backend', None)
+        audited = isinstance(backend, AuditedBackend) and backend._audit is self._recorder.call_audit
+        if confirmed:
+            integrated = 1
+        elif plan_context is not None and (unconfirmed or not audited):
+            integrated = UNKNOWN
+        else:
+            integrated = 0
+        counts = {'A': audit['q_requests'], 'P': int(legal_prediction), 'S': integrated}
+        self._tom_integration.append(counts)
         self._record('execution', {**audit,
+                                   'tom_integration': counts,
+                                   'decision_call_ids': confirmed,
+                                   'unconfirmed_decision_call_ids': unconfirmed,
                                    'plan_calls': sum(c.purpose is BackendCallPurpose.GAMEPLAY_ACTION for c in calls),
                                    'actor_calls': sum(c.purpose is BackendCallPurpose.SPEECH_GENERATION for c in calls),
                                    'parser_calls': sum(c.purpose is BackendCallPurpose.SPEECH_PERCEPTION for c in calls)})
@@ -371,4 +428,5 @@ class ReportEventGamePolicy:
         self._record('runtime', {**self._assignment, 'elapsed_seconds': perf_counter() - self._started,
                                  'q_requests': self._q_requests, 'q_successes': self._q_successes,
                                  'q_seconds': self._q_seconds,
+                                 'tom_integration': summarize_tom_integration(self._tom_integration),
                                  'backend_calls': summary.used_calls, 'backend_retries': summary.retry_calls})
