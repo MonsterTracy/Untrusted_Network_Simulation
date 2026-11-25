@@ -10,9 +10,11 @@ import pytest
 import yaml
 
 from scripts import run_werewolf_baseline as baseline
+from tests.canonical_collection.test_public_history import _event, _phase
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.backends import OpenAICompatibleBackend
-from werewolf.game_runtime import GameplayOnlyResult
+from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
+from werewolf.game_runtime import GameplayOnlyResult, count_game_votes, summarize_game_votes
 from werewolf.interventions.gameplay import digest, write_once
 
 from .test_run_random_profiles import _GameplayBackend, _GameplayClient
@@ -176,10 +178,17 @@ def test_first_scene_uses_frozen_seats_before_dispatch_and_archives_replay(froze
     assert _run_first(plan_path, config_path) == 0
     assert len(client.calls) == call_count and load.call_count == 1
     assert {path: path.read_bytes() for path in paths} == archives
-    for stats in _summary(plan_path, capsys)["methods"].values():
+    summary = _summary(plan_path, capsys)
+    assert {row["method"] for row in summary["games"]} == set(METHODS)
+    assert all(row["vote_counts"]["normal_vote_rounds"] >= 1 for row in summary["games"])
+    assert {path: path.read_bytes() for path in archives} == archives
+    for stats in summary["methods"].values():
         assert (stats["planned"], stats["not_started"], stats["started"]) == (210, 209, 1)
         assert stats["native_terminal"] == stats["replay_passed"] == stats["wolf_wins"] == 1
         assert stats["conditional_wolf_win_rate"] == 1
+        assert stats["votes"]["games_with_vote_evidence"] == 1
+        assert stats["tom_integration"]["complete_games"]["integration_success_rate"]["value"] is None
+        assert stats["tom_integration"]["all_observed_attempts"]["prediction_success_rate"]["value"] is None
 
 
 def test_transport_unknown_is_archived_and_never_redispatched(frozen_plan, mock_sdk, capsys):
@@ -220,6 +229,7 @@ def test_summary_excludes_failures_after_confirmed_replay(frozen_plan, capsys):
 
     summary = _summary(plan_path, capsys)
     assert summary["record_errors"] == []
+    assert summary["games"] == []
     for method, _, status in cases:
         stats = summary["methods"][method]
         assert stats[status] == 1
@@ -227,6 +237,68 @@ def test_summary_excludes_failures_after_confirmed_replay(frozen_plan, capsys):
         assert stats["native_terminal"] == stats["replay_passed"] == 1
         assert stats["conditional_wolf_win_rate"] is None
     assert {path: path.read_bytes() for path in archived} == archived
+
+
+def test_native_votes_use_tied_pk_targets_living_seats_and_daytime_exile():
+    roles = dict(zip(PLAYER_IDS, ["Werewolf", "Werewolf", "Villager", "Villager", "Villager", "Seer", "Witch"]))
+
+    def result(index, ballots):
+        return _event(index, "vote_result", votes=[
+            {"voter": f"player{voter}", "target": f"player{target}" if target else None}
+            for voter, target in ballots.items()
+        ])
+
+    history = freeze_public_event_history([
+        _phase(0, 0, "night"),
+        _event(1, "death_announcement", dead_players=[]),
+        _phase(2, 1, "discussion"),
+        _phase(3, 1, "vote"),
+        result(4, {1: 2, 2: 4, 3: 1, 4: 1, 5: 4, 6: None, 7: None}),
+        _event(5, "exile_result", exiled_players=[]),
+        _phase(6, 1, "pk_discussion"),
+        _phase(7, 1, "pk_vote"),
+        result(8, {1: 4, 2: 1, 3: 1, 4: 1, 5: 4, 6: None, 7: None}),
+        _event(9, "exile_result", exiled_players=["player1"]),
+        _phase(10, 1, "night"),
+        _event(11, "death_announcement", dead_players=["player6"]),
+        _phase(12, 2, "discussion"),
+        _phase(13, 2, "vote"),
+        result(14, {2: 3, 3: 4, 4: 2, 5: 3, 7: None}),
+        _event(15, "exile_result", exiled_players=["player3"]),
+        _phase(16, 2, "night"),
+        _event(17, "death_announcement", dead_players=["player2"]),
+    ])
+    counts = count_game_votes(history, roles)
+    assert counts == {
+        "wolf_participations": 2, "wolf_votes_received": 7, "wolf_votes_from_villagers": 5,
+        "wolf_votes_from_teammates": 2, "wolf_eligible_rounds": 4, "villager_valid_votes": 9,
+        "wolves_exiled": 1, "normal_vote_rounds": 2, "pk_vote_rounds": 1,
+    }
+    summary = summarize_game_votes([counts, {**counts, "wolf_eligible_rounds": 6}])
+    assert summary["AVR"] == {"numerator": 14, "denominator": 4, "value": 3.5}
+    assert summary["team_AVR"]["value"] == 7
+    assert summary["VPR"] == {"numerator": 14, "denominator": 10, "value": 1.4}
+    assert summary["WVS"]["value"] == 5 / 9
+    assert summary["wolf_exile_rate"]["value"] == .5
+
+
+def test_vote_rates_zero_denominator_is_na():
+    summary = summarize_game_votes([])
+    for field in ("AVR", "team_AVR", "VPR", "WVS", "wolf_exile_rate"):
+        assert summary[field] == {"numerator": 0, "denominator": 0, "value": None}
+
+    roles = dict(zip(PLAYER_IDS, ["Werewolf", "Werewolf", "Villager", "Villager", "Villager", "Seer", "Witch"]))
+    history = freeze_public_event_history([
+        _phase(0, 0, "night"),
+        _event(1, "death_announcement", dead_players=["player1"]),
+        _phase(2, 1, "discussion"),
+        _phase(3, 1, "vote"),
+        _event(4, "vote_result", votes=[{"voter": seat, "target": None} for seat in PLAYER_IDS[1:]]),
+        _event(5, "exile_result", exiled_players=[]),
+    ])
+    counts = count_game_votes(history, roles)
+    assert counts["wolf_eligible_rounds"] == 1 and counts["wolves_exiled"] == 0
+    assert summarize_game_votes([counts])["WVS"] == {"numerator": 0, "denominator": 0, "value": None}
 
 
 def test_restart_preserves_completed_failed_and_claim_only_tasks(frozen_plan, mock_sdk, capsys):

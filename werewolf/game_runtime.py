@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from math import isfinite
@@ -26,7 +27,9 @@ from werewolf.backends import (
 from werewolf.backends.openai_compatible import model_request_context, model_request_details
 from werewolf.envs.werewolf_text_env_v0 import V1SpeechPerceptionExhausted, WerewolfTextEnvV0
 from werewolf.canonical_collection.pre import construct_speaker_pre_belief_handoff
-from werewolf.canonical_collection.public_history import freeze_public_event_history
+from werewolf.canonical_collection.public_history import (
+    PLAYER_IDS, PublicEventHistory, PublicPhase, freeze_public_event_history,
+)
 from werewolf.canonical_collection.runtime import (
     classic7_native_winner,
     freeze_classic7_speech_pre,
@@ -51,6 +54,13 @@ _GAMEPLAY_SOURCE_FILES = (
     "werewolf/envs/werewolf_text_env_v0.py",
     "werewolf/speech/private_belief_perceiver.py",
     "werewolf/speech/speech_perceiver.py",
+)
+
+UNKNOWN = "UNKNOWN"
+_VOTE_FIELDS = (
+    "wolf_participations", "wolf_votes_received", "wolf_votes_from_villagers",
+    "wolf_votes_from_teammates", "wolf_eligible_rounds", "villager_valid_votes",
+    "wolves_exiled", "normal_vote_rounds", "pk_vote_rounds",
 )
 
 
@@ -165,8 +175,8 @@ def _require_legal_gameplay_action(observation, action):
         raise ValueError(f"action is not legal in phase {observation['phase']}")
 
 
-def verify_gameplay_replay(result: GameplayOnlyResult) -> str:
-    """用同 seed 和座位动作重放完整游戏，核对公开轨迹与原生赢家。"""
+def replay_gameplay_history(result: GameplayOnlyResult) -> tuple[PublicEventHistory, str]:
+    """用同 seed 和座位动作重放完整游戏，返回核对后的公开轨迹及原生赢家。"""
     from werewolf.canonical_collection.production_runtime import build_classic7_replay_environment
 
     if not result.terminal_reached or result.failure_type is not None:
@@ -178,9 +188,115 @@ def verify_gameplay_replay(result: GameplayOnlyResult) -> str:
     )
     if winner != result.winner:
         raise ValueError("recorded winner disagrees with replay terminal winner")
-    if freeze_public_event_history(events).digest != result.public_event_digest:
+    history = freeze_public_event_history(events)
+    if history.digest != result.public_event_digest:
         raise ValueError("replay diverged from the live gameplay public history")
+    return history, winner
+
+
+def verify_gameplay_replay(result: GameplayOnlyResult) -> str:
+    _, winner = replay_gameplay_history(result)
     return winner
+
+
+def count_game_votes(history: PublicEventHistory, roles: dict[str, str]) -> dict[str, int]:
+    """从原生公开事件统计完整投票轮次，按普通轮的最高票并列者恢复 PK 候选。"""
+    wolves = {seat for seat, role in roles.items() if role == "Werewolf"}
+    if set(roles) != set(PLAYER_IDS) or len(wolves) != 2:
+        raise ValueError("invalid Classic7 role assignment for vote evaluation")
+    counts = dict.fromkeys(_VOTE_FIELDS, 0)
+    counts["wolf_participations"] = len(wolves)
+    alive = set(PLAYER_IDS)
+    pk_candidates = set()
+    pk_day = None
+    for event in history.events:
+        if event.event_type in ("death_announcement", "exile_result"):
+            removed = set(event.affected_players)
+            if not removed <= alive:
+                raise ValueError("public death or exile repeats a removed player")
+            alive.difference_update(removed)
+            if event.event_type == "exile_result":
+                counts["wolves_exiled"] += len(removed & wolves)
+        if event.event_type != "vote_result":
+            continue
+
+        state = event.temporal_state
+        if {vote.voter for vote in event.votes} != alive:
+            raise ValueError("public vote result lacks exactly the living voters")
+        if state.phase is PublicPhase.VOTE:
+            candidates = alive
+            counts["normal_vote_rounds"] += 1
+        else:
+            if state.day != pk_day or len(pk_candidates) < 2 or not pk_candidates <= alive:
+                raise ValueError("PK vote lacks a matching native tie")
+            candidates = pk_candidates
+            counts["pk_vote_rounds"] += 1
+        if len(alive) > 1:
+            counts["wolf_eligible_rounds"] += len(candidates & wolves)
+
+        tally = Counter()
+        for vote in event.votes:
+            if vote.target is None:
+                continue
+            if vote.target not in candidates or vote.target == vote.voter:
+                raise ValueError("illegal public vote target for the current round")
+            tally[vote.target] += 1
+            if vote.voter not in wolves:
+                counts["villager_valid_votes"] += 1
+            if vote.target in wolves:
+                counts["wolf_votes_received"] += 1
+                source = "wolf_votes_from_teammates" if vote.voter in wolves else "wolf_votes_from_villagers"
+                counts[source] += 1
+        if state.phase is PublicPhase.VOTE:
+            highest = max(tally.values(), default=0)
+            pk_candidates = {seat for seat, votes in tally.items() if votes == highest}
+            pk_day = state.day
+        else:
+            pk_candidates = set()
+    return counts
+
+
+def gameplay_ratio(numerator, denominator):
+    """保留合计分子与分母，零分母用 JSON null 表示 N/A。"""
+    if UNKNOWN in (numerator, denominator):
+        value = UNKNOWN
+    else:
+        value = numerator / denominator if denominator else None
+    return {"numerator": numerator, "denominator": denominator, "value": value}
+
+
+def summarize_game_votes(counts):
+    """在原有效游戏人口内合并计数，缺少任一局证据时报告未知。"""
+    verified = [row for row in counts if row != UNKNOWN]
+    totals = {
+        field: sum(row[field] for row in verified) if len(verified) == len(counts) else UNKNOWN
+        for field in _VOTE_FIELDS
+    }
+    return {
+        "games": len(counts), "games_with_vote_evidence": len(verified), "counts": totals,
+        "AVR": gameplay_ratio(totals["wolf_votes_received"], totals["wolf_participations"]),
+        "team_AVR": gameplay_ratio(totals["wolf_votes_received"], len(counts)),
+        "VPR": gameplay_ratio(totals["wolf_votes_received"], totals["wolf_eligible_rounds"]),
+        "WVS": gameplay_ratio(totals["wolf_votes_from_villagers"], totals["villager_valid_votes"]),
+        "wolf_exile_rate": gameplay_ratio(totals["wolves_exiled"], totals["wolf_participations"]),
+    }
+
+
+def summarize_tom_integration(counts, *, applicable=True):
+    """合并逻辑接入计数，同时保留有证据的下界与未知记录数。"""
+    fields = ("A", "P", "S")
+    unknown = {field: sum(row[field] == UNKNOWN for row in counts) for field in fields}
+    verified = {
+        field: sum(row[field] if row[field] != UNKNOWN else row.get(f"{field}_verified", 0) for row in counts)
+        for field in fields
+    }
+    totals = {field: UNKNOWN if unknown[field] else verified[field] for field in fields}
+    return {
+        "applicable": applicable, "records": len(counts), **totals,
+        "unknown_records": unknown, "verified_minimum": verified,
+        "prediction_success_rate": gameplay_ratio(totals["P"], totals["A"]) if applicable else gameplay_ratio(0, 0),
+        "integration_success_rate": gameplay_ratio(totals["S"], totals["A"]) if applicable else gameplay_ratio(0, 0),
+    }
 
 
 def _complete_gameplay_result(result, *, env, agents, records, started, step):

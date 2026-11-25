@@ -19,6 +19,8 @@ from werewolf import game_runtime
 from werewolf.artifact_io import sha256_bytes
 from werewolf.artifact_io.canonical import _load_canonical_json, require_sha256
 from werewolf.backends import load_named_backends
+from werewolf.canonical_collection.public_history import PLAYER_IDS
+from werewolf.game_runtime import UNKNOWN, count_game_votes, summarize_game_votes, summarize_tom_integration
 from werewolf.interventions.gameplay import digest, safe_path, write_once
 from werewolf.runtime_config import DECISION_METHODS, normalize_runtime_config
 
@@ -294,6 +296,8 @@ def _summarize(output, plan):
     }
     totals = {method: Counter() for method in DECISION_METHODS}
     available = {method: Counter() for method in DECISION_METHODS}
+    no_tom = dict.fromkeys(("A", "P", "S"), 0)
+    games = []
     problems = []
     for scene in plan["scenarios"]:
         for method in scene["method_order"]:
@@ -309,6 +313,16 @@ def _summarize(output, plan):
             stats["native_terminal"] += game["terminal_reached"]
             stats["replay_passed"] += game["replay_winner"] is not None
             stats["wolf_wins"] += status == "completed" and game["winner"] == "Werewolf"
+            if status == "completed":
+                row = {"scenario_id": scene["scenario_id"], "seed": scene["seed"], "method": method,
+                       "winner": game["winner"], "public_event_digest": game["public_event_digest"],
+                       "vote_counts": UNKNOWN, "tom_integration": no_tom}
+                try:
+                    history, _ = game_runtime.replay_gameplay_history(game_runtime.GameplayOnlyResult(**game))
+                    row["vote_counts"] = count_game_votes(history, dict(zip(PLAYER_IDS, game["roles"], strict=True)))
+                except (ValueError, TypeError, KeyError) as error:
+                    row["vote_evidence_error"] = str(error)
+                games.append(row)
             usage = game.get("token_usage")
             values = {"elapsed_seconds": game.get("elapsed_seconds"), "model_requests": game.get("model_requests")}
             if isinstance(usage, dict):
@@ -326,7 +340,12 @@ def _summarize(output, plan):
             field: {"sum": totals[method][field] if available[method][field] else None,
                     "games_available": available[method][field]} for field in metrics
         }
-    return {"plan_sha256": plan["plan_sha256"], "methods": counts, "record_errors": problems}
+        stats["votes"] = summarize_game_votes([game["vote_counts"] for game in games if game["method"] == method])
+        stats["tom_integration"] = {
+            "complete_games": summarize_tom_integration([no_tom] * completed, applicable=False),
+            "all_observed_attempts": summarize_tom_integration([no_tom] * stats["started"], applicable=False),
+        }
+    return {"plan_sha256": plan["plan_sha256"], "methods": counts, "games": games, "record_errors": problems}
 
 
 def main(argv=None):
