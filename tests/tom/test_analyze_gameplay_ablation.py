@@ -28,7 +28,7 @@ from werewolf.canonical_collection.trajectory_evidence import (
     BackendCallPurpose, BackendCallStatus, construct_backend_call_evidence,
     construct_private_replay_evidence,
 )
-from scripts.tom_gameplay_ablation import tom_payload
+from scripts.tom_gameplay_ablation import prediction_request, tom_payload
 
 
 def _arm(plan, ordinal, arm, *, winner="Villager", treatment_count=0,
@@ -219,6 +219,7 @@ def test_analysis_is_read_only_and_output_schema_is_json(formal, result):
     tom = result["arms"][collection.TOM]
     assert tom["votes"]["games"] == 40 and tom["votes"]["games_with_vote_evidence"] == 0
     assert tom["votes"]["AVR"]["value"] == "UNKNOWN"
+    assert tom["votes"]["D1WER"]["value"] == "UNKNOWN"
     assert result["source_collection_digest"] == digest
 
 
@@ -323,7 +324,7 @@ def _coverage_case(plan=None, claim=None, *, game_id="game-000"):
         "pre_speech_belief": evidence.submitted_gameplay_actions[0].speaker_pre_belief_handoff,
     }
 
-    def call(index=1, *, value=payload, status="success", positional=False):
+    def call(index=1, *, value=payload, status="success", positional=False, receipt=None):
         prompt = build_day_cognition_prompt(
             observation, **prompt_args,
             tom_context=None if value is None else canonical_json_bytes(value).decode(),
@@ -343,6 +344,7 @@ def _coverage_case(plan=None, claim=None, *, game_id="game-000"):
                 "args": [messages] if positional else [],
                 "kwargs": {} if positional else {"messages": messages},
                 "response": ["{}", {"finish_reason": "stop"}] if status == "success" else None,
+                **({"request_record": receipt} if receipt is not None else {}),
             },
         )
 
@@ -448,6 +450,90 @@ def test_coverage_matches_full_payload_and_deduplicates_cognition_retries():
     assert failed["U"] == 1
     assert failed["response_and_submitted_action_decisions"] == 0
     assert failed["tom_integration"] == {"A": 1, "P": 1, "S": "UNKNOWN", "S_verified": 0}
+
+
+def test_epoch35_attempt_counts_keep_failed_and_unconfirmed_requests():
+    case = _coverage_case()
+    predictor = {"checkpoint_digest": "9" * 64}
+    request = prediction_request(case.prefix)
+    fields = {key: value for key, value in case.audit["treatments"][0].items()
+              if key not in ("fit_digest", "seal_digest")}
+    audit = {**case.audit, "prediction_attempts": [{**request, "status": "succeeded"}],
+             "treatments": [{**fields, "request_id": request["request_id"], "predictor": predictor}]}
+
+    def counts(saved, calls):
+        return analysis._coverage_counts([case.prefix], case.roles, saved, calls, [],
+                                         game_id=case.prefix.game_id, arm=collection.TOM,
+                                         reported_treatments=len(saved["treatments"]), predictor=predictor)
+
+    receipt = {"dispatched": True, "response_received": True}
+    unknown = case.call(status="error", receipt={**receipt, "status": "request_error"})
+    assert counts(audit, [unknown])["tom_integration"]["S"] == "UNKNOWN"
+    assert counts(audit, [case.call()])["tom_integration"]["S"] == "UNKNOWN"
+    invalid = case.call(2, status="error", receipt={**receipt, "status": "invalid_response"})
+    accepted = counts(audit, [unknown, invalid])["tom_integration"]
+    assert [accepted[key] for key in ("A", "P", "S")] == [1, 1, 1]
+    assert counts(audit, [case.call(value=None)])["tom_integration"]["S"] == 0
+    failed = {**audit, "prediction_attempts": [{**request, "status": "failed", "error_type": "ValueError"}],
+              "treatments": [], "treatment_count": 0}
+    failed_counts = counts(failed, [])["tom_integration"]
+    assert [failed_counts[key] for key in ("A", "P", "S")] == [1, 0, 0]
+    failed["prediction_attempts"][0]["status"] = "unknown"
+    assert counts(failed, [])["tom_integration"]["P"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("receive", (True, False))
+def test_epoch35_collects_cost_from_existing_backend_receipt(receive):
+    from types import SimpleNamespace
+    from werewolf.backends import OpenAICompatibleBackend
+    from werewolf.canonical_collection.call_audit import AuditedBackend, CanonicalCallAudit
+
+    case = _coverage_case()
+
+    def create(**_kwargs):
+        if not receive:
+            raise TimeoutError("fixture request without response")
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="fixture"),
+                                                        finish_reason="stop")],
+                               usage={"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13})
+
+    client = SimpleNamespace(max_retries=0, chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    audit = CanonicalCallAudit(plan=case.plan, configured_call_limit=3, record_requests=True)
+    backend = AuditedBackend(OpenAICompatibleBackend(client=client), audit)
+    with audit.action_context(acting_player_id=1, boundary_id=case.prefix.boundary_id, is_public_speech=True):
+        if receive:
+            assert backend.chat(messages=[], model="fixture") == "fixture"
+        else:
+            with pytest.raises(RuntimeError, match="chat request failed"):
+                backend.chat(messages=[], model="fixture")
+    cost = analysis._game_cost(audit.records)
+    assert cost["model_requests"] == 1 and cost["unknown_responses"] == int(not receive)
+    assert cost["input_tokens"] == (11 if receive else "UNKNOWN")
+    assert cost["output_tokens"] == (2 if receive else "UNKNOWN")
+    assert cost["total_tokens"] == (13 if receive else "UNKNOWN")
+    assert cost["backend_elapsed_seconds"] >= 0
+
+
+def test_epoch35_bootstrap_recomputes_pooled_ratios_and_keeps_undefined_replicates():
+    import numpy as np
+    from werewolf.game_runtime import summarize_game_votes
+
+    empty = summarize_game_votes([])["counts"]
+
+    def game(votes, opportunities, elected):
+        counts = {**empty, "wolf_votes_received": votes, "wolf_eligible_rounds": opportunities,
+                  "wolves_exiled": elected}
+        return {"winner": "Werewolf", "vote_counts": counts, "E": 0, "U": 0}
+
+    rows = [(game(0, 1, 0), game(1, 1, 0)), (game(0, 9, 1), game(0, 9, 1))]
+    result = analysis._paired_ratio_effects(rows, seed=381, replicates=200)
+    assert result["VPR"]["delta"] == .1  # 按机会合计，与逐局 0.5 的均值不同。
+    draws = np.random.default_rng(381).integers(2, size=(200, 2))
+    first = (draws == 0).sum(axis=1)
+    expected = np.quantile(first / (first + 9 * (2 - first)), [.025, .975]).tolist()
+    assert result["VPR"]["bootstrap_95_ci"] == expected
+    assert result["GMR"]["bootstrap_defined_replicates"] == int((first < 2).sum())
+    assert result["WVS"]["delta"] is None
 
 
 def test_coverage_opportunities_are_independent_of_treatment_and_arm():

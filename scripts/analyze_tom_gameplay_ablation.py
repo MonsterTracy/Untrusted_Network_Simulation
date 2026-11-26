@@ -28,6 +28,8 @@ from werewolf.canonical_collection.game_bundle import (
     CANONICAL_GAME_BUNDLE_SCHEMA_VERSION, _backend_call_from_record, _decode_jsonl,
     _history_from_records, _prefix_from_record, _private_replay_from_record,
 )
+from werewolf.canonical_collection.attempt_ledger import validate_attempt_ledger
+from werewolf.canonical_collection.failure_evidence import validate_canonical_partial_evidence
 from werewolf.canonical_collection.public_history import PLAYER_IDS
 from werewolf.game_runtime import (
     UNKNOWN, count_game_votes, gameplay_ratio, summarize_game_votes, summarize_tom_integration,
@@ -66,7 +68,7 @@ def _plan(root: Path):
     return record, artifact.manifest_digest
 
 
-def _final(root: Path, plan: dict, plan_digest: str, expected_digest: str):
+def _bound_final(root: Path, plan: dict, plan_digest: str, expected_digest: str):
     record, artifact = collection._read_record(root / "final", "tom_gameplay_final")
     if artifact.manifest_digest != expected_digest:
         raise ValueError("formal final collection digest mismatch")
@@ -78,19 +80,30 @@ def _final(root: Path, plan: dict, plan_digest: str, expected_digest: str):
     }
     if (
         set(record) != required
-        or record["experiment_id"] != collection.EXPERIMENT_ID
+        or record["experiment_id"] != plan["experiment_id"]
         or record["source_revision"] != plan["source_revision"]
         or record["runtime_provenance"] != plan["runtime_provenance"]
         or record["experiment_plan_digest"] != plan_digest
         or record["candidate_seed_pool_digest"] != plan["candidate_seed_pool_digest"]
-        or record["attempted_candidate_count"] != EXPECTED_ATTEMPTED
+        or record["attempted_candidate_count"] != len(record["pair_record_digests"])
+        or record["completed_valid_count"] != len(record["included_pairs"])
+        or len(record["included_pairs"]) + len(record["invalid_pairs"]) != len(record["pair_record_digests"])
+    ):
+        raise ValueError("formal final collection is incomplete or inconsistent")
+    return record, artifact.manifest_digest
+
+
+def _final(root: Path, plan: dict, plan_digest: str, expected_digest: str):
+    record, digest = _bound_final(root, plan, plan_digest, expected_digest)
+    if (
+        record["attempted_candidate_count"] != EXPECTED_ATTEMPTED
         or record["completed_valid_count"] != collection.TARGET_PAIRS
         or len(record["pair_record_digests"]) != EXPECTED_ATTEMPTED
         or len(record["included_pairs"]) != collection.TARGET_PAIRS
         or len(record["invalid_pairs"]) != len(EXPECTED_INVALID)
     ):
         raise ValueError("formal final collection is incomplete or inconsistent")
-    return record, artifact.manifest_digest
+    return record, digest
 
 
 def _check_arm(plan: dict, ordinal: int, seed: int, arm: str, status: dict,
@@ -102,25 +115,27 @@ def _check_arm(plan: dict, ordinal: int, seed: int, arm: str, status: dict,
             raise ValueError("invalid not-run arm record")
         return
     arm_plan = collection._arm_plan(plan, ordinal, arm)
+    epoch35 = "baseline_plan" in plan
+    expected_game_id = f"{arm_plan.collection_id}-game-000000-seed-{seed}"
     if (
         status.get("collection_id") != arm_plan.collection_id
         or status.get("plan_digest") != arm_plan.plan_digest
         or status.get("source_revision") != plan["source_revision"]
         or status.get("runtime_provenance_digest") != arm_plan.runtime_provenance_digest
-        or status.get("predictor_fit_digest") != (
-            collection.FIT_DIGEST if arm == collection.TOM else None
-        )
-        or status.get("predictor_seal_digest") != (
-            collection.SEAL_DIGEST if arm == collection.TOM else None
-        )
+        or any(status.get(key) != value for key, value in collection._predictor_fields(plan, arm).items())
         or not _digest(status.get("claim_digest"))
         or not _digest(status.get("terminal_digest"))
     ):
         raise ValueError("pair arm provenance or terminal identity mismatch")
+    if epoch35 and (
+        status.get("game_id") != expected_game_id
+        or not isinstance(status.get("attempt_id"), str)
+        or not status["attempt_id"]
+        or (status["status"] == "success" and status.get("failure_evidence_digest") is not None)
+        or (status["terminal_outcome"] == "canonical_failure" and not _digest(status.get("failure_evidence_digest")))
+    ):
+        raise ValueError("Epoch 35 arm attempt identity mismatch")
     if status.get("status") == "success":
-        expected_game_id = (
-            f"{arm_plan.collection_id}-game-000000-seed-{seed}"
-        )
         if (
             status.get("terminal_outcome") != "canonical_success"
             or status.get("game_id") != expected_game_id
@@ -137,6 +152,9 @@ def _check_arm(plan: dict, ordinal: int, seed: int, arm: str, status: dict,
             or status.get("failure_type") is not None
         ):
             raise ValueError("invalid canonical-success arm record")
+        if epoch35 and status["roles"] != dict(zip(
+                PLAYER_IDS, plan["baseline_plan"]["scenarios"][ordinal]["roles"], strict=True)):
+            raise ValueError("arm initial roles differ from the frozen scenario")
     elif status.get("status") == "failure":
         if (
             status.get("terminal_outcome") not in {
@@ -152,7 +170,8 @@ def _check_arm(plan: dict, ordinal: int, seed: int, arm: str, status: dict,
         raise ValueError("unknown pair arm status")
 
 
-def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True):
+def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True,
+           expected_invalid=EXPECTED_INVALID):
     included = []
     valid_pairs = []
     invalid = []
@@ -180,7 +199,7 @@ def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True):
         if artifact.manifest_digest != reference["pair_digest"]:
             raise ValueError("pair artifact digest differs from final manifest")
         if (
-            pair.get("experiment_id") != collection.EXPERIMENT_ID
+            pair.get("experiment_id") != plan["experiment_id"]
             or pair.get("candidate_ordinal") != ordinal
             or pair.get("seed") != seed
             or pair.get("candidate_seed_pool_digest") != plan["candidate_seed_pool_digest"]
@@ -224,10 +243,9 @@ def _pairs(root: Path, plan: dict, final: dict, *, check_treatments=True):
         included != final["included_pairs"]
         or invalid != final["invalid_pairs"]
         or dict(reasons) != final["failure_reason_counts"]
-        or len(included) != collection.TARGET_PAIRS
-        or {item["candidate_ordinal"]: (
+        or (expected_invalid is not None and {item["candidate_ordinal"]: (
             item["failure_arm"], item["failure_type"]
-        ) for item in invalid} != EXPECTED_INVALID
+        ) for item in invalid} != expected_invalid)
     ):
         raise ValueError("final inclusion or formal failure diagnostics mismatch")
     return valid_pairs, invalid, excluded_pairs
@@ -431,7 +449,7 @@ def _valid_prediction_payload(payload, prefix, roles):
 
 
 def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
-                     reported_treatments):
+                     reported_treatments, predictor=None):
     """先独立构造机会，再匹配 treatment 与已调用后端的完整输入。"""
     by_boundary = {prefix.boundary_id: prefix for prefix in prefixes}
     if (len(by_boundary) != len(prefixes)
@@ -461,6 +479,11 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
     if not entries_known:
         note("treatments_unavailable")
         entries = []
+    attempts = audit.get("prediction_attempts")
+    binding = ({"predictor": predictor} if attempts is not None
+               else {"fit_digest": collection.FIT_DIGEST, "seal_digest": collection.SEAL_DIGEST})
+    if attempts is not None:
+        collection._validate_prediction_attempts(by_boundary, roles, arm, entries, attempts)
     treated = set()
     expected_payloads = {}
     for index, entry in enumerate(entries):
@@ -473,8 +496,7 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
         prefix = by_boundary.get(boundary)
         if (prefix is None or entry.get("game_id") != game_id
                 or entry.get("prefix_digest") != prefix.prefix_digest
-                or entry.get("fit_digest") != collection.FIT_DIGEST
-                or entry.get("seal_digest") != collection.SEAL_DIGEST
+                or any(entry.get(key) != value for key, value in binding.items())
                 or not _digest(entry.get("payload_digest"))):
             note("treatment_identity_mismatch", boundary, audit_index=index)
             continue
@@ -549,14 +571,21 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
             continue
         matched.add(boundary)
         matched_entries.update(matching_entries)
-        response_received = (call.status.value == "success"
-                             and call.private_payload.to_value().get("response") is not None)
+        evidence = call.private_payload.to_value()
+        response_received = call.status.value == "success" and evidence.get("response") is not None
         if response_received:
             returned.add(boundary)
+        request_confirmed = response_received
+        if attempts is not None:
+            # 完整传输回执可证明载荷送达，即使返回内容随后未通过验证。
+            receipt = evidence.get("request_record") or {}
+            request_confirmed = (receipt.get("dispatched") is True
+                                 and receipt.get("response_received") is True
+                                 and receipt.get("status") in {"response_received", "invalid_response"})
         if not _valid_prediction_payload(payload, prefix, roles):
             invalid_predictions.add(boundary)
             note("invalid_prediction_payload", boundary, call_id=call.call_id)
-        elif response_received:
+        elif request_confirmed:
             confirmed_integration.add(boundary)
         else:
             uncertain_integration.add(boundary)
@@ -591,6 +620,24 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
             integration["P"] = requests
             if calls is not None and not (uncertain_integration - confirmed_integration):
                 integration["S"] = len(confirmed_integration)
+    if attempts is not None:
+        if (len(expected_payloads) != len(entries) or requests != len(attempts)
+                or any(entry["observer_ids"] != _prediction_observers(by_boundary[entry["boundary_id"]], roles)
+                       for entry in entries)):
+            raise ValueError("Epoch 35 audit does not bind its prediction attempts")
+        predicted = len(entries)
+        unknown_p = invalid_predictions or any(item["status"] == "unknown" for item in attempts)
+        integration.update(A=len(attempts), P_verified=predicted - len(invalid_predictions),
+                           P=UNKNOWN if unknown_p else predicted)
+        if (not predicted and integration["P"] == 0 and not unbound_prediction_request
+                and not payload_requests and (calls is None or not uncertain_integration)):
+            integration["S"] = 0
+        elif (calls is not None and not unbound_prediction_request
+              and not invalid_predictions and not (uncertain_integration - confirmed_integration)
+              and integration["P"] != UNKNOWN):
+            integration["S"] = len(confirmed_integration)
+        else:
+            integration["S"] = UNKNOWN
     return {
         "E": len(eligible), "T": len(entries) if entries_known else UNKNOWN,
         "C": requests, "H": UNKNOWN if calls is None or request_unknown else payload_requests,
@@ -607,7 +654,7 @@ def _coverage_counts(prefixes, roles, audit, calls, actions, *, game_id, arm,
 
 def _game_row(plan, pair, arm):
     status = pair["arms"][arm]
-    return {
+    row = {
         "candidate_ordinal": pair["candidate_ordinal"], "seed": pair["seed"],
         "arm": arm, "game_id": status.get("game_id"), "status": status["status"],
         "source_revision": plan["source_revision"], "bundle_digest": status.get("bundle_digest"),
@@ -616,6 +663,34 @@ def _game_row(plan, pair, arm):
         "tom_integration": dict.fromkeys(("A", "P", "S"), UNKNOWN),
         "response_and_submitted_action_decisions": UNKNOWN,
         "missing_evidence": [],
+    }
+    if "baseline_plan" in plan:
+        scene = plan["baseline_plan"]["scenarios"][pair["candidate_ordinal"]]
+        row.update(winner=status["winner"], scenario_id=scene["scenario_id"],
+                   terminal_outcome=status["terminal_outcome"], cost=_game_cost(None))
+    return row
+
+
+_TOKEN_FIELDS = ("input_tokens", "output_tokens", "total_tokens")
+
+
+def _game_cost(calls, elapsed=UNKNOWN):
+    """按真实传输回执计数，任一缺失用量使本局相应字段保持未知。"""
+    receipts = [call.private_payload.to_value().get("request_record") for call in calls or ()]
+    complete = calls is not None and all(row is not None and row["dispatched"] is True for row in receipts)
+    totals = {field: UNKNOWN for field in (*_TOKEN_FIELDS, "backend_elapsed_seconds")}
+    if complete:
+        for field in _TOKEN_FIELDS:
+            if all(_int(row.get(field)) for row in receipts):
+                totals[field] = sum(row[field] for row in receipts)
+        times = [row.get("elapsed_seconds", UNKNOWN) for row in receipts]
+        if all(type(value) in (int, float) and math.isfinite(value) and value >= 0 for value in times):
+            totals["backend_elapsed_seconds"] = math.fsum(times)
+    return {
+        **totals, "game_elapsed_seconds": elapsed,
+        "model_requests": len(receipts) if complete else UNKNOWN,
+        "unknown_responses": (sum(row.get("response_received") is not True for row in receipts)
+                              if complete else UNKNOWN),
     }
 
 
@@ -645,10 +720,28 @@ def _auxiliary_envelope(path, *, digest, artifact_type, schema_version):
     return ArtifactEnvelope(path, manifest_name, manifest, digest), files
 
 
+def _audit_binding(plan, pair, arm):
+    status = pair["arms"][arm]
+    binding = {
+        "experiment_id": plan["experiment_id"],
+        "candidate_ordinal": pair["candidate_ordinal"], "seed": pair["seed"],
+        "arm": arm, "plan_digest": status["plan_digest"],
+        "claim_digest": status["claim_digest"], "game_id": status["game_id"],
+        "candidate_seed_pool_digest": plan["candidate_seed_pool_digest"],
+    }
+    if "baseline_plan" in plan:
+        binding.update(collection._predictor_fields(plan, arm))
+    else:
+        binding.update(fit_digest=collection.FIT_DIGEST if arm == collection.TOM else None,
+                       seal_digest=collection.SEAL_DIGEST if arm == collection.TOM else None)
+    return binding
+
+
 def _coverage_game(root, plan, pair, arm, *, include_votes=True):
     status = pair["arms"][arm]
     base = collection._arm_path(root, pair["candidate_ordinal"], arm)
     row = _game_row(plan, pair, arm)
+    epoch35 = "baseline_plan" in plan
     bundle_path = base / "games" / status["game_id"]
     bundle, files = _auxiliary_envelope(
         bundle_path, digest=status["bundle_digest"], artifact_type="canonical_game_bundle",
@@ -697,17 +790,9 @@ def _coverage_game(root, plan, pair, arm, *, include_votes=True):
     audit, artifact = collection._read_record(
         audit_path, "tom_gameplay_treatment_audit"
     )
-    audit_expected = {
-        "experiment_id": collection.EXPERIMENT_ID,
-        "candidate_ordinal": pair["candidate_ordinal"], "seed": pair["seed"],
-        "arm": arm, "plan_digest": status["plan_digest"],
-        "claim_digest": status["claim_digest"], "game_id": status["game_id"],
-        "candidate_seed_pool_digest": plan["candidate_seed_pool_digest"],
-        "fit_digest": collection.FIT_DIGEST if arm == collection.TOM else None,
-        "seal_digest": collection.SEAL_DIGEST if arm == collection.TOM else None,
-    }
     if (artifact.manifest_digest != status["treatment_audit_digest"]
-            or any(audit.get(key) != value for key, value in audit_expected.items())):
+            or any(audit.get(key) != value for key, value in _audit_binding(plan, pair, arm).items())
+            or (epoch35 and not isinstance(audit.get("prediction_attempts"), list))):
         raise ValueError("coverage treatment audit identity differs from frozen pair")
     if _PRE_FILE not in files:
         return row
@@ -717,6 +802,8 @@ def _coverage_game(root, plan, pair, arm, *, include_votes=True):
                for name in (_PRE_FILE, _CALL_FILE, _ACTION_FILE) if name in files}
     prefixes = [_prefix_from_record(value) for value in records[_PRE_FILE]]
     calls = [_backend_call_from_record(value) for value in records[_CALL_FILE]] if _CALL_FILE in records else None
+    if epoch35:
+        row["cost"] = _game_cost(calls, audit["elapsed_seconds"])
     arm_plan = collection._arm_plan(plan, pair["candidate_ordinal"], arm)
     for call in calls or ():
         for key in ("backend_identity", "model_identity", "parser_identity", "prompt_identity",
@@ -729,7 +816,54 @@ def _coverage_game(root, plan, pair, arm, *, include_votes=True):
             prefixes, roles, audit, calls, records.get(_ACTION_FILE),
             game_id=status["game_id"], arm=arm,
             reported_treatments=status["treatment_count"],
+            predictor=status.get("predictor"),
         ),
+    }
+
+
+def _failed_epoch35_game(root, plan, pair, arm):
+    """只从终局记录引用的部分证据恢复尝试和成本，保留硬中断的缺失项。"""
+    row = _game_row(plan, pair, arm)
+    status = pair["arms"][arm]
+    ordinal = pair["candidate_ordinal"]
+    base = collection._arm_path(root, ordinal, arm)
+    arm_plan = collection._arm_plan(plan, ordinal, arm)
+    ledger = base / "attempt_ledger"
+    if not ledger.is_dir():
+        row["missing_evidence"].append("attempt_ledger")
+        return row
+    state = validate_attempt_ledger(ledger, arm_plan)
+    claim, = state.claims
+    terminal, = state.terminals
+    if (claim.record_digest != status["claim_digest"] or terminal.record_digest != status["terminal_digest"]
+            or claim.attempt_id != status["attempt_id"]
+            or terminal.outcome.value != status["terminal_outcome"]
+            or terminal.failure_evidence_digest != status["failure_evidence_digest"]):
+        raise ValueError("failure evidence does not match the frozen pair")
+    path = base / "attempts" / claim.attempt_id / "partial_evidence/runtime-state.json"
+    reference = next((ref for ref in terminal.partial_evidence
+                      if ref.relative_path == path.relative_to(base).as_posix()), None)
+    if reference is None or not path.is_file():
+        row["missing_evidence"].append("partial_evidence/runtime-state.json")
+        return row
+    partial = validate_canonical_partial_evidence(path, plan=arm_plan, claim=claim, collection_directory=base)
+    if partial.file_sha256 != reference.sha256:
+        raise ValueError("runtime-state digest differs from terminal")
+    payload = partial.evidence.payload.to_value()
+    audit = payload.get("tom_gameplay_audit")
+    if audit is None:
+        row["missing_evidence"].append("tom_gameplay_audit")
+        return row
+    if (any(audit.get(key) != value for key, value in _audit_binding(plan, pair, arm).items())
+            or not isinstance(audit.get("prediction_attempts"), list)):
+        raise ValueError("runtime-state ToM audit does not match the frozen arm")
+    prefixes = [_prefix_from_record(value) for value in payload["authoritative_pre_prefixes"]]
+    calls = [_backend_call_from_record(value) for value in payload["backend_calls"]]
+    roles = dict(zip(PLAYER_IDS, plan["baseline_plan"]["scenarios"][ordinal]["roles"], strict=True))
+    return {
+        **row, "cost": _game_cost(calls, audit["elapsed_seconds"]),
+        **_coverage_counts(prefixes, roles, audit, calls, None, game_id=status["game_id"], arm=arm,
+                           reported_treatments=audit["treatment_count"], predictor=status["predictor"]),
     }
 
 
@@ -739,23 +873,27 @@ def _gameplay_evidence(root, plan, final, pairs, excluded_pairs):
               **_coverage_game(root, plan, pair, arm)}
              for pair in pairs for arm in collection.ARMS]
     additional_attempts = []
+    epoch35 = "baseline_plan" in plan
     for pair in excluded_pairs:
         for arm in collection.ARMS:
             status = pair["arms"][arm]["status"]
             if status == "not_run":
                 continue
             if status == "success":
-                row = _coverage_game(root, plan, pair, arm, include_votes=False)
+                row = _coverage_game(root, plan, pair, arm, include_votes=epoch35)
+            elif epoch35:
+                row = _failed_epoch35_game(root, plan, pair, arm)
             else:
                 # 旧失败文件没有完整的预测请求清单，无法推出 A、P 或 S。
                 row = _game_row(plan, pair, arm)
                 row["missing_evidence"].extend(("bundle/manifest.json", "private_treatment_audit/manifest.json"))
-            row.pop("vote_counts")
+            if not epoch35:
+                row.pop("vote_counts")
             additional_attempts.append({"pair_digest": digests[pair["candidate_ordinal"]], **row})
     return games, additional_attempts
 
 
-def _arm_gameplay_metrics(arm, games, additional_attempts):
+def _arm_gameplay_metrics(arm, games, additional_attempts, *, epoch35=False):
     complete = [row for row in games if row["arm"] == arm]
     attempted = [row for row in additional_attempts if row["arm"] == arm]
     vote_counts = [row["vote_counts"] for row in complete]
@@ -771,8 +909,9 @@ def _arm_gameplay_metrics(arm, games, additional_attempts):
         ("all_observed_attempts", complete + attempted),
     ):
         counts = [row["tom_integration"] for row in population]
+        applicable = arm == collection.TOM if epoch35 else any(row["A"] != 0 for row in counts)
         integration[name] = summarize_tom_integration(
-            counts, applicable=any(row["A"] != 0 for row in counts)
+            counts, applicable=applicable
         )
     return {
         "votes": votes,
@@ -855,13 +994,140 @@ def analyze_coverage(root: Path, *, expected_final_digest=EXPECTED_FINAL_DIGEST)
     }
 
 
+def _epoch35_ratios(games):
+    votes = summarize_game_votes([row["vote_counts"] for row in games])
+    coverage = []
+    for field in ("U", "E"):
+        values = [row.get(field, UNKNOWN) for row in games]
+        coverage.append(UNKNOWN if UNKNOWN in values else sum(values))
+    return {
+        "WWR": gameplay_ratio(sum(row["winner"] == "Werewolf" for row in games), len(games)),
+        **{name: ratio for name, ratio in votes.items() if isinstance(ratio, dict) and "value" in ratio},
+        "coverage": gameplay_ratio(*coverage),
+    }
+
+
+def _paired_ratio_effects(rows, *, seed=BOOTSTRAP_SEED, replicates=BOOTSTRAP_REPLICATES):
+    """整场景有放回抽样，每个臂在每次抽样内重新汇总分子和分母。"""
+    import numpy as np
+
+    notom = _epoch35_ratios([left for left, _ in rows])
+    tom = _epoch35_ratios([right for _, right in rows])
+    effects, estimable = {}, []
+    for name, left in notom.items():
+        right = tom[name]
+        rates = (left["value"], right["value"])
+        delta = UNKNOWN if UNKNOWN in rates else None
+        if delta is None and None not in rates:
+            delta = rates[1] - rates[0]
+            estimable.append(name)
+        effects[name] = {"notom": left, "tom": right, "delta": delta,
+                         "bootstrap_95_ci": UNKNOWN if delta == UNKNOWN else None,
+                         "bootstrap_defined_replicates": 0}
+    if not estimable:
+        return effects
+
+    counts = []
+    for left, right in rows:
+        left_ratios, right_ratios = _epoch35_ratios([left]), _epoch35_ratios([right])
+        counts.append([[left_ratios[name]["numerator"], left_ratios[name]["denominator"],
+                        right_ratios[name]["numerator"], right_ratios[name]["denominator"]]
+                       for name in estimable])
+    counts = np.asarray(counts, dtype=np.int64)
+    draws = [[] for _ in estimable]
+    generator = np.random.default_rng(seed)
+    for start in range(0, replicates, 256):
+        size = min(256, replicates - start)
+        indices = generator.integers(len(rows), size=(size, len(rows)))
+        totals = counts[indices].sum(axis=1)
+        for index, estimates in enumerate(draws):
+            left_num, left_den, right_num, right_den = totals[:, index].T
+            valid = (left_den > 0) & (right_den > 0)
+            estimates.append(right_num[valid] / right_den[valid] - left_num[valid] / left_den[valid])
+    for name, estimates in zip(estimable, draws, strict=True):
+        samples = np.concatenate(estimates)
+        effects[name]["bootstrap_defined_replicates"] = len(samples)
+        if len(samples):
+            effects[name]["bootstrap_95_ci"] = np.quantile(samples, [.025, .975]).tolist()
+    return effects
+
+
+def _epoch35_arm_results(arm, games, failures):
+    rows = [row for row in games if row["arm"] == arm]
+    failed = [row for row in failures if row["arm"] == arm]
+    all_attempts = rows + failed
+    costs = {}
+    for population, sample in (("valid_games", rows), ("all_observed_attempts", all_attempts)):
+        costs[population] = {}
+        for name in _game_cost(None):
+            values = [row["cost"][name] for row in sample]
+            known = [value for value in values if value != UNKNOWN]
+            observed = sum(known)
+            costs[population][name] = {"sum": observed if len(known) == len(sample) else UNKNOWN,
+                                       "observed_sum": observed, "games_available": len(known), "games": len(sample)}
+    ratios = _epoch35_ratios(rows)
+    return {
+        "games": len(rows), "attempted_games": len(all_attempts), "failed_games": len(failed),
+        "interrupted_games": sum(row["terminal_outcome"] == "interrupted_failure" for row in failed),
+        "WWR": ratios["WWR"], "coverage": ratios["coverage"],
+        "cost": costs, **_arm_gameplay_metrics(arm, games, failures, epoch35=True),
+    }
+
+
+def analyze_epoch35_collection(root: Path, *, expected_final_digest: str):
+    """使用新归档的外部 Final 摘要，独立报告全终局与共同有效配对。"""
+    root = Path(root)
+    plan, artifact = collection._read_record(root / "experiment_plan", "tom_gameplay_experiment_plan")
+    if ("baseline_plan" not in plan or plan["experiment_id"] != root.name
+            or plan != collection._epoch35_record(
+                plan["source_revision"], plan["runtime_provenance"], plan["configured_call_limit"],
+                experiment_id=plan["experiment_id"], baseline_plan=plan["baseline_plan"],
+                device=plan["predictor"]["device"])):
+        raise ValueError("not a frozen Epoch 35 scenario ablation")
+    final, final_digest = _bound_final(root, plan, artifact.manifest_digest, expected_final_digest)
+    if final["attempted_candidate_count"] != plan["candidate_count"]:
+        raise ValueError("Epoch 35 analysis requires both recorded outcomes for all frozen scenarios")
+    paired, invalid, excluded = _pairs(root, plan, final, expected_invalid=None)
+    paired_games, extra = _gameplay_evidence(root, plan, final, paired, excluded)
+    all_valid = paired_games + [row for row in extra if row["status"] == "success"]
+    failures = [row for row in extra if row["status"] == "failure"]
+    games = sorted(all_valid + failures, key=lambda row: (row["candidate_ordinal"], row["arm"]))
+    paired_ordinals = {pair["candidate_ordinal"] for pair in paired}
+    for row in games:
+        row["paired_valid"] = row["candidate_ordinal"] in paired_ordinals
+    by_scenario = {(row["candidate_ordinal"], row["arm"]): row for row in paired_games}
+    rows = [(by_scenario[ordinal, collection.NOTOM], by_scenario[ordinal, collection.TOM])
+            for ordinal in (pair["candidate_ordinal"] for pair in paired)]
+    outcomes = Counter((left["winner"] == "Werewolf", right["winner"] == "Werewolf") for left, right in rows)
+    n00, n01, n10, n11 = (outcomes[a, b] for a, b in ((0, 0), (0, 1), (1, 0), (1, 1)))
+    return {
+        "experiment_id": plan["experiment_id"], "source_collection_digest": final_digest,
+        "source_revision": plan["source_revision"], "baseline_plan_sha256": plan["baseline_plan"]["plan_sha256"],
+        "predictor": plan["predictor"], "planned_scenarios": plan["candidate_count"],
+        "attempted_tasks": len(games), "invalid_pairs": invalid,
+        "all_valid_games": {arm: _epoch35_arm_results(arm, all_valid, failures) for arm in collection.ARMS},
+        "paired_valid_games": {arm: _epoch35_arm_results(arm, paired_games, ()) for arm in collection.ARMS},
+        "paired": {
+            "N": len(paired), "n00": n00, "n01": n01, "n10": n10, "n11": n11,
+            "exact_mcnemar_p": _exact_mcnemar(n01, n10) if paired else None,
+            "difference": "ToM - NoToM", "metrics": _paired_ratio_effects(rows),
+            "bootstrap_seed": BOOTSTRAP_SEED, "bootstrap_replicates": BOOTSTRAP_REPLICATES,
+            "bootstrap_generator": "NumPy PCG64",
+        },
+        "games": games,
+    }
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collection-root", type=Path)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--final-digest", help="新 Epoch 35 归档发布的 Final Digest")
     parser.add_argument("--coverage", action="store_true", help="离线核查接入覆盖率，不重算胜率Bootstrap")
     parser.add_argument("--game-details-output", type=Path, help="用户指定的游戏级CSV输出路径")
     args = parser.parse_args(argv)
+    if args.final_digest is not None and (not _digest(args.final_digest) or args.collection_root is None or args.coverage):
+        parser.error("--final-digest requires the Epoch 35 --collection-root and a lowercase SHA-256")
     if args.coverage and (args.collection_root is None or args.output_dir is None or args.game_details_output is None):
         parser.error("--coverage requires --collection-root, --output-dir and --game-details-output")
     if args.game_details_output is not None and not args.coverage:
@@ -879,9 +1145,16 @@ def main(argv=None):
     else:
         root = args.collection_root
     root = root.resolve(strict=True)
-    output = (args.output_dir or root.parent / f"{collection.EXPERIMENT_ID}-analysis").resolve()
+    experiment_id = root.name if args.final_digest is not None else collection.EXPERIMENT_ID
+    output = (args.output_dir or root.parent / f"{experiment_id}-analysis").resolve()
     if output == root or root in output.parents:
         raise ValueError("analysis output directory must be outside formal collection")
+    if args.final_digest is not None and any(output.is_relative_to(path) for path in (
+        root.parent / collection.EXPERIMENT_ID,
+        root.parent / f"{collection.EXPERIMENT_ID}-analysis",
+        root.parent.parent / "werewolf-baseline",
+    )):
+        raise ValueError("Epoch 35 analysis output must be outside historical evidence")
     details_path = args.game_details_output.resolve() if args.coverage else None
     if details_path is not None and (details_path == root or root in details_path.parents
                                      or details_path == output / "analysis.json"):
@@ -896,6 +1169,8 @@ def main(argv=None):
             writer.writerow({key: json.dumps(value, ensure_ascii=False, sort_keys=True)
                              if isinstance(value, (dict, list)) else value for key, value in row.items()})
         details_payload = stream.getvalue().encode("utf-8")
+    elif args.final_digest is not None:
+        result = analyze_epoch35_collection(root, expected_final_digest=args.final_digest)
     else:
         result = analyze_collection(root, expected_final_digest=EXPECTED_FINAL_DIGEST)
     payload = (json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")

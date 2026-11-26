@@ -17,7 +17,9 @@ import pytest
 from werewolf.game_runtime import eval as run_game
 from scripts import qwen3_gameplay_predictor as process
 from scripts.qwen3_gameplay_predictor import _decode, _wire
-from scripts.tom_gameplay_ablation import eligible_observers, run_ablation, tom_payload
+from scripts.tom_gameplay_ablation import (
+    Epoch35GameplayPredictor, eligible_observers, prediction_request, run_ablation, tom_payload,
+)
 from tests.agents.test_agent_backend import (
     MetadataBackend, _belief_for, _day_cognition, _observation,
     _pre_speech_belief, _role_observation,
@@ -158,21 +160,24 @@ def test_notom_uses_exact_original_speech_request(phase):
 
 
 @pytest.mark.parametrize("phase", ("speech", "speech_pk"))
-def test_tom_changes_only_cognition_request(phase):
+@pytest.mark.parametrize("epoch35", (False, True))
+def test_tom_changes_only_cognition_request(phase, epoch35):
     observation = _wolf_observation(phase)
     baseline = MetadataBackend([_day_cognition(observation)])
     env, agents, recorder, audit = _runtime(observation, _agent(baseline))
+    no_tom_attempts = []
     run_ablation(env, agents, (), recorder=recorder, call_audit=audit,
-                 arm="Wolf-NoToM")
+                 arm="Wolf-NoToM", prediction_attempts=no_tom_attempts if epoch35 else None)
 
     treated = MetadataBackend([_day_cognition(observation)])
     env, agents, recorder, audit = _runtime(observation, _agent(treated))
     predictor = SimpleNamespace(predict=Mock(return_value=_matrix()),
-                                fit_digest="fit", seal_digest="seal")
+                                fit_digest="fit", seal_digest="seal", identity={"checkpoint_digest": "fixture"})
     treatment_audit = []
+    prediction_attempts = [] if epoch35 else None
     run_ablation(env, agents, (), recorder=recorder, call_audit=audit,
                  arm="Wolf+ToM", predictor=predictor,
-                 treatment_audit=treatment_audit)
+                 treatment_audit=treatment_audit, prediction_attempts=prediction_attempts)
     payload = tom_payload(recorder.prefix, observation, _matrix())
     context = _wire(payload).decode().rstrip("\n")
     baseline_prompt = baseline.calls[0]["messages"][0]["content"]
@@ -196,9 +201,57 @@ def test_tom_changes_only_cognition_request(phase):
     assert context not in treated.calls[1]["messages"][0]["content"]
     predictor.predict.assert_called_once_with(recorder.prefix)
     assert len(treatment_audit) == 1
-    assert set(treatment_audit[0]) == {"game_id", "boundary_id", "prefix_digest",
-                                      "observer_ids", "payload_digest",
-                                      "fit_digest", "seal_digest"}
+    identity_fields = {"predictor", "request_id"} if epoch35 else {"fit_digest", "seal_digest"}
+    assert set(treatment_audit[0]) == {
+        "game_id", "boundary_id", "prefix_digest", "observer_ids", "payload_digest",
+    } | identity_fields
+    if epoch35:
+        assert not no_tom_attempts
+        assert prediction_attempts == [{**prediction_request(recorder.prefix), "status": "succeeded"}]
+        assert treatment_audit[0]["request_id"] == prediction_attempts[0]["request_id"]
+
+
+@pytest.mark.parametrize("fault", (None, "capacity", "temporal"))
+def test_epoch35_predictor_tensorizes_only_complete_public_pre(monkeypatch, fault):
+    import torch
+    from tests.canonical_collection.test_game_bundle import _fixture
+    from werewolf.tom import final_evaluation, makto
+    from werewolf.tom.dataset import ExperimentCapacity
+    from werewolf.structured_history import STRUCTURED_TOKEN_TYPES
+
+    prefix = _fixture()[2].authoritative_pre_prefixes[0]
+
+    class Model(torch.nn.Module):
+        capacity = ExperimentCapacity(1 if fault == "capacity" else 1024)
+        temporal = SimpleNamespace(artifact_digest=final_evaluation.TEST_TEMPORAL_DIGEST,
+                                   day=range(1 if fault == "temporal" else 6))
+        calls = 0
+
+        def forward(self, **public):
+            self.calls += 1
+            assert torch.is_inference_mode_enabled() and not self.training
+            assert set(public) == {"event_ids", "source_ids", "action_ids", "target_ids",
+                                   "day_ids", "phase_ids", "attention_mask"}
+            ids = public["event_ids"][public["attention_mask"]]
+            assert ids[-1].item() == STRUCTURED_TOKEN_TYPES.index("turn_start") + 1
+            logits = torch.zeros(7, 7)
+            logits.fill_diagonal_(-torch.inf)
+            return logits.log_softmax(-1).unsqueeze(0)
+
+    model = Model()
+    load = Mock(return_value=model)
+    monkeypatch.setattr(makto, "load_epoch35_model", load)
+    predictor = Epoch35GameplayPredictor("checkpoint", "temporal", "cpu")
+    load.assert_called_once_with("checkpoint", "temporal")
+    if fault is not None:
+        with pytest.raises(ValueError, match="exceeds"):
+            predictor.predict(prefix)
+        assert model.calls == 0
+    else:
+        rows = predictor.predict(prefix)
+        assert model.calls == 1
+        assert len(rows) == 7 and all(row[seat] == 0.0 and sum(row) == pytest.approx(1)
+                                      for seat, row in enumerate(rows))
 
 
 def test_cognition_retry_reuses_one_prediction():

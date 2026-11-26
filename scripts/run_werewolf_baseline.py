@@ -135,6 +135,10 @@ def _read_plan(path):
     plan = _read_record(path)
     if not isinstance(plan, dict):
         raise ValueError(f"no valid plan at {path}")
+    return _validate_plan(plan)
+
+
+def _validate_plan(plan):
     body = {key: value for key, value in plan.items() if key != "plan_sha256"}
     if plan.get("plan_sha256") != digest(body):
         raise ValueError("plan SHA-256 mismatch")

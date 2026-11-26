@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import sys
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from scripts import collect_games as operator
@@ -15,7 +17,7 @@ from scripts.qwen3_gameplay_predictor import (
     SOURCE_REVISION,
     Qwen3GameplayPredictorClient,
 )
-from scripts.tom_gameplay_ablation import run_ablation
+from scripts.tom_gameplay_ablation import Epoch35GameplayPredictor, epoch35_identity, prediction_request, run_ablation
 from werewolf import cli
 from werewolf.artifact_io import (
     canonical_json_bytes,
@@ -29,6 +31,7 @@ from werewolf.canonical_collection.attempt_ledger import (
     CollectionSeedPoolExhausted,
     TerminalOutcome,
     construct_collection_plan,
+    initialize_attempt_ledger,
     load_collection_plan,
     validate_attempt_ledger,
     validate_collection_plan,
@@ -36,19 +39,23 @@ from werewolf.canonical_collection.attempt_ledger import (
 from werewolf.canonical_collection.collector import CanonicalGameProduct, collect
 from werewolf.canonical_collection.failure_evidence import (
     CanonicalFailureStage,
+    construct_canonical_partial_evidence,
+    publish_canonical_partial_evidence,
     validate_canonical_failure_evidence,
 )
 from werewolf.canonical_collection.game_bundle import validate_canonical_game_bundle
 from werewolf.canonical_collection.production_runtime import (
     Classic7RuntimeFactory,
+    classic7_full_game_replay_executor,
     classic7_replay_executor,
 )
-from werewolf.canonical_collection.public_history import PublicPhase
+from werewolf.canonical_collection.public_history import PLAYER_IDS, PublicPhase
 
 
 EXPERIMENT_ID = "paper-tom-gameplay-ablation-v1"
 TARGET_PAIRS = 40
 CANDIDATE_COUNT = 100
+BASELINE_PLAN_SHA256 = "14f6e5f58924bf5b579a10662da635a6b0155b58054b9e847ab81732eeae5fdf"
 NOTOM = "Wolf-NoToM"
 TOM = "Wolf+ToM"
 ARMS = (NOTOM, TOM)
@@ -129,13 +136,43 @@ def _experiment_record(head: str, provenance: dict[str, str], call_limit: int):
     }
 
 
+def _epoch35_record(head, provenance, call_limit, *, experiment_id, baseline_plan, device):
+    from scripts.run_werewolf_baseline import _validate_plan
+
+    _validate_plan(baseline_plan)
+    if baseline_plan["plan_sha256"] != BASELINE_PLAN_SHA256:
+        raise ValueError("Baseline Plan differs from the frozen scenario source")
+    if provenance["served_model_name"] != "qwen35-9b" or experiment_id == EXPERIMENT_ID:
+        raise ValueError("Epoch 35 ablation requires Qwen3.5-9B and a separate experiment")
+    seeds = [scene["seed"] for scene in baseline_plan["scenarios"]]
+    operator.validate_campaign({"collection_id": experiment_id, "target_games": len(seeds),
+                                "seed_pool_size": len(seeds), "call_limit": call_limit})
+    return {
+        "experiment_id": experiment_id, "source_revision": head,
+        "ordered_seed_pool": seeds, "candidate_seed_pool_digest": _digest(seeds),
+        "baseline_plan": baseline_plan, "candidate_count": len(seeds), "arms": list(ARMS),
+        "arm_order": "candidate-ordinal-even-notom-first-odd-tom-first-v1",
+        "pair_failure_policy": "attempt-both-arms",
+        "runtime_provenance": provenance, "configured_call_limit": call_limit,
+        "predictor": epoch35_identity(device),
+    }
+
+
+def _predictor_fields(record, arm):
+    if "baseline_plan" in record:
+        return {"predictor": record["predictor"] if arm == TOM else None}
+    return {"predictor_fit_digest": FIT_DIGEST if arm == TOM else None,
+            "predictor_seal_digest": SEAL_DIGEST if arm == TOM else None}
+
+
 def _arm_path(root: Path, ordinal: int, arm: str) -> Path:
     return root / "candidates" / f"{ordinal:03d}" / _slug(arm)
 
 
 def _arm_plan(record: dict[str, Any], ordinal: int, arm: str):
     seed = record["ordered_seed_pool"][ordinal]
-    identity = f"{EXPERIMENT_ID}-{ordinal:03d}-{_slug(arm)}"
+    experiment_id = record["experiment_id"]
+    identity = f"{experiment_id}-{ordinal:03d}-{_slug(arm)}"
     campaign = operator.validate_campaign({
         "collection_id": identity,
         "target_games": 1,
@@ -144,14 +181,21 @@ def _arm_plan(record: dict[str, Any], ordinal: int, arm: str):
     })
     provenance = {
         **record["runtime_provenance"],
-        "seed_rule_identity": f"{operator.SEED_RULE}:{EXPERIMENT_ID}",
-        "gameplay_ablation_experiment_id": EXPERIMENT_ID,
+        "gameplay_ablation_experiment_id": experiment_id,
         "gameplay_ablation_candidate_ordinal": str(ordinal),
         "gameplay_ablation_candidate_pool_digest": record["candidate_seed_pool_digest"],
         "gameplay_ablation_arm": arm,
-        "gameplay_ablation_fit_digest": FIT_DIGEST if arm == TOM else "none",
-        "gameplay_ablation_seal_digest": SEAL_DIGEST if arm == TOM else "none",
     }
+    if "baseline_plan" in record:
+        scene = record["baseline_plan"]["scenarios"][ordinal]
+        provenance.update(seed_rule_identity="frozen-baseline-scenario",
+                          baseline_plan_sha256=record["baseline_plan"]["plan_sha256"],
+                          baseline_scenario_id=scene["scenario_id"], baseline_roles_digest=_digest(scene["roles"]),
+                          gameplay_ablation_predictor_digest=_digest(record["predictor"]) if arm == TOM else "none")
+    else:
+        provenance.update(seed_rule_identity=f"{operator.SEED_RULE}:{EXPERIMENT_ID}",
+                          gameplay_ablation_fit_digest=FIT_DIGEST if arm == TOM else "none",
+                          gameplay_ablation_seal_digest=SEAL_DIGEST if arm == TOM else "none")
     fields = operator.plan_fields(campaign, record["source_revision"], provenance)
     fields["agent_identity"] = (
         "classic7-gpt-pre-belief-handoff-qwen3-tom-v1" if arm == TOM
@@ -168,10 +212,40 @@ def _has_tom_header(call) -> bool:
     return TOM_HEADER in json.dumps(request, ensure_ascii=False)
 
 
-def _validate_treatment(evidence, arm: str, entries: list[dict], request_count):
+def _validate_prediction_attempts(prefixes, roles, arm, entries, attempts):
+    """核对逻辑预测与各 PRE 及成功载荷的一一对应，包括未取得输出的尝试。"""
+    if type(attempts) is not list or (arm == NOTOM and attempts):
+        raise ValueError("invalid ablation prediction attempts")
+    seen, succeeded = set(), set()
+    for attempt in attempts:
+        prefix = prefixes.get(attempt["boundary_id"])
+        status = attempt["status"]
+        if (prefix is None or roles[prefix.current_speaker] != "Werewolf"
+                or prefix.current_speaker not in prefix.alive_observer_ids
+                or prefix.public_temporal_state.phase not in {PublicPhase.DISCUSSION, PublicPhase.PK_DISCUSSION}
+                or any(attempt.get(key) != value for key, value in prediction_request(prefix).items())
+                or attempt["request_id"] in seen or status not in {"succeeded", "failed", "unknown"}):
+            raise ValueError("prediction attempt does not match a unique eligible PRE")
+        seen.add(attempt["request_id"])
+        if status == "succeeded":
+            succeeded.add(attempt["request_id"])
+    for entry in entries:
+        prefix = prefixes.get(entry["boundary_id"])
+        if prefix is None or entry["request_id"] != prediction_request(prefix)["request_id"]:
+            raise ValueError("treatment differs from the prediction request PRE")
+    if len(entries) != len(succeeded) or {entry["request_id"] for entry in entries} != succeeded:
+        raise ValueError("successful prediction attempts differ from treatments")
+
+
+def _validate_treatment(evidence, arm: str, entries: list[dict], request_count, *,
+                        predictor=None, prediction_attempts=None):
     prefixes = {prefix.boundary_id: prefix
                 for prefix in evidence.authoritative_pre_prefixes}
     roles = dict(evidence.private_replay_evidence.role_assignment)
+    if prediction_attempts is not None:
+        _validate_prediction_attempts(prefixes, roles, arm, entries, prediction_attempts)
+        if any(attempt["status"] != "succeeded" for attempt in prediction_attempts):
+            raise ValueError("a completed ablation game has an unsuccessful predictor attempt")
     if arm == NOTOM:
         if entries or request_count is not None:
             raise ValueError("NoToM received treatment or predictor requests")
@@ -181,10 +255,14 @@ def _validate_treatment(evidence, arm: str, entries: list[dict], request_count):
     if type(request_count) is not int or request_count != len(entries):
         raise ValueError("+ToM predictor request count differs from treatment audit")
     treated = set()
+    binding = ({"fit_digest": FIT_DIGEST, "seal_digest": SEAL_DIGEST} if predictor is None
+               else {"predictor": predictor})
     required = {
         "game_id", "boundary_id", "prefix_digest", "observer_ids",
-        "payload_digest", "fit_digest", "seal_digest",
-    }
+        "payload_digest",
+    } | binding.keys()
+    if prediction_attempts is not None:
+        required.add("request_id")
     for entry in entries:
         if type(entry) is not dict or set(entry) != required:
             raise ValueError("invalid treatment audit entry")
@@ -197,8 +275,7 @@ def _validate_treatment(evidence, arm: str, entries: list[dict], request_count):
         if (
             entry["game_id"] != evidence.game_id
             or entry["prefix_digest"] != prefix.prefix_digest
-            or entry["fit_digest"] != FIT_DIGEST
-            or entry["seal_digest"] != SEAL_DIGEST
+            or any(entry[key] != value for key, value in binding.items())
             or roles[speaker] != "Werewolf"
             or prefix.public_temporal_state.phase not in {
                 PublicPhase.DISCUSSION, PublicPhase.PK_DISCUSSION
@@ -232,9 +309,9 @@ def _validate_treatment(evidence, arm: str, entries: list[dict], request_count):
 
 
 def _audit_record(*, record, ordinal, seed, arm, plan, claim, evidence,
-                  entries, request_count):
-    return {
-        "experiment_id": EXPERIMENT_ID,
+                  entries, request_count, prediction_attempts=None, elapsed_seconds=None):
+    audit = {
+        "experiment_id": record["experiment_id"],
         "candidate_ordinal": ordinal,
         "seed": seed,
         "arm": arm,
@@ -244,15 +321,20 @@ def _audit_record(*, record, ordinal, seed, arm, plan, claim, evidence,
         "treatment_count": len(entries),
         "predictor_requests": request_count,
         "treatments": entries,
-        "fit_digest": FIT_DIGEST if arm == TOM else None,
-        "seal_digest": SEAL_DIGEST if arm == TOM else None,
         "candidate_seed_pool_digest": record["candidate_seed_pool_digest"],
     }
+    if "baseline_plan" in record:
+        audit.update(predictor=record["predictor"] if arm == TOM else None,
+                     prediction_attempts=prediction_attempts, elapsed_seconds=elapsed_seconds)
+    else:
+        audit.update(fit_digest=FIT_DIGEST if arm == TOM else None,
+                     seal_digest=SEAL_DIGEST if arm == TOM else None)
+    return audit
 
 
 class _AblationRuntime:
     def __init__(self, *, runtime, plan, claim, arm, ordinal, record,
-                 collection_path, predictor_checkout, fit_path):
+                 collection_path, predictor_checkout, fit_path, epoch35_predictor):
         self.runtime = runtime
         self.plan = plan
         self.claim = claim
@@ -262,48 +344,73 @@ class _AblationRuntime:
         self.collection_path = collection_path
         self.predictor_checkout = predictor_checkout
         self.fit_path = fit_path
+        self.epoch35_predictor = epoch35_predictor
 
     def run(self) -> CanonicalGameProduct:
         runtime = self.runtime
         treatments: list[dict] = []
+        epoch35 = "baseline_plan" in self.record
+        attempts = [] if epoch35 else None
+        expected_predictor = self.record.get("predictor") if self.arm == TOM else None
         requests = None
+        started = perf_counter()
+
+        def audit_record(evidence):
+            return _audit_record(
+                record=self.record, ordinal=self.ordinal, seed=self.claim.seed,
+                arm=self.arm, plan=self.plan, claim=self.claim, evidence=evidence,
+                entries=treatments, request_count=len(attempts) if epoch35 and self.arm == TOM else requests,
+                prediction_attempts=attempts, elapsed_seconds=perf_counter() - started,
+            )
+
         try:
-            if self.arm == NOTOM:
+            if epoch35 and self.arm == TOM:
+                if self.epoch35_predictor is None or self.epoch35_predictor.identity != expected_predictor:
+                    raise ValueError("Epoch 35 predictor differs from the frozen Plan")
+                predictor_context = nullcontext(self.epoch35_predictor)
+            elif self.arm == TOM:
+                predictor_context = Qwen3GameplayPredictorClient(
+                    checkout=self.predictor_checkout, fit_path=self.fit_path, python_executable=sys.executable,
+                )
+            else:
+                predictor_context = nullcontext()
+            with predictor_context as predictor:
                 result = run_ablation(
                     runtime.env, runtime.agents, runtime.roles,
                     recorder=runtime.recorder, call_audit=runtime.call_audit,
-                    arm=NOTOM, predictor=None, treatment_audit=treatments,
+                    arm=self.arm, predictor=predictor, treatment_audit=treatments,
+                    **({"prediction_attempts": attempts} if epoch35 else {}),
                 )
-            else:
-                with Qwen3GameplayPredictorClient(
-                    checkout=self.predictor_checkout,
-                    fit_path=self.fit_path,
-                    python_executable=sys.executable,
-                ) as predictor:
-                    result = run_ablation(
-                        runtime.env, runtime.agents, runtime.roles,
-                        recorder=runtime.recorder, call_audit=runtime.call_audit,
-                        arm=TOM, predictor=predictor, treatment_audit=treatments,
-                    )
-                    requests = predictor._next_request
+                if self.arm == TOM:
+                    requests = len(attempts) if epoch35 else predictor._next_request
             evidence = runtime.recorder.complete_evidence()
             winner = evidence.private_replay_evidence.replay_inputs.to_value().get("winner")
             if winner not in {"Werewolf", "Villager"} or result != f"{winner} win":
                 raise ValueError("game result differs from canonical private replay winner")
-            _validate_treatment(evidence, self.arm, treatments, requests)
+            _validate_treatment(evidence, self.arm, treatments, requests,
+                                predictor=expected_predictor, prediction_attempts=attempts)
             _publish_record(
                 self.collection_path / "private_treatment_audit",
                 "tom_gameplay_treatment_audit",
-                _audit_record(
-                    record=self.record, ordinal=self.ordinal, seed=self.claim.seed,
-                    arm=self.arm, plan=self.plan, claim=self.claim, evidence=evidence,
-                    entries=treatments, request_count=requests,
-                ),
+                audit_record(evidence),
             )
-        except Exception as error:
-            raise runtime.recorder.failure_from_exception(
+        except (Exception, KeyboardInterrupt) as error:
+            if isinstance(error, KeyboardInterrupt) and not epoch35:
+                raise
+            failure = runtime.recorder.failure_from_exception(
                 error, default_stage=CanonicalFailureStage.RUNTIME
-            ) from error
+            )
+            if epoch35:
+                failure.partial_payload["tom_gameplay_audit"] = audit_record(runtime.recorder)
+            if isinstance(error, KeyboardInterrupt):
+                partial = construct_canonical_partial_evidence(
+                    plan=self.plan, claim=self.claim, evidence_id="runtime-state",
+                    evidence_type="canonical_collection_runtime_state", payload=failure.partial_payload,
+                )
+                publish_canonical_partial_evidence(self.collection_path, plan=self.plan, claim=self.claim,
+                                                   evidence=partial)
+                raise
+            raise failure from error
         return CanonicalGameProduct(
             evidence=evidence, replay_executor=runtime.replay_executor
         )
@@ -311,7 +418,7 @@ class _AblationRuntime:
 
 class _AblationRuntimeFactory:
     def __init__(self, *, base_factory, arm, ordinal, record, collection_path,
-                 predictor_checkout, fit_path):
+                 predictor_checkout, fit_path, epoch35_predictor, replay_executor):
         self.base_factory = base_factory
         self.arm = arm
         self.ordinal = ordinal
@@ -319,13 +426,26 @@ class _AblationRuntimeFactory:
         self.collection_path = collection_path
         self.predictor_checkout = predictor_checkout
         self.fit_path = fit_path
+        self.epoch35_predictor = epoch35_predictor
+        self.replay_executor = replay_executor
 
     def __call__(self, *, plan, claim):
+        options = {}
+        if "baseline_plan" in self.record:
+            scene = self.record["baseline_plan"]["scenarios"][self.ordinal]
+            options = {"roles": scene["roles"], "record_requests": True}
+        runtime = self.base_factory(plan=plan, claim=claim, **options)
+        if options and (list(runtime.roles) != scene["roles"]
+                        or any(agent.decision_method is not None for agent in runtime.agents)):
+            raise ValueError("ablation runtime differs from the frozen seats or native GPTAgent")
+        if options:
+            runtime.replay_executor = self.replay_executor
         return _AblationRuntime(
-            runtime=self.base_factory(plan=plan, claim=claim),
+            runtime=runtime,
             plan=plan, claim=claim, arm=self.arm, ordinal=self.ordinal,
             record=self.record, collection_path=self.collection_path,
             predictor_checkout=self.predictor_checkout, fit_path=self.fit_path,
+            epoch35_predictor=self.epoch35_predictor,
         )
 
 
@@ -359,14 +479,16 @@ def _arm_status(*, root, record, ordinal, arm, replay_executor):
         "backend_calls": None,
         "speech_boundaries": None,
         "treatment_count": None,
-        "predictor_fit_digest": FIT_DIGEST if arm == TOM else None,
-        "predictor_seal_digest": SEAL_DIGEST if arm == TOM else None,
+        **_predictor_fields(record, arm),
         "source_revision": plan.source_revision,
         "runtime_provenance_digest": plan.runtime_provenance_digest,
         "treatment_audit_digest": None,
         "failure_stage": None,
         "failure_type": None,
     }
+    epoch35 = "baseline_plan" in record
+    if epoch35:
+        common.update(attempt_id=claim.attempt_id, failure_evidence_digest=terminal.failure_evidence_digest)
     if terminal.outcome is TerminalOutcome.CANONICAL_SUCCESS:
         bundle = validate_canonical_game_bundle(
             path / "games" / terminal.canonical_game_bundle_id,
@@ -377,15 +499,19 @@ def _arm_status(*, root, record, ordinal, arm, replay_executor):
         audit, artifact = _read_record(
             path / "private_treatment_audit", "tom_gameplay_treatment_audit"
         )
+        binding = ({"predictor": common["predictor"]} if epoch35 else
+                   {"fit_digest": FIT_DIGEST if arm == TOM else None, "seal_digest": SEAL_DIGEST if arm == TOM else None})
         required = {
             "experiment_id", "candidate_ordinal", "seed", "arm",
             "plan_digest", "claim_digest", "game_id", "treatment_count",
-            "predictor_requests", "treatments", "fit_digest", "seal_digest",
+            "predictor_requests", "treatments",
             "candidate_seed_pool_digest",
-        }
+        } | binding.keys()
+        if epoch35:
+            required.update(("prediction_attempts", "elapsed_seconds"))
         if (
             set(audit) != required
-            or audit["experiment_id"] != EXPERIMENT_ID
+            or audit["experiment_id"] != record["experiment_id"]
             or audit["candidate_ordinal"] != ordinal
             or audit["seed"] != claim.seed
             or audit["arm"] != arm
@@ -393,14 +519,14 @@ def _arm_status(*, root, record, ordinal, arm, replay_executor):
             or audit["claim_digest"] != claim.record_digest
             or audit["game_id"] != bundle.game_id
             or audit["candidate_seed_pool_digest"] != record["candidate_seed_pool_digest"]
-            or audit["fit_digest"] != (FIT_DIGEST if arm == TOM else None)
-            or audit["seal_digest"] != (SEAL_DIGEST if arm == TOM else None)
+            or any(audit[key] != value for key, value in binding.items())
             or type(audit["treatment_count"]) is not int
             or audit["treatment_count"] != len(audit["treatments"])
         ):
             raise ValueError("private treatment audit identity mismatch")
         _validate_treatment(
-            bundle, arm, audit["treatments"], audit["predictor_requests"]
+            bundle, arm, audit["treatments"], audit["predictor_requests"],
+            predictor=common.get("predictor"), prediction_attempts=audit.get("prediction_attempts"),
         )
         winner = bundle.private_replay_evidence.replay_inputs.to_value().get("winner")
         if winner not in {"Werewolf", "Villager"}:
@@ -416,6 +542,9 @@ def _arm_status(*, root, record, ordinal, arm, replay_executor):
             "treatment_count": audit["treatment_count"],
             "treatment_audit_digest": artifact.manifest_digest,
         })
+        if epoch35 and common["roles"] != dict(zip(
+                PLAYER_IDS, record["baseline_plan"]["scenarios"][ordinal]["roles"], strict=True)):
+            raise ValueError("completed game roles differ from the frozen Baseline scenario")
     elif terminal.outcome is TerminalOutcome.CANONICAL_FAILURE:
         failure = validate_canonical_failure_evidence(
             path / "attempts" / claim.attempt_id / "failure_evidence.json",
@@ -435,13 +564,15 @@ def _arm_status(*, root, record, ordinal, arm, replay_executor):
             "failure_stage": "interrupted",
             "failure_type": "interrupted_failure",
         })
+        if epoch35:
+            common["game_id"] = f"{plan.collection_id}-game-000000-seed-{claim.seed}"
     else:
         raise ValueError("unknown arm terminal outcome")
     return common
 
 
 def _execute_arm(*, root, record, ordinal, arm, base_factory,
-                 replay_executor, predictor_checkout, fit_path):
+                 replay_executor, predictor_checkout=None, fit_path=None, epoch35_predictor=None):
     status = _arm_status(
         root=root, record=record, ordinal=ordinal, arm=arm,
         replay_executor=replay_executor,
@@ -453,7 +584,7 @@ def _execute_arm(*, root, record, ordinal, arm, base_factory,
     factory = _AblationRuntimeFactory(
         base_factory=base_factory, arm=arm, ordinal=ordinal, record=record,
         collection_path=path, predictor_checkout=predictor_checkout,
-        fit_path=fit_path,
+        fit_path=fit_path, epoch35_predictor=epoch35_predictor, replay_executor=replay_executor,
     )
     try:
         collect(plan=plan, runtime_factory=factory, destination=path)
@@ -475,9 +606,10 @@ def _pair_record(record, ordinal, order, statuses):
     second = statuses[order[1]]
     if first is None or first["status"] not in {"success", "failure"}:
         raise ValueError("first arm lacks a terminal outcome")
-    if first["status"] == "failure" and second is not None:
+    epoch35 = "baseline_plan" in record
+    if not epoch35 and first["status"] == "failure" and second is not None:
         raise ValueError("pair violates fail-fast terminal order")
-    if first["status"] == "success" and (
+    if (epoch35 or first["status"] == "success") and (
         second is None or second["status"] not in {"success", "failure"}
     ):
         raise ValueError("successful first arm requires a terminal second arm")
@@ -510,7 +642,7 @@ def _pair_record(record, ordinal, order, statuses):
             failure_stage = "pair_validation"
             failure_type = "initial_roles_mismatch"
     return {
-        "experiment_id": EXPERIMENT_ID,
+        "experiment_id": record["experiment_id"],
         "candidate_ordinal": ordinal,
         "seed": record["ordered_seed_pool"][ordinal],
         "candidate_seed_pool_digest": record["candidate_seed_pool_digest"],
@@ -531,13 +663,15 @@ def _pair_path(root: Path, ordinal: int) -> Path:
 
 
 def collect_pairs(*, root, record, base_factory, replay_executor,
-                  predictor_checkout, fit_path):
+                  predictor_checkout=None, fit_path=None, epoch35_predictor=None):
     completed = []
     invalid = []
     pair_digests = []
     seeds = record["ordered_seed_pool"]
+    epoch35 = "baseline_plan" in record
+    finalized = epoch35 and (root / "final").exists()
     for ordinal, seed in enumerate(seeds):
-        if len(completed) == TARGET_PAIRS:
+        if not epoch35 and len(completed) == TARGET_PAIRS:
             break
         order = _order(ordinal)
         pair_path = _pair_path(root, ordinal)
@@ -557,22 +691,19 @@ def collect_pairs(*, root, record, base_factory, replay_executor,
                 raise ValueError("published pair record differs from arm artifacts")
             digest = artifact.manifest_digest
         else:
+            if finalized:
+                raise ValueError("published ablation Final is missing a pair record")
             statuses = {arm: None for arm in ARMS}
-            first = order[0]
-            statuses[first] = _execute_arm(
-                root=root, record=record, ordinal=ordinal, arm=first,
-                base_factory=base_factory, replay_executor=replay_executor,
-                predictor_checkout=predictor_checkout, fit_path=fit_path,
-            )
-            if statuses[first]["status"] == "success":
-                second = order[1]
-                statuses[second] = _execute_arm(
-                    root=root, record=record, ordinal=ordinal, arm=second,
+            for arm in order:
+                if not epoch35 and statuses[order[0]] is not None and statuses[order[0]]["status"] != "success":
+                    if _arm_path(root, ordinal, arm).exists():
+                        raise ValueError("second arm exists after failed first arm")
+                    break
+                statuses[arm] = _execute_arm(
+                    root=root, record=record, ordinal=ordinal, arm=arm,
                     base_factory=base_factory, replay_executor=replay_executor,
-                    predictor_checkout=predictor_checkout, fit_path=fit_path,
+                    predictor_checkout=predictor_checkout, fit_path=fit_path, epoch35_predictor=epoch35_predictor,
                 )
-            elif _arm_path(root, ordinal, order[1]).exists():
-                raise ValueError("second arm exists after failed first arm")
             pair = _pair_record(record, ordinal, order, statuses)
             digest = _publish_record(pair_path, "tom_gameplay_pair", pair)
             expected = pair
@@ -588,7 +719,7 @@ def collect_pairs(*, root, record, base_factory, replay_executor,
                 "failure_type": expected["failure_type"],
                 "pair_digest": digest,
             })
-    if len(completed) != TARGET_PAIRS:
+    if not epoch35 and len(completed) != TARGET_PAIRS:
         raise CollectionSeedPoolExhausted(
             "100 frozen candidate seeds exhausted before 40 valid pairs"
         )
@@ -597,7 +728,7 @@ def collect_pairs(*, root, record, base_factory, replay_executor,
         key = f"{item['failure_stage']}:{item['failure_type']}"
         reasons[key] = reasons.get(key, 0) + 1
     final_record = {
-        "experiment_id": EXPERIMENT_ID,
+        "experiment_id": record["experiment_id"],
         "source_revision": record["source_revision"],
         "runtime_provenance": record["runtime_provenance"],
         "experiment_plan_digest": _read_record(
@@ -616,10 +747,23 @@ def collect_pairs(*, root, record, base_factory, replay_executor,
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--predictor-checkout", type=Path, required=True)
-    parser.add_argument("--fit-path", type=Path, required=True)
+    parser.add_argument("--predictor-checkout", type=Path)
+    parser.add_argument("--fit-path", type=Path)
+    parser.add_argument("--baseline-plan", type=Path, help="Epoch 35 消融的冻结 210 场景 Plan")
+    parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--temporal", type=Path)
+    parser.add_argument("--destination", type=Path, help="gameplay_ablations 下独立归档名称或绝对路径")
+    parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument("--resume", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    historical = (args.predictor_checkout, args.fit_path)
+    current = (args.baseline_plan, args.checkpoint, args.temporal, args.destination)
+    if args.baseline_plan is not None:
+        if not all(current) or any(historical):
+            parser.error("--baseline-plan requires --checkpoint, --temporal and --destination")
+    elif not all(historical) or any(current) or args.device is not None:
+        parser.error("supply the Epoch 35 inputs or both --predictor-checkout and --fit-path")
+    return args
 
 
 def main(argv=None):
@@ -637,10 +781,35 @@ def main(argv=None):
     call_limit = campaign["call_limit"]
     if operator.clean_head() != head:
         raise ValueError("gameplay source changed during preflight")
-    expected = _experiment_record(head, provenance, call_limit)
-    root = cli._artifact_path(
-        storage, Path("gameplay_ablations") / EXPERIMENT_ID
-    )
+    epoch35 = args.baseline_plan is not None
+    lock = nullcontext()
+    if epoch35:
+        from scripts.run_werewolf_baseline import _read_plan
+        from werewolf.tom.backbone_execution import _lock
+
+        baseline_path = cli._artifact_path(storage, args.baseline_plan)
+        root = cli._artifact_path(storage, args.destination, "gameplay_ablations")
+        if root.parent != storage / "gameplay_ablations":
+            raise ValueError("Epoch 35 archive must be a separate child of gameplay_ablations")
+        expected = _epoch35_record(head, provenance, call_limit, experiment_id=root.name,
+                                   baseline_plan=_read_plan(baseline_path), device=args.device or "cpu")
+        checkpoint = cli._artifact_path(storage, args.checkpoint)
+        temporal = cli._artifact_path(storage, args.temporal)
+        if any(path == root or path.is_relative_to(root) or root.is_relative_to(path)
+               for path in (baseline_path.parent, checkpoint, temporal)):
+            raise ValueError("ablation archive must be separate from its frozen inputs")
+        lock = _lock(root.parent / f"{root.name}.lock")
+    else:
+        expected = _experiment_record(head, provenance, call_limit)
+        root = cli._artifact_path(storage, Path("gameplay_ablations") / EXPERIMENT_ID)
+    with lock:
+        digest = _run_collection(args, root, expected, config,
+                                 **({"checkpoint": checkpoint, "temporal": temporal} if epoch35 else {}))
+    print(f"PAIRED_GAMEPLAY_COLLECTION_COMPLETE {digest}", flush=True)
+    return 0
+
+
+def _run_collection(args, root, expected, config, *, checkpoint=None, temporal=None):
     plan_path = root / "experiment_plan"
     if args.resume:
         if not plan_path.is_dir():
@@ -653,19 +822,22 @@ def main(argv=None):
             raise ValueError("existing gameplay ablation root requires --resume")
         _publish_record(plan_path, "tom_gameplay_experiment_plan", expected)
         record = expected
+    epoch35 = "baseline_plan" in record
+    predictor = None
+    if epoch35 and not (root / "final").exists():
+        predictor = Epoch35GameplayPredictor(checkpoint, temporal, record["predictor"]["device"])
     backends = load_named_backends(config, max_retries=0)
     base_factory = Classic7RuntimeFactory(
         runtime_config=config, backends=backends,
-        configured_call_limit=call_limit,
+        configured_call_limit=record["configured_call_limit"],
     )
-    digest = collect_pairs(
+    return collect_pairs(
         root=root, record=record, base_factory=base_factory,
-        replay_executor=classic7_replay_executor(config),
-        predictor_checkout=args.predictor_checkout.resolve(),
-        fit_path=args.fit_path.resolve(),
+        replay_executor=(classic7_full_game_replay_executor(config) if epoch35 else classic7_replay_executor(config)),
+        predictor_checkout=args.predictor_checkout.resolve() if not epoch35 else None,
+        fit_path=args.fit_path.resolve() if not epoch35 else None,
+        epoch35_predictor=predictor,
     )
-    print(f"PAIRED_GAMEPLAY_COLLECTION_COMPLETE {digest}", flush=True)
-    return 0
 
 
 if __name__ == "__main__":

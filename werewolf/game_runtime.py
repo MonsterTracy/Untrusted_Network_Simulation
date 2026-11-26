@@ -60,7 +60,9 @@ UNKNOWN = "UNKNOWN"
 _VOTE_FIELDS = (
     "wolf_participations", "wolf_votes_received", "wolf_votes_from_villagers",
     "wolf_votes_from_teammates", "wolf_eligible_rounds", "villager_valid_votes",
-    "wolves_exiled", "normal_vote_rounds", "pk_vote_rounds",
+    "wolves_exiled", "villagers_exiled", "day1_wolf_exile_games",
+    "wolf_ballots", "villager_ballots", "wolf_abstentions", "villager_abstentions",
+    "normal_vote_rounds", "pk_vote_rounds",
 )
 
 
@@ -216,7 +218,11 @@ def count_game_votes(history: PublicEventHistory, roles: dict[str, str]) -> dict
                 raise ValueError("public death or exile repeats a removed player")
             alive.difference_update(removed)
             if event.event_type == "exile_result":
-                counts["wolves_exiled"] += len(removed & wolves)
+                exiled_wolves = removed & wolves
+                counts["wolves_exiled"] += len(exiled_wolves)
+                counts["villagers_exiled"] += len(removed - wolves)
+                if event.temporal_state.day == 1 and exiled_wolves:
+                    counts["day1_wolf_exile_games"] = 1
         if event.event_type != "vote_result":
             continue
 
@@ -236,7 +242,10 @@ def count_game_votes(history: PublicEventHistory, roles: dict[str, str]) -> dict
 
         tally = Counter()
         for vote in event.votes:
+            faction = "wolf" if vote.voter in wolves else "villager"
+            counts[f"{faction}_ballots"] += 1
             if vote.target is None:
+                counts[f"{faction}_abstentions"] += 1
                 continue
             if vote.target not in candidates or vote.target == vote.voter:
                 raise ValueError("illegal public vote target for the current round")
@@ -266,19 +275,31 @@ def gameplay_ratio(numerator, denominator):
 
 
 def summarize_game_votes(counts):
-    """在原有效游戏人口内合并计数，缺少任一局证据时报告未知。"""
+    """合计有效游戏的分子分母，证据不全时保留未知。"""
     verified = [row for row in counts if row != UNKNOWN]
     totals = {
         field: sum(row[field] for row in verified) if len(verified) == len(counts) else UNKNOWN
         for field in _VOTE_FIELDS
     }
+    games = len(counts)
+    wolves, villagers = totals["wolves_exiled"], totals["villagers_exiled"]
+    abstentions = [totals["wolf_abstentions"], totals["villager_abstentions"]]
+    ballots = [totals["wolf_ballots"], totals["villager_ballots"]]
     return {
-        "games": len(counts), "games_with_vote_evidence": len(verified), "counts": totals,
+        "games": games, "games_with_vote_evidence": len(verified), "counts": totals,
         "AVR": gameplay_ratio(totals["wolf_votes_received"], totals["wolf_participations"]),
-        "team_AVR": gameplay_ratio(totals["wolf_votes_received"], len(counts)),
+        "team_AVR": gameplay_ratio(totals["wolf_votes_received"], games),
         "VPR": gameplay_ratio(totals["wolf_votes_received"], totals["wolf_eligible_rounds"]),
         "WVS": gameplay_ratio(totals["wolf_votes_from_villagers"], totals["villager_valid_votes"]),
-        "wolf_exile_rate": gameplay_ratio(totals["wolves_exiled"], totals["wolf_participations"]),
+        "wolf_exile_rate": gameplay_ratio(wolves, totals["wolf_participations"]),
+        "D1WER": gameplay_ratio(totals["day1_wolf_exile_games"], games),
+        "GMR": gameplay_ratio(villagers, wolves + villagers if UNKNOWN not in (wolves, villagers) else UNKNOWN),
+        "abstention_rate": gameplay_ratio(
+            sum(abstentions) if UNKNOWN not in abstentions else UNKNOWN,
+            sum(ballots) if UNKNOWN not in ballots else UNKNOWN,
+        ),
+        "wolf_abstention_rate": gameplay_ratio(totals["wolf_abstentions"], totals["wolf_ballots"]),
+        "villager_abstention_rate": gameplay_ratio(totals["villager_abstentions"], totals["villager_ballots"]),
     }
 
 

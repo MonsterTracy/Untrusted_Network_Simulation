@@ -272,7 +272,9 @@ def test_native_votes_use_tied_pk_targets_living_seats_and_daytime_exile():
     assert counts == {
         "wolf_participations": 2, "wolf_votes_received": 7, "wolf_votes_from_villagers": 5,
         "wolf_votes_from_teammates": 2, "wolf_eligible_rounds": 4, "villager_valid_votes": 9,
-        "wolves_exiled": 1, "normal_vote_rounds": 2, "pk_vote_rounds": 1,
+        "wolves_exiled": 1, "villagers_exiled": 1, "day1_wolf_exile_games": 1,
+        "wolf_ballots": 5, "villager_ballots": 14, "wolf_abstentions": 0, "villager_abstentions": 5,
+        "normal_vote_rounds": 2, "pk_vote_rounds": 1,
     }
     summary = summarize_game_votes([counts, {**counts, "wolf_eligible_rounds": 6}])
     assert summary["AVR"] == {"numerator": 14, "denominator": 4, "value": 3.5}
@@ -280,11 +282,17 @@ def test_native_votes_use_tied_pk_targets_living_seats_and_daytime_exile():
     assert summary["VPR"] == {"numerator": 14, "denominator": 10, "value": 1.4}
     assert summary["WVS"]["value"] == 5 / 9
     assert summary["wolf_exile_rate"]["value"] == .5
+    assert summary["D1WER"] == {"numerator": 2, "denominator": 2, "value": 1.0}
+    assert summary["GMR"] == {"numerator": 2, "denominator": 4, "value": .5}
+    assert summary["abstention_rate"] == {"numerator": 10, "denominator": 38, "value": 5 / 19}
+    assert summary["wolf_abstention_rate"]["value"] == 0
+    assert summary["villager_abstention_rate"]["value"] == 5 / 14
 
 
 def test_vote_rates_zero_denominator_is_na():
     summary = summarize_game_votes([])
-    for field in ("AVR", "team_AVR", "VPR", "WVS", "wolf_exile_rate"):
+    for field in ("AVR", "team_AVR", "VPR", "WVS", "wolf_exile_rate", "D1WER", "GMR",
+                  "abstention_rate", "wolf_abstention_rate", "villager_abstention_rate"):
         assert summary[field] == {"numerator": 0, "denominator": 0, "value": None}
 
     roles = dict(zip(PLAYER_IDS, ["Werewolf", "Werewolf", "Villager", "Villager", "Villager", "Seer", "Witch"]))

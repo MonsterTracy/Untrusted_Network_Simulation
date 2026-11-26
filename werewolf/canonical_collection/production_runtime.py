@@ -139,6 +139,8 @@ class Classic7RuntimeFactory:
         *,
         plan: CollectionPlan,
         claim: AttemptClaim,
+        roles=None,
+        record_requests=False,
     ) -> _RecordedRuntime:
         game_id = (
             f"{plan.collection_id}-game-{claim.ordinal:06d}-seed-{claim.seed}"
@@ -146,6 +148,7 @@ class Classic7RuntimeFactory:
         audit = CanonicalCallAudit(
             plan=plan,
             configured_call_limit=self._configured_call_limit,
+            record_requests=record_requests,
         )
         wrapped_backends = audited_backends(self._backends, audit)
         env, agents, roles, _profiles = build_runtime(
@@ -153,6 +156,7 @@ class Classic7RuntimeFactory:
             log_save_path=None,
             random_seed=claim.seed,
             backends=wrapped_backends,
+            **({"roles": roles} if roles is not None else {}),
         )
         belief_collector = PlayingAgentBeliefObservationCollector(
             plan=plan,

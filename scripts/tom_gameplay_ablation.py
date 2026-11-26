@@ -6,6 +6,42 @@ from werewolf.speech.validation import normalize_player
 from werewolf.game_runtime import eval as run_game
 
 
+def epoch35_identity(device):
+    from werewolf.tom.final_evaluation import TEST_TEMPORAL_DIGEST
+    from werewolf.tom.makto import EPOCH35_DIGEST
+    from werewolf.tom.qwen3_large import graph_identity
+
+    if device not in {"cpu", "cuda"}:
+        raise ValueError("Epoch 35 device must be cpu or cuda")
+    return {"checkpoint_digest": EPOCH35_DIGEST, "temporal_artifact_digest": TEST_TEMPORAL_DIGEST,
+            "graph_digest": graph_identity()["graph_digest"], "device": device}
+
+
+class Epoch35GameplayPredictor:
+    """在本进程复用已冻结权重，每个合法公开 PRE 只预测一次七席矩阵。"""
+
+    def __init__(self, checkpoint, temporal, device):
+        from werewolf.tom.makto import load_epoch35_model
+
+        self.identity = epoch35_identity(device)
+        self.model = load_epoch35_model(checkpoint, temporal)
+        if self.model.temporal.artifact_digest != self.identity["temporal_artifact_digest"]:
+            raise ValueError("Epoch 35 gameplay Temporal identity mismatch")
+        self.model.to(device).eval()
+
+    def predict(self, prefix):
+        from werewolf.structured_history import plan_structured_history
+        from werewolf.tom.evaluation import predict_structured_observers
+
+        plan = plan_structured_history(prefix)
+        if plan.token_count > self.model.capacity.max_seq_len:
+            raise ValueError(f"Epoch 35 PRE exceeds model capacity: {prefix.boundary_id}")
+        if prefix.maximum_public_day >= len(self.model.temporal.day):
+            raise ValueError(f"Epoch 35 PRE exceeds frozen Temporal: {prefix.boundary_id}")
+        probabilities, _ = predict_structured_observers(plan, self.model, self.identity["device"])
+        return probabilities
+
+
 def eligible_observers(prefix, observation):
     """Use only the acting wolf's delivered legal view and the public PRE."""
     if observation.get("identity") != "Werewolf":
@@ -47,8 +83,14 @@ def tom_payload(prefix, observation, probabilities):
         for observer in rows]}
 
 
+def prediction_request(prefix):
+    identity = {"game_id": prefix.game_id, "boundary_id": prefix.boundary_id,
+                "prefix_digest": prefix.prefix_digest, "current_speaker": prefix.current_speaker}
+    return {**identity, "request_id": sha256_bytes(canonical_json_bytes(identity))}
+
+
 def run_ablation(env, agents, roles, *, recorder, call_audit, arm,
-                 predictor=None, treatment_audit=None):
+                 predictor=None, treatment_audit=None, prediction_attempts=None):
     """Run one game; the two arms share the production action loop."""
     if arm not in {"Wolf+ToM", "Wolf-NoToM"}:
         raise ValueError("unknown gameplay ablation arm")
@@ -61,20 +103,35 @@ def run_ablation(env, agents, roles, *, recorder, call_audit, arm,
         raise ValueError("+ToM requires an existing predictor and private treatment audit")
 
     def wolf_speech_tom(prefix, observation):
-        # One model call per boundary, before any day-cognition retry.
+        # 同一 PRE 的认知重试复用一次预测，失败直接向原采集生命周期传播。
         eligible_observers(prefix, observation)
-        probabilities = predictor.predict(prefix)
-        payload = tom_payload(prefix, observation, probabilities)
-        wire = canonical_json_bytes(payload)
-        treatment_audit.append({
+        boundary = {
             "game_id": prefix.game_id,
             "boundary_id": prefix.boundary_id,
             "prefix_digest": prefix.prefix_digest,
+        }
+        if prediction_attempts is not None:
+            attempt = {**prediction_request(prefix), "status": "unknown"}
+            prediction_attempts.append(attempt)
+        try:
+            payload = tom_payload(prefix, observation, predictor.predict(prefix))
+        except Exception as error:
+            if prediction_attempts is not None:
+                attempt.update(status="failed", error_type=type(error).__name__)
+            raise
+        wire = canonical_json_bytes(payload)
+        if prediction_attempts is None:
+            binding = {"fit_digest": predictor.fit_digest, "seal_digest": predictor.seal_digest}
+        else:
+            binding = {"predictor": predictor.identity, "request_id": attempt["request_id"]}
+        treatment_audit.append({
+            **boundary,
             "observer_ids": [row["observer_id"] for row in payload["rows"]],
             "payload_digest": sha256_bytes(wire),
-            "fit_digest": predictor.fit_digest,
-            "seal_digest": predictor.seal_digest,
+            **binding,
         })
+        if prediction_attempts is not None:
+            attempt["status"] = "succeeded"
         return wire.decode("utf-8")
 
     return run_game(env, agents, roles, canonical_recorder=recorder,

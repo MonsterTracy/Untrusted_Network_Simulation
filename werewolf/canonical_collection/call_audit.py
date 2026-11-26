@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
+from werewolf.backends.openai_compatible import model_request_context
 from werewolf.canonical_collection.attempt_ledger import CollectionPlan
 from werewolf.canonical_collection.trajectory_evidence import (
     BackendCallEvidence,
@@ -48,7 +49,7 @@ def _json_value(value: Any) -> Any:
 class CanonicalCallAudit:
     """Own every production backend call record for one claimed game."""
 
-    def __init__(self, *, plan: CollectionPlan, configured_call_limit: int):
+    def __init__(self, *, plan: CollectionPlan, configured_call_limit: int, record_requests=False):
         if isinstance(configured_call_limit, bool) or not isinstance(
             configured_call_limit,
             int,
@@ -56,6 +57,7 @@ class CanonicalCallAudit:
             raise ValueError("configured_call_limit must be a positive integer")
         self.plan = plan
         self.configured_call_limit = configured_call_limit
+        self.record_requests = record_requests
         self._active: _CallContext | None = None
         self._operation_attempts: Counter[str] = Counter()
         self._dispatch_sequence = 0
@@ -227,9 +229,13 @@ class CanonicalCallAudit:
             "args": _json_value(args),
             "kwargs": _json_value(kwargs),
         }
+        requests = [] if self.record_requests else None
         try:
-            response = call(*args, **kwargs)
-        except Exception as error:
+            with model_request_context(requests) if requests is not None else nullcontext():
+                response = call(*args, **kwargs)
+        except (Exception, KeyboardInterrupt) as error:
+            if isinstance(error, KeyboardInterrupt) and requests is None:
+                raise
             payload.update(
                 {
                     "response": None,
@@ -249,6 +255,9 @@ class CanonicalCallAudit:
             )
             status = BackendCallStatus.SUCCESS
             raised = None
+        if requests is not None:
+            # 传输层的实际回执随同一 call_id 封存，缺少遥测时不补造用量。
+            payload["request_record"] = requests[0] if len(requests) == 1 else None
         self._records.append(
             construct_backend_call_evidence(
                 call_id=call_id,
