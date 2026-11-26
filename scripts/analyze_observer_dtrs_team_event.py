@@ -9,7 +9,7 @@ from fractions import Fraction
 from itertools import groupby
 import json
 from math import fsum, lcm, log
-from operator import ge, lt
+from operator import ge, gt, lt
 from pathlib import Path
 import sys
 
@@ -65,6 +65,28 @@ DISTRIBUTION_BETAS = {
         "TV-0.05": "0.17849795520305633544921875",
         "TV-0.10": "0.183103973977267742156982421875",
         "Entropy-0.99": "0.18366961181163787841796875",
+    },
+}
+CONDITIONAL_SELECTION_POPULATION = {"games": 3840, "rows": 58501}
+CONDITIONAL_SELECTION_STAGE = "conditional_development_selection"
+CONDITIONAL_BUDGETS = ("0.15", "0.20")
+CONDITIONAL_DIRECT = "Conditional-Direct"
+CONDITIONAL_TV = "Conditional-TV"
+STRICT_CONDITIONAL_TV = "Strict-Conditional-TV"
+CONDITIONAL_MODES = {
+    CONDITIONAL_DIRECT: "context",
+    CONDITIONAL_TV: "context",
+    STRICT_CONDITIONAL_TV: "context_and_evidence",
+}
+WOLF_GROUPS = {"1": "single_wolf", "2": "two_wolves"}
+TV_GATE = DISTRIBUTION_GATES["TV-0.10"]
+CONDITIONAL_PROTOCOL = {
+    "weighting": "game_equal",
+    "objective": ["maximize_pos_mass", "then_maximize_neg_mass"],
+    "tie_break": ["minimize_error_mass", "prefer_additional_off", "ascending_score_split"],
+    "additional_neg_gate": {
+        "alive_wolves": 2, "score_lower_inclusive": DISTRIBUTION_WINDOW[0],
+        "score_upper_exclusive": DISTRIBUTION_WINDOW[1], "tv_upper_exclusive": TV_GATE[2],
     },
 }
 
@@ -362,14 +384,17 @@ def _unit_decimal(value):
     return number
 
 
+def _risk_met(mass, errors, budget):
+    return mass > 0 and errors * budget.denominator <= mass * budget.numerator
+
+
 def maximum_coverage(negative, positive, *, neg_risk, pos_risk, total_units):
     """在两侧有正质量且 split_NEG ≤ split_POS 时查询全部并列最优划分。"""
     neg_budget, pos_budget = (Fraction(_unit_decimal(value)) for value in (neg_risk, pos_risk))
 
     def within(cut, budget):
         # 条件风险只在方向质量为正时有定义。
-        return (cut.mass_units > 0
-                and cut.error_units * budget.denominator <= cut.mass_units * budget.numerator)
+        return _risk_met(cut.mass_units, cut.error_units, budget)
 
     feasible_pos = [cut for cut in positive if within(cut, pos_budget)]
     pos_index, best_mass, matches = 0, -1, []
@@ -461,19 +486,23 @@ def evaluate_candidate(rows, beta, alpha):
     return {"beta": str(beta), "alpha": str(alpha), **_candidate_summary(entries, sum(weights))}
 
 
-def _negative_masks(rows, scores, pos, beta, gate):
-    """分配互斥的 L 和 A。窗口和形状比较复现开发阶段的 float 语义。"""
-    low = np.asarray([score < beta for score in scores], dtype=bool) & ~pos
-    if gate is None:
-        return low, np.zeros_like(low)
+def _additional_candidates(rows, gate):
+    """窗口和形状比较沿用开发阶段的 float 语义。"""
     feature, comparison, threshold = gate
     compare = lt if comparison == "<" else ge
     lower, upper = DISTRIBUTION_WINDOW
-    eligible = np.asarray([
+    return np.asarray([
         row.alive_wolves == 2 and lower <= row.score < upper and compare(getattr(row, feature), threshold)
         for row in rows
     ], dtype=bool)
-    return low, eligible & ~(pos | low)
+
+
+def _negative_masks(rows, scores, pos, beta, gate):
+    """分配互斥的 L 和 A。"""
+    low = np.asarray([score < beta for score in scores], dtype=bool) & ~pos
+    if gate is None:
+        return low, np.zeros_like(low)
+    return low, _additional_candidates(rows, gate) & ~(pos | low)
 
 
 def _negative_diagnostics(weighted_rows, mask, total_units):
@@ -503,11 +532,10 @@ def _bootstrap_metric(point, values):
 
 
 def _budget_summary(region, budget, risk_metric):
-    interval = risk_metric["percentile_95"]
+    interval = None if risk_metric is None else risk_metric["percentile_95"]
     return {
         "development_budget": budget,
-        "empirical_met": (region["mass_units"] > 0
-                          and region["error_units"] <= Fraction(budget) * region["mass_units"]),
+        "empirical_met": _risk_met(region["mass_units"], region["error_units"], Fraction(budget)),
         "interval_upper_within_budget": None if interval is None else interval[1] <= float(budget),
     }
 
@@ -531,15 +559,8 @@ def _relative_negative(weighted_rows, total_units, low, additional, direct_mask,
     }
 
 
-def evaluate_distribution(rows):
-    """对同一 Fold 4 人口应用八个冻结规则，按整局配对重采样。"""
-    weights = game_weight_units(rows)
-    weighted_rows = list(zip(rows, weights, strict=True))
-    total_units = sum(weights)
-    scores = [Decimal.from_float(row.score) for row in rows]
-    pos = np.asarray([score > DISTRIBUTION_ALPHA for score in scores], dtype=bool)
-    labels = np.asarray([row.y for row in rows], dtype=bool)
-
+def _game_bootstrap(rows):
+    """复用全人口的局内权重和同一组整局抽样索引。"""
     sizes = Counter(row.game_id for row in rows)
     games = sorted(sizes)
     game_index = {game: index for index, game in enumerate(games)}
@@ -553,6 +574,38 @@ def evaluate_distribution(rows):
 
     def resample(numerator, denominator):
         return report_study.bootstrap_ratio(numerator, denominator, game_weights, draws)
+
+    return game_sizes, counts, resample
+
+
+def _decision_entries(weighted_rows, pos, neg):
+    entries = []
+    for (row, weight), is_pos, is_neg in zip(weighted_rows, pos, neg, strict=True):
+        if is_pos:
+            decision = Region.POS
+        elif is_neg:
+            decision = Region.NEG
+        else:
+            decision = Region.BND
+        entries.append((row, weight, decision))
+    return entries
+
+
+def _bootstrap_metadata():
+    return {"version": BOOTSTRAP_VERSION, "unit": "game", "seed": frozen.BOOTSTRAP_SEED,
+            "replicates": frozen.BOOTSTRAP_REPLICATES, "scope": "fixed_rules_exploratory_marginal",
+            "minimum_valid_fraction_for_interval": report_study.MIN_VALID_BOOTSTRAP}
+
+
+def evaluate_distribution(rows):
+    """对同一 Fold 4 人口应用八个冻结规则，按整局配对重采样。"""
+    weights = game_weight_units(rows)
+    weighted_rows = list(zip(rows, weights, strict=True))
+    total_units = sum(weights)
+    scores = [Decimal.from_float(row.score) for row in rows]
+    pos = np.asarray([score > DISTRIBUTION_ALPHA for score in scores], dtype=bool)
+    labels = np.asarray([row.y for row in rows], dtype=bool)
+    game_sizes, counts, resample = _game_bootstrap(rows)
 
     pos_counts = counts(pos)
     pos_risks = resample(counts(pos & ~labels), pos_counts)
@@ -568,15 +621,7 @@ def evaluate_distribution(rows):
             gate = DISTRIBUTION_GATES[method]
             low, additional = _negative_masks(rows, scores, pos, Decimal(beta), gate)
             negative = low | additional
-            entries = []
-            for (row, weight), is_pos, is_neg in zip(weighted_rows, pos, negative, strict=True):
-                if is_pos:
-                    decision = Region.POS
-                elif is_neg:
-                    decision = Region.NEG
-                else:
-                    decision = Region.BND
-                entries.append((row, weight, decision))
+            entries = _decision_entries(weighted_rows, pos, negative)
             evaluated = _candidate_summary(entries, total_units, detailed=True)
             overall = evaluated["overall"]
             if (not np.array_equal(pos, [decision is Region.POS for _, _, decision in entries])
@@ -644,11 +689,319 @@ def evaluate_distribution(rows):
                 0.0 if pos_summary["mass_units"] else None, pos_risks - pos_risks,
             ),
         },
-        "bootstrap": {"version": BOOTSTRAP_VERSION, "unit": "game", "seed": frozen.BOOTSTRAP_SEED,
-                      "replicates": frozen.BOOTSTRAP_REPLICATES, "scope": "fixed_rules_exploratory_marginal",
-                      "minimum_valid_fraction_for_interval": report_study.MIN_VALID_BOOTSTRAP},
+        "bootstrap": _bootstrap_metadata(),
         "operating_points": operating_points,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class NegativeChoice:
+    beta: Decimal
+    low: tuple[int, int]
+    additional: tuple[int, int]
+
+
+def _additional_prefix(blocks):
+    """按分数块累计 H 的质量和 NEG 错误质量。"""
+    rows = [row for _, block in blocks for row, _ in block]
+    in_h = iter(_additional_candidates(rows, TV_GATE))
+    prefix = [(0, 0)]
+    mass = errors = 0
+    for _, block in blocks:
+        for row, weight in block:
+            if next(in_h):
+                mass += weight
+                errors += weight * row.y
+        prefix.append((mass, errors))
+    return prefix
+
+
+def _best_conditional_negative(cuts, h_prefix, pos_split, alpha, budget, *, allow_gate, separate):
+    """固定 POS 后按整数累计量比较各个可实现的严格 NEG 切点。"""
+    best = NegativeChoice(ZERO, (0, 0), (0, 0))
+    best_rank = (0, 0, True, 0)
+    h_mass, h_errors = h_prefix[pos_split]
+    for cut in cuts:
+        if cut.split > pos_split:
+            break
+        upper = min(cut.upper, alpha)
+        if upper < cut.lower or (upper == cut.lower and not cut.lower_inclusive):
+            continue
+        low = cut.mass_units, cut.error_units
+        excluded_mass, excluded_errors = h_prefix[cut.split]
+        extra = h_mass - excluded_mass, h_errors - excluded_errors
+        # 空 A 不增加覆盖，保留关闭分支即可。
+        additions = ((0, 0), extra) if allow_gate and extra[0] else ((0, 0),)
+        for additional in additions:
+            mass, errors = low[0] + additional[0], low[1] + additional[1]
+            if not _risk_met(mass, errors, budget):
+                continue
+            if separate and any(c and not _risk_met(c, e, budget) for c, e in (low, additional)):
+                continue
+            rank = (mass, -errors, not additional[0], -cut.split)
+            if rank > best_rank:
+                beta = _exact_midpoint(cut.lower, upper) if low[0] else ZERO
+                best = NegativeChoice(beta, low, additional)
+                best_rank = rank
+    return best
+
+
+def select_conditional(rows, weights):
+    """先选共同条件 POS，再按方法与预算选择 NEG。返回冻结规则及核对用的整数质量。"""
+    pos_budget = Fraction(DISTRIBUTION_POS_BUDGET)
+    points = {
+        budget: {"budgets": {"NEG": budget, "POS": DISTRIBUTION_POS_BUDGET},
+                 "rules": {name: {"risk_mode": mode, "contexts": {}}
+                           for name, mode in CONDITIONAL_MODES.items()}}
+        for budget in CONDITIONAL_BUDGETS
+    }
+    expected = {budget: {name: {} for name in CONDITIONAL_MODES} for budget in CONDITIONAL_BUDGETS}
+    for wolf_count in WOLF_GROUPS:
+        alive_wolves = int(wolf_count)
+        indices = [i for i, row in enumerate(rows) if row.alive_wolves == alive_wolves]
+        blocks = score_blocks([rows[i] for i in indices], [weights[i] for i in indices])
+        feasible_pos = (cut for cut in direction_cuts(blocks, Region.POS)
+                        if _risk_met(cut.mass_units, cut.error_units, pos_budget))
+        pos = max(feasible_pos, key=lambda cut: (cut.mass_units, -cut.error_units, -cut.split), default=None)
+        alpha = pos.threshold if pos is not None else ONE
+        pos_split = pos.split if pos is not None else len(blocks)
+        pos_units = (pos.mass_units, pos.error_units) if pos is not None else (0, 0)
+        negative_cuts = direction_cuts(blocks, Region.NEG)
+        h_prefix = _additional_prefix(blocks)
+        for budget, point in points.items():
+            risk = Fraction(budget)
+            direct = _best_conditional_negative(negative_cuts, h_prefix, pos_split, alpha, risk,
+                                                allow_gate=False, separate=False)
+            for name, rule in point["rules"].items():
+                choice = direct
+                if wolf_count == "2" and name != CONDITIONAL_DIRECT:
+                    choice = _best_conditional_negative(negative_cuts, h_prefix, pos_split, alpha, risk,
+                                                        allow_gate=True, separate=name == STRICT_CONDITIONAL_TV)
+                rule["contexts"][wolf_count] = {
+                    "alpha": str(alpha), "beta": str(choice.beta), "pos_enabled": pos is not None,
+                    "low_neg_enabled": bool(choice.low[0]), "additional_enabled": bool(choice.additional[0]),
+                }
+                expected[budget][name][wolf_count] = {"POS": pos_units, "L": choice.low, "A": choice.additional}
+    return points, expected
+
+
+def _validate_conditional_selection(selection, source):
+    """核对所选人口、数据来源、操作点和共同阈值，返回冻结规则。"""
+    if (not isinstance(selection, dict) or selection.get("stage") != CONDITIONAL_SELECTION_STAGE
+            or selection.get("folds") != list(SELECTION_FOLDS) or selection.get("source") != source
+            or selection.get("protocol") != CONDITIONAL_PROTOCOL
+            or selection.get("boundary_policy") != "DEFER_FIRST"
+            or selection.get("threshold_encoding") != "exact_decimal"):
+        raise ValueError("条件选择 JSON 的阶段、折、来源或规则定义不符")
+    _check_population(selection["population"]["overall"], CONDITIONAL_SELECTION_POPULATION, "条件选择")
+    points = selection["operating_points"]
+    if set(points) != set(CONDITIONAL_BUDGETS):
+        raise ValueError("条件选择 JSON 的风险操作点不符")
+    shared_pos = {}
+    for budget, point in points.items():
+        rules = point["rules"]
+        if point["budgets"] != {"NEG": budget, "POS": DISTRIBUTION_POS_BUDGET} or set(rules) != set(CONDITIONAL_MODES):
+            raise ValueError("条件选择 JSON 的预算或方法不符")
+        single = rules[CONDITIONAL_DIRECT]["contexts"]["1"]
+        for name, rule in rules.items():
+            contexts = rule["contexts"]
+            if (rule["risk_mode"] != CONDITIONAL_MODES[name] or set(contexts) != set(WOLF_GROUPS)
+                    or contexts["1"] != single):
+                raise ValueError("条件选择 JSON 的风险约束或共同单狼规则不符")
+            for wolf_count, context in contexts.items():
+                if (any(type(context[key]) is not str for key in ("alpha", "beta"))
+                        or any(type(context[key]) is not bool for key in
+                               ("pos_enabled", "low_neg_enabled", "additional_enabled"))):
+                    raise ValueError("条件切点须为精确十进制字符串，启用状态须为布尔值")
+                alpha, beta = (_unit_decimal(context[key]) for key in ("alpha", "beta"))
+                if (beta > alpha or (not context["pos_enabled"] and alpha != ONE)
+                        or context["low_neg_enabled"] != (beta > ZERO)
+                        or (context["additional_enabled"] and (wolf_count == "1" or name == CONDITIONAL_DIRECT))):
+                    raise ValueError("条件规则的切点顺序或启用状态不符")
+                pos = {key: context[key] for key in ("alpha", "pos_enabled")}
+                if shared_pos.setdefault(wolf_count, pos) != pos:
+                    raise ValueError("条件规则必须跨方法和操作点共享 POS")
+    if selection["shared_pos"] != shared_pos:
+        raise ValueError("条件选择 JSON 的共同 POS 摘要与规则不符")
+    return points
+
+
+def _conditional_threshold_mask(scores, wolves, contexts, *, positive):
+    threshold, enabled, compare = ("alpha", "pos_enabled", gt) if positive else ("beta", "low_neg_enabled", lt)
+    active = {wolf_count: Decimal(rule[threshold]) for wolf_count, rule in contexts.items() if rule[enabled]}
+    return np.asarray([m in active and compare(score, active[m])
+                       for m, score in zip(wolves, scores, strict=True)], dtype=bool)
+
+
+def _conditional_metrics(summary):
+    return {
+        "coverage": summary["coverage"],
+        "neg_error_rate": summary["regions"]["NEG"]["error_rate"],
+        "pos_error_rate": summary["regions"]["POS"]["error_rate"],
+        "neg_error_mass": summary["regions"]["NEG"]["error_mass"],
+        "pos_error_mass": summary["regions"]["POS"]["error_mass"],
+    }
+
+
+def _conditional_differences(candidate, reference, candidate_draws, reference_draws):
+    """同一抽样重复内先算各方法比率，再做差。"""
+    differences = {}
+    for scope in ("overall", *WOLF_GROUPS.values()):
+        first = candidate["overall"] if scope == "overall" else candidate["subgroups"][scope]
+        second = reference["overall"] if scope == "overall" else reference["subgroups"][scope]
+        second_metrics = _conditional_metrics(second)
+        metrics = {}
+        for name, value in _conditional_metrics(first).items():
+            ref = second_metrics[name]
+            point = None if value is None or ref is None else value - ref
+            if candidate_draws:
+                metrics[name] = _bootstrap_metric(point, candidate_draws[scope][name] - reference_draws[scope][name])
+            else:
+                metrics[name] = {"point_estimate": point}
+        differences[scope] = metrics
+    return differences
+
+
+def evaluate_conditional(rows, weights, points, *, resampling=False, expected=None):
+    """应用给定的条件规则和历史全局参照，使用完整人口的局内权重。"""
+    weighted_rows = list(zip(rows, weights, strict=True))
+    total_units = sum(weights)
+    wolves = [str(row.alive_wolves) for row in rows]
+    scores = [Decimal.from_float(row.score) for row in rows]
+    labels = np.asarray([row.y for row in rows], dtype=bool)
+    h = _additional_candidates(rows, TV_GATE)
+    group_masks = {name: np.asarray([m == wolf_count for m in wolves], dtype=bool)
+                   for wolf_count, name in WOLF_GROUPS.items()}
+    scopes = {"overall": np.ones(len(rows), dtype=bool), **group_masks}
+    global_pos = np.asarray([score > DISTRIBUTION_ALPHA for score in scores], dtype=bool)
+    shared = points[CONDITIONAL_BUDGETS[0]]["rules"][CONDITIONAL_DIRECT]["contexts"]
+    conditional_pos = _conditional_threshold_mask(scores, wolves, shared, positive=True)
+    scope_counts = {}
+    if resampling:
+        _, counts, resample = _game_bootstrap(rows)
+        scope_counts = {name: counts(mask) for name, mask in scopes.items()}
+
+    def report(pos, low, additional, budgets, contexts):
+        negative = low | additional
+        entries = _decision_entries(weighted_rows, pos, negative)
+        summaries, draws = {}, {}
+        for scope, mask in scopes.items():
+            scoped = entries if scope == "overall" else [entry for entry, keep in zip(entries, mask, strict=True) if keep]
+            summary = _rule_summary(scoped, total_units, detailed=True)
+            neg, positive = (summary["regions"][name] for name in ("NEG", "POS"))
+            bnd = summary["regions"]["BND"]
+            covered_units = neg["mass_units"] + positive["mass_units"]
+            summary["whole_population_coverage"] = _ratio(covered_units, total_units)
+            bnd["whole_population_mass"] = _ratio(sum(weight for _, weight, _ in scoped) - covered_units, total_units)
+            for region in (neg, positive):
+                region["whole_population_mass"] = _ratio(region["mass_units"], total_units)
+                region["whole_population_error_mass"] = _ratio(region["error_units"], total_units)
+            if resampling:
+                nc, pc = counts(negative & mask), counts(pos & mask)
+                ne, pe = counts(negative & labels & mask), counts(pos & ~labels & mask)
+                population_counts = scope_counts[scope]
+                draws[scope] = {
+                    "coverage": resample(nc + pc, population_counts),
+                    "neg_error_rate": resample(ne, nc),
+                    "pos_error_rate": resample(pe, pc),
+                    "neg_error_mass": resample(ne, population_counts),
+                    "pos_error_mass": resample(pe, population_counts),
+                }
+                summary["bootstrap"] = {key: _bootstrap_metric(value, draws[scope][key])
+                                        for key, value in _conditional_metrics(summary).items()}
+            scope_contexts = [context for m, context in contexts.items()
+                              if scope == "overall" or scope == WOLF_GROUPS[m]]
+            summary["directions_enabled"] = {
+                "NEG": any(c["low_neg_enabled"] or c["additional_enabled"] for c in scope_contexts),
+                "POS": any(c["pos_enabled"] for c in scope_contexts),
+            }
+            summary["risk_budgets"] = {
+                name: _budget_summary(region, budgets[name], summary.get("bootstrap", {}).get(f"{name.lower()}_error_rate"))
+                for name, region in (("NEG", neg), ("POS", positive))
+            }
+            summaries[scope] = summary
+        return {"overall": summaries.pop("overall"), "subgroups": summaries}, draws
+
+    evaluated = {}
+    for budget, point in points.items():
+        budgets = point["budgets"]
+        rules, masks, draws = {}, {}, {}
+        for name, rule in point["rules"].items():
+            contexts = rule["contexts"]
+            low = _conditional_threshold_mask(scores, wolves, contexts, positive=False) & ~conditional_pos
+            additional = h & ~(conditional_pos | low) & contexts["2"]["additional_enabled"]
+            summary, draws[name] = report(conditional_pos, low, additional, budgets, contexts)
+            two_wolves = group_masks["two_wolves"]
+            neg_regions = {
+                region: _negative_diagnostics(weighted_rows, mask, total_units)
+                for region, mask in (("L", low & two_wolves), ("A", additional), ("H", h),
+                                     ("H_without_pos", h & ~conditional_pos))
+            }
+            _check_negative_split(summary["subgroups"]["two_wolves"]["regions"]["NEG"],
+                                  [neg_regions["L"], neg_regions["A"]])
+            for region, enabled in (("L", contexts["2"]["low_neg_enabled"]),
+                                    ("A", contexts["2"]["additional_enabled"])):
+                neg_regions[region]["enabled"] = enabled
+                neg_regions[region]["risk_budget"] = {
+                    **_budget_summary(neg_regions[region], budget, None),
+                    "constraint_applies": name == STRICT_CONDITIONAL_TV and enabled,
+                }
+            rules[name] = {"risk_mode": rule["risk_mode"], "contexts": contexts,
+                           **summary, "neg_subregions": neg_regions}
+            masks[name] = low, additional
+
+        if expected is not None:
+            _check_conditional_selection_counts(rules, expected[budget])
+
+        comparisons = {}
+        for key, candidate, reference in (("tv_vs_direct", CONDITIONAL_TV, CONDITIONAL_DIRECT),
+                                          ("strict_vs_tv", STRICT_CONDITIONAL_TV, CONDITIONAL_TV)):
+            comparisons[key] = {"candidate": candidate, "reference": reference,
+                                "differences": _conditional_differences(rules[candidate], rules[reference],
+                                                                        draws[candidate], draws[reference])}
+        comparisons["tv_vs_direct"]["negative_changes"] = _relative_negative(
+            weighted_rows, total_units, *masks[CONDITIONAL_TV], masks[CONDITIONAL_DIRECT][0],
+            rules[CONDITIONAL_TV]["overall"]["regions"]["NEG"], rules[CONDITIONAL_DIRECT]["overall"]["regions"]["NEG"],
+        )
+
+        global_references = {}
+        for name, method in (("Global-Direct", "Direct"), ("Global-TV", "TV-0.10")):
+            beta, gate = DISTRIBUTION_BETAS[budget][method], DISTRIBUTION_GATES[method]
+            low, additional = _negative_masks(rows, scores, global_pos, Decimal(beta), gate)
+            direction_flags = {m: {"pos_enabled": True, "low_neg_enabled": True,
+                                   "additional_enabled": m == "2" and gate is not None} for m in WOLF_GROUPS}
+            summary, _ = report(global_pos, low, additional, budgets, direction_flags)
+            global_references[name] = {"risk_mode": "global", "alpha": str(DISTRIBUTION_ALPHA), "beta": beta,
+                                       "additional_enabled": gate is not None, **summary}
+        evaluated[budget] = {"budgets": budgets, "rules": rules, "comparisons": comparisons,
+                             "global_references": global_references}
+    result = {
+        "protocol": CONDITIONAL_PROTOCOL,
+        "shared_pos": {m: {key: rule[key] for key in ("alpha", "pos_enabled")} for m, rule in shared.items()},
+        "operating_points": evaluated,
+    }
+    if resampling:
+        result["bootstrap"] = _bootstrap_metadata()
+    return result
+
+
+def _check_conditional_selection_counts(rules, expected):
+    """用实际掩码核对扫描质量和覆盖包含关系。"""
+    fields = ("mass_units", "error_units")
+    for name, rule in rules.items():
+        for m, subgroup in WOLF_GROUPS.items():
+            target = expected[name][m]
+            regions = rule["subgroups"][subgroup]["regions"]
+            negative = tuple(a + b for a, b in zip(target["L"], target["A"], strict=True))
+            checks = [(regions["POS"], target["POS"]), (regions["NEG"], negative)]
+            if m == "2":
+                checks.extend((rule["neg_subregions"][side], target[side]) for side in ("L", "A"))
+            if any(tuple(region[key] for key in fields) != units for region, units in checks):
+                raise ValueError(f"{name} 的狼数 {m} 扫描与应用掩码的质量不一致")
+    coverage_units = [sum(rules[name]["overall"]["regions"][side]["mass_units"] for side in ("POS", "NEG"))
+                      for name in (CONDITIONAL_DIRECT, STRICT_CONDITIONAL_TV, CONDITIONAL_TV)]
+    if coverage_units != sorted(coverage_units):
+        raise ValueError("条件规则的开发覆盖不满足 Direct ≤ Strict-TV ≤ TV")
 
 
 def analyze_development(partitions, *, budgets=None):
@@ -692,6 +1045,9 @@ def main(argv=None):
     evaluate.add_argument("--beta", type=_unit_decimal, required=True, help="NEG 切点，可直接复制输出中的十进制值")
     evaluate.add_argument("--alpha", type=_unit_decimal, required=True, help="POS 切点，可直接复制输出中的十进制值")
     stages.add_parser("evaluate-distribution", help="只用 Fold 4 评价八个冻结分布感知规则")
+    stages.add_parser("develop-conditional", help="只用 Fold 0–3 选择条件规则，输出冻结参数和开发统计")
+    conditional = stages.add_parser("evaluate-conditional", help="只用 Fold 4 应用冻结条件规则并做开发诊断")
+    conditional.add_argument("--selection", type=Path, required=True, help="develop-conditional 输出的 JSON")
     args = parser.parse_args(argv)
     if args.stage == "develop":
         if (args.neg_risk is None) != (args.pos_risk is None):
@@ -699,6 +1055,15 @@ def main(argv=None):
         budgets = None if args.neg_risk is None else (args.neg_risk, args.pos_risk)
         partitions, source = load_development(DEVELOPMENT_FOLDS)
         result = analyze_development(partitions, budgets=budgets)
+    elif args.stage == "develop-conditional":
+        partitions, source = load_development(SELECTION_FOLDS)
+        rows = [row for fold in SELECTION_FOLDS for row in partitions[fold]]
+        audit = population_by_wolf_count(rows)
+        _check_population(audit["overall"], CONDITIONAL_SELECTION_POPULATION, "条件选择")
+        weights = game_weight_units(rows)
+        points, expected = select_conditional(rows, weights)
+        result = {"stage": CONDITIONAL_SELECTION_STAGE, "folds": SELECTION_FOLDS, "population": audit,
+                  **evaluate_conditional(rows, weights, points, expected=expected)}
     else:
         if args.stage == "evaluate" and args.beta > args.alpha:
             parser.error("须满足 beta ≤ alpha")
@@ -709,9 +1074,18 @@ def main(argv=None):
         if args.stage == "evaluate":
             stage = "exploratory_fold4_evaluation"
             evaluation = evaluate_candidate(rows, args.beta, args.alpha)
-        else:
+        elif args.stage == "evaluate-distribution":
             stage = "exploratory_fold4_distribution_evaluation"
             evaluation = evaluate_distribution(rows)
+        else:
+            try:
+                selection = json.loads(args.selection.read_text(encoding="utf-8"))
+                points = _validate_conditional_selection(selection, source)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                parser.error(f"无效的 --selection：{error}")
+            stage = "fold4_conditional_development_diagnostic"
+            evaluation = evaluate_conditional(rows, game_weight_units(rows), points, resampling=True)
+            evaluation["selection"] = {"folds": selection["folds"], "population": selection["population"]}
         result = {"stage": stage, "folds": (EVALUATION_FOLD,), "population": audit, **evaluation}
     result["source"] = source
     result["boundary_policy"] = "DEFER_FIRST"

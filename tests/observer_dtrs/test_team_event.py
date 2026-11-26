@@ -596,6 +596,329 @@ def test_frozen_distribution_cli_uses_only_fold4_and_keeps_exact_parameters(
         }
 
 
+@pytest.fixture
+def conditional_rows():
+    scores = (0.05, 0.10, 0.20, *((0.3125,) * 5), 0.375, 0.875, 0.025, 0.375, 0.9)
+    labels = (0, 1, 1, *((0,) * 5), 1, 1, 0, 0, 1)
+    rows = samples(scores, labels, ("long",) * 10 + ("short",) * 3)
+    for index in range(3, 9):
+        rows[index] = replace(rows[index], uniform_tv=0.04, successful_empty=index == 3)
+    for index in range(10, 13):
+        rows[index] = replace(rows[index], alive_wolves=1)
+    return rows
+
+
+def test_conditional_selection_checks_evidence_and_matches_applied_masks(conditional_rows):
+    rows = conditional_rows
+    weights = study.game_weight_units(rows)
+    points, expected = study.select_conditional(rows, weights)
+    evaluation = study.evaluate_conditional(rows, weights, points, expected=expected)
+    op = evaluation["operating_points"]["0.15"]
+    direct, tv, strict = (op["rules"][method] for method in study.CONDITIONAL_MODES)
+    assert direct["contexts"]["1"] == tv["contexts"]["1"] == strict["contexts"]["1"]
+    assert direct["contexts"]["1"]["alpha"] != direct["contexts"]["2"]["alpha"]
+    pos = evaluation["shared_pos"]
+    for point in evaluation["operating_points"].values():
+        for rule in point["rules"].values():
+            for m in ("1", "2"):
+                assert {key: rule["contexts"][m][key] for key in pos[m]} == pos[m]
+            assert rule["overall"]["regions"]["POS"]["records"] == 3
+
+    assert not direct["contexts"]["2"]["additional_enabled"]
+    assert tv["contexts"]["2"]["additional_enabled"] and strict["contexts"]["2"]["additional_enabled"]
+    assert [r["subgroups"]["two_wolves"]["regions"]["NEG"]["records"] for r in (direct, strict, tv)] == [1, 6, 7]
+    assert [r["overall"]["coverage"] for r in (direct, strict, tv)] == pytest.approx([0.65, 0.9, 0.95])
+    assert tv["subgroups"]["two_wolves"]["risk_budgets"]["NEG"]["empirical_met"]
+    assert not tv["neg_subregions"]["L"]["risk_budget"]["empirical_met"]
+    assert not tv["neg_subregions"]["L"]["risk_budget"]["constraint_applies"]
+    assert strict["neg_subregions"]["L"]["risk_budget"]["empirical_met"]
+    assert strict["neg_subregions"]["A"]["risk_budget"]["empirical_met"]
+    assert strict["neg_subregions"]["A"]["risk_budget"]["constraint_applies"]
+    regions = tv["neg_subregions"]
+    assert [regions[name]["records"] for name in ("H", "H_without_pos", "A")] == [6, 5, 5]
+    assert regions["A"]["successful_empty_mass"] == pytest.approx(0.05)
+    subgroup = tv["subgroups"]["two_wolves"]
+    assert subgroup["population_mass"] == 0.5
+    assert subgroup["regions"]["NEG"]["mass"] == 0.7
+    assert subgroup["regions"]["NEG"]["whole_population_mass"] == 0.35
+    change = op["comparisons"]["tv_vs_direct"]["negative_changes"]
+    assert change["added"]["mass"] == 0.3 and change["removed"]["mass"] == 0
+    assert change["added_by_region"]["L"]["records"] == 1
+    assert change["added_by_region"]["A"]["records"] == 5
+    assert change["net_coverage_gain"] == 0.3
+    assert op["comparisons"]["strict_vs_tv"]["differences"]["overall"]["coverage"]["point_estimate"] == pytest.approx(-0.05)
+    for method, old_method in (("Global-Direct", "Direct"), ("Global-TV", "TV-0.10")):
+        reference = op["global_references"][method]
+        assert reference["beta"] == study.DISTRIBUTION_BETAS["0.15"][old_method]
+        assert reference["alpha"] == str(study.DISTRIBUTION_ALPHA)
+    old_eval = study.evaluate_candidate(rows, study.DISTRIBUTION_BETAS["0.15"]["Direct"], study.DISTRIBUTION_ALPHA)
+    assert op["global_references"]["Global-Direct"]["overall"]["coverage"] == old_eval["overall"]["coverage"]
+
+
+def test_conditional_selection_clips_neg_interval_instead_of_discarding_representative():
+    rows = samples((0.125, math.nextafter(0.125, 1), 0.875), (0, 1, 1))
+    blocks = study.score_blocks(rows, study.game_weight_units(rows))
+    cuts = study.direction_cuts(blocks, Region.NEG)
+    endpoint = Decimal.from_float(0.125)
+    alpha = study._exact_midpoint(endpoint, cuts[1].threshold)
+    assert endpoint < alpha < cuts[1].threshold
+    chosen = study._best_conditional_negative(cuts, study._additional_prefix(blocks), 1, alpha, Fraction(0),
+                                              allow_gate=False, separate=False)
+    assert endpoint < chosen.beta <= alpha and chosen.low == (1, 0)
+    at_open_end = study._best_conditional_negative(cuts, study._additional_prefix(blocks), 1, endpoint, Fraction(0),
+                                                   allow_gate=False, separate=False)
+    assert at_open_end.beta == 0 and at_open_end.low == (0, 0)
+
+
+def test_conditional_scan_can_reenter_budget_and_close_redundant_gate():
+    rows = samples((0.05, 0.10, *((0.3125,) * 6), 0.875), (0, 1, *((0,) * 6), 1), ("g",) * 9)
+    rows[2:8] = [replace(row, uniform_tv=0.04) for row in rows[2:8]]
+    weights = study.game_weight_units(rows)
+    points, expected = study.select_conditional(rows, weights)
+    op = points["0.15"]["rules"]
+    direct = op[study.CONDITIONAL_DIRECT]["contexts"]["2"]
+    assert op[study.CONDITIONAL_TV]["contexts"]["2"] == op[study.STRICT_CONDITIONAL_TV]["contexts"]["2"] == direct
+    assert not direct["additional_enabled"]
+    assert expected["0.15"][study.CONDITIONAL_DIRECT]["2"]["L"] == (8, 1)
+
+
+def test_conditional_apply_uses_strict_cut_points_and_only_residual_h(conditional_rows):
+    rows = samples((0.25, 0.3125, 0.34, 0.375, math.nextafter(0.375, 1), 0.34), (0, 0, 0, 0, 1, 0))
+    rows = [replace(row, uniform_tv=0.04, alive_wolves=1 if i == 5 else 2) for i, row in enumerate(rows)]
+    points, _ = study.select_conditional(conditional_rows, study.game_weight_units(conditional_rows))
+    for point in points.values():
+        for name, rule in point["rules"].items():
+            rule["contexts"]["1"].update(alpha="0.5", beta="0.4", pos_enabled=True, low_neg_enabled=True)
+            rule["contexts"]["2"].update(alpha="0.375", beta="0.34", pos_enabled=True, low_neg_enabled=True,
+                                         additional_enabled=name != study.CONDITIONAL_DIRECT)
+    # 精确十进制 0.34 小于同名字面 float 的实际值。
+    op = study.evaluate_conditional(rows, study.game_weight_units(rows), points)["operating_points"]["0.15"]
+    tv, direct = op["rules"][study.CONDITIONAL_TV], op["rules"][study.CONDITIONAL_DIRECT]
+    assert tv["subgroups"]["single_wolf"]["regions"]["NEG"]["records"] == 1
+    assert tv["subgroups"]["two_wolves"]["regions"]["POS"]["records"] == 1
+    assert [tv["neg_subregions"][key]["records"] for key in ("L", "A", "H", "H_without_pos")] == [2, 2, 4, 3]
+    assert direct["neg_subregions"]["A"]["records"] == 0
+    before = tv["overall"]["regions"]
+    flipped = [replace(row, y=1 - row.y, successful_empty=row.y == 1) for row in rows]
+    after = study.evaluate_conditional(flipped, study.game_weight_units(flipped), points)["operating_points"]["0.15"]
+    for name, region in after["rules"][study.CONDITIONAL_TV]["overall"]["regions"].items():
+        assert region["records"] == before[name]["records"]
+
+
+def test_conditional_disabled_directions_stay_empty_and_differ_from_no_evaluation_support(conditional_rows):
+    rows = samples((0.125, 1.0000005), (1, 0), ("g", "g"))
+    points, _ = study.select_conditional(rows, study.game_weight_units(rows))
+    apply_rows = samples((0, 1.0000005), (0, 1))
+    evaluated = study.evaluate_conditional(apply_rows, study.game_weight_units(apply_rows), points)
+    rules = evaluated["operating_points"]["0.15"]["rules"]
+    for rule in rules.values():
+        assert rule["contexts"]["2"] == {"alpha": "1", "beta": "0", "pos_enabled": False,
+                                          "low_neg_enabled": False, "additional_enabled": False}
+        assert rule["overall"]["coverage"] == 0
+        for side in ("NEG", "POS"):
+            assert not rule["overall"]["directions_enabled"][side]
+            assert rule["overall"]["regions"][side]["error_rate"] is None
+            assert not rule["overall"]["risk_budgets"][side]["empirical_met"]
+
+    points, _ = study.select_conditional(conditional_rows, study.game_weight_units(conditional_rows))
+    mid = samples((0.25,), (0,))
+    op = study.evaluate_conditional(mid, study.game_weight_units(mid), points)["operating_points"]["0.15"]
+    group = op["rules"][study.CONDITIONAL_TV]["subgroups"]["two_wolves"]
+    for side in ("NEG", "POS"):
+        assert group["directions_enabled"][side]
+        assert group["regions"][side]["error_rate"] is None
+        assert not group["risk_budgets"][side]["empirical_met"]
+
+
+@pytest.mark.parametrize("valid", (19, 18))
+def test_conditional_bootstrap_pairs_whole_games_and_keeps_empty_replicates(monkeypatch, conditional_rows, valid):
+    calls = []
+
+    def draws(games, replicates, seed):
+        calls.append((games, replicates, seed))
+        return np.asarray([[0, 0]] * 9 + [[0, 1]] * (valid - 9) + [[1, 1]] * (20 - valid))
+
+    monkeypatch.setattr(study, "bootstrap_indices", draws)
+    monkeypatch.setattr(study.frozen, "BOOTSTRAP_REPLICATES", 20)
+    weights = study.game_weight_units(conditional_rows)
+    points, _ = study.select_conditional(conditional_rows, weights)
+    result = study.evaluate_conditional(conditional_rows, weights, points, resampling=True)
+    assert calls == [(["long", "short"], 20, 1729)]
+    comparisons = result["operating_points"]["0.15"]["comparisons"]
+    paired = comparisons["tv_vs_direct"]["differences"]
+    assert paired["overall"]["coverage"]["point_estimate"] == pytest.approx(0.3)
+    assert paired["overall"]["neg_error_mass"]["point_estimate"] == pytest.approx(0.05)
+    assert paired["overall"]["coverage"]["valid_replicates"] == 20
+    risk = paired["two_wolves"]["neg_error_rate"]
+    assert risk["point_estimate"] == pytest.approx(1 / 7)
+    assert (risk["valid_replicates"], risk["zero_denominator_replicates"]) == (valid, 20 - valid)
+    assert risk["percentile_95"] == (pytest.approx([1 / 7, 1 / 7]) if valid == 19 else None)
+    strict = comparisons["strict_vs_tv"]["differences"]
+    assert strict["overall"]["coverage"]["point_estimate"] == pytest.approx(-0.05)
+    assert strict["overall"]["pos_error_rate"]["percentile_95"] == [0, 0]
+
+
+def test_conditional_tv_reports_removed_low_rows_when_expanding_with_a():
+    scores = (*((0.05,) * 4), *((0.10,) * 4), *((0.20,) * 4), *((0.3125,) * 10), 0.9)
+    labels = (0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, *((0,) * 8), 1, 1, 1)
+    rows = samples(scores, labels, ("g",) * 23)
+    rows[12:22] = [replace(row, uniform_tv=0.04) for row in rows[12:22]]
+    weights = study.game_weight_units(rows)
+    points, expected = study.select_conditional(rows, weights)
+    op = study.evaluate_conditional(rows, weights, points, expected=expected)["operating_points"]["0.15"]
+    change = op["comparisons"]["tv_vs_direct"]["negative_changes"]
+    assert (change["added"]["records"], change["removed"]["records"]) == (10, 4)
+    assert change["net_coverage_gain"] == pytest.approx(6 / 23)
+    assert change["removed"]["error_rate"] == 0.25
+    paired = op["comparisons"]["tv_vs_direct"]["differences"]["overall"]
+    assert paired["neg_error_mass"]["point_estimate"] == pytest.approx(1 / 23)
+    strict = op["rules"][study.STRICT_CONDITIONAL_TV]
+    assert strict["contexts"]["2"] == op["rules"][study.CONDITIONAL_DIRECT]["contexts"]["2"]
+
+
+def test_conditional_gate_only_neg_disables_the_low_prefix():
+    rows = samples((0.05, 0.20, 0.3125, 0.375, 0.875), (1, 1, 0, 1, 1))
+    rows[2] = replace(rows[2], uniform_tv=0.04)
+    weights = study.game_weight_units(rows)
+    points, expected = study.select_conditional(rows, weights)
+    rules = study.evaluate_conditional(rows, weights, points, expected=expected)["operating_points"]["0.15"]["rules"]
+    assert not rules[study.CONDITIONAL_DIRECT]["overall"]["directions_enabled"]["NEG"]
+    for name in (study.CONDITIONAL_TV, study.STRICT_CONDITIONAL_TV):
+        rule = rules[name]
+        assert rule["contexts"]["2"]["beta"] == "0"
+        assert not rule["contexts"]["2"]["low_neg_enabled"]
+        assert rule["contexts"]["2"]["additional_enabled"] and rule["overall"]["directions_enabled"]["NEG"]
+        assert rule["neg_subregions"]["L"]["error_rate"] is None
+        assert rule["neg_subregions"]["A"]["records"] == 1
+
+
+def test_conditional_prefix_optima_match_independent_exhaustive_search():
+    def thresholds(scores, upper):
+        endpoints = sorted({Fraction(0), upper, *(score for score in scores if 0 <= score <= upper)})
+        return endpoints + [(a + b) / 2 for a, b in zip(endpoints, endpoints[1:])]
+
+    rng = random.Random(1729)
+    score_pool = (0, 0.125, math.nextafter(0.3, 0), 0.3, 0.3125, 0.375, 0.4, 0.8, 1, 1.0000005)
+    for _ in range(40):
+        count = rng.randrange(3, 14)
+        rows = samples(rng.choices(score_pool, k=count), rng.choices((0, 1), k=count),
+                       rng.choices(("a", "b", "c"), k=count))
+        rows = [replace(row, uniform_tv=rng.choice((0.025, 0.10)), alive_wolves=rng.choice((1, 2))) for row in rows]
+        sizes = Counter(row.game_id for row in rows)
+        weights = [Fraction(1, len(sizes) * sizes[row.game_id]) for row in rows]
+        points, expected = study.select_conditional(rows, study.game_weight_units(rows))
+        study.evaluate_conditional(rows, study.game_weight_units(rows), points, expected=expected)
+        for m in (1, 2):
+            group = {i for i, row in enumerate(rows) if row.alive_wolves == m}
+            scores = {i: Fraction.from_float(rows[i].score) for i in group}
+            h = {i for i in group if m == 2 and 0.3 <= rows[i].score < 0.4 and rows[i].uniform_tv < 0.10}
+
+            def volume(indices, error_label):
+                return sum(weights[i] for i in indices), sum(weights[i] for i in indices if rows[i].y == error_label)
+
+            pos_choices = [(0, 0)]
+            for alpha in thresholds(scores.values(), Fraction(1)):
+                mass, errors = volume({i for i in group if scores[i] > alpha}, 0)
+                if 10 * errors <= mass:
+                    pos_choices.append((mass, -errors))
+
+            for budget, point in points.items():
+                for method, rule in point["rules"].items():
+                    context = rule["contexts"][str(m)]
+                    beta, alpha = Fraction(context["beta"]), Fraction(context["alpha"])
+                    pos = {i for i in group if scores[i] > alpha and context["pos_enabled"]}
+                    pos_mass, pos_errors = volume(pos, 0)
+                    assert (pos_mass, -pos_errors) == max(pos_choices)
+                    assert context["pos_enabled"] == bool(pos)
+                    assert 0 <= beta <= alpha <= 1
+
+                    def neg_rank(low, added, gate):
+                        mass, errors = volume(low | added, 1)
+                        return mass, -errors, not gate, -len({scores[i] for i in low})
+
+                    choices = [(0, 0, True, 0)]
+                    gates = (False, True) if m == 2 and method != study.CONDITIONAL_DIRECT else (False,)
+                    for test_beta, gate in product(thresholds(scores.values(), alpha), gates):
+                        low = {i for i in group if scores[i] < test_beta} - pos
+                        added = h - pos - low if gate else set()
+                        required = (low, added) if method == study.STRICT_CONDITIONAL_TV else (low | added,)
+                        if all(e <= Fraction(budget) * c for c, e in [volume(part, 1) for part in required]):
+                            choices.append(neg_rank(low, added, gate))
+                    low = {i for i in group if scores[i] < beta and context["low_neg_enabled"]} - pos
+                    gate = context["additional_enabled"]
+                    added = h - pos - low if gate else set()
+                    assert neg_rank(low, added, gate) == max(choices)
+                    assert context["low_neg_enabled"] == bool(low) and gate == bool(added)
+
+
+def test_conditional_cli_round_trips_frozen_rules_without_reading_other_folds(
+    mocked_development, monkeypatch, tmp_path, capsys,
+):
+    monkeypatch.setattr(study, "CONDITIONAL_SELECTION_POPULATION", {"games": 4, "rows": 20})
+    assert study.main(["develop-conditional"]) == 0
+    text = capsys.readouterr().out
+    selection = json.loads(text)
+    assert mocked_development.opened == [f"game-{fold}" for fold in study.SELECTION_FOLDS]
+    assert selection["folds"] == [0, 1, 2, 3] and selection["population"]["overall"]["rows"] == 20
+    assert selection["stage"] == study.CONDITIONAL_SELECTION_STAGE and "bootstrap" not in selection
+    path = tmp_path / "conditional-selection.json"
+    path.write_text(text, encoding="utf-8")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Fold 4 仅应用已冻结切点")
+
+    monkeypatch.setattr(study, "select_conditional", forbidden)
+    monkeypatch.setattr(study, "direction_cuts", forbidden)
+    mocked_development.opened.clear()
+    assert study.main(["evaluate-conditional", "--selection", str(path)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert mocked_development.opened == ["game-4"]
+    assert report["stage"] == "fold4_conditional_development_diagnostic" and report["folds"] == [4]
+    assert report["source"] == selection["source"]
+    assert report["selection"] == {"folds": selection["folds"], "population": selection["population"]}
+    assert report["bootstrap"]["replicates"] == 5000
+    for budget, point in report["operating_points"].items():
+        for name, rule in point["rules"].items():
+            assert rule["contexts"] == selection["operating_points"][budget]["rules"][name]["contexts"]
+            assert rule["overall"]["bootstrap"]["pos_error_rate"]["zero_denominator_replicates"] == 5000
+
+
+@pytest.mark.parametrize("problem", ("source", "budget", "mode", "alpha", "pos", "shared_pos", "gate", "off", "decimal"))
+def test_conditional_frozen_reader_rejects_inconsistent_selection(conditional_rows, problem):
+    weights = study.game_weight_units(conditional_rows)
+    points, _ = study.select_conditional(conditional_rows, weights)
+    source = {"fold_manifest_digest": "source"}
+    shared_pos = study.evaluate_conditional(conditional_rows, weights, points)["shared_pos"]
+    selection = {"stage": study.CONDITIONAL_SELECTION_STAGE, "folds": list(study.SELECTION_FOLDS),
+                 "source": source, "protocol": study.CONDITIONAL_PROTOCOL, "boundary_policy": "DEFER_FIRST",
+                 "threshold_encoding": "exact_decimal", "population": {"overall": study.CONDITIONAL_SELECTION_POPULATION},
+                 "operating_points": points, "shared_pos": shared_pos}
+    assert study._validate_conditional_selection(selection, source) == points
+    point = points["0.20"]
+    rule = point["rules"][study.CONDITIONAL_DIRECT]
+    two = rule["contexts"]["2"]
+    if problem == "source":
+        selection["source"] = {"fold_manifest_digest": "other"}
+    elif problem == "budget":
+        point["budgets"]["POS"] = "0.20"
+    elif problem == "mode":
+        rule["risk_mode"] = "global"
+    elif problem == "alpha":
+        two["alpha"] = "0.5"
+    elif problem == "pos":
+        two["pos_enabled"] = False
+    elif problem == "shared_pos":
+        shared_pos["2"]["alpha"] = "0.5"
+    elif problem == "gate":
+        two["additional_enabled"] = True
+    elif problem == "off":
+        two["low_neg_enabled"] = False
+    else:
+        two["beta"] = float(two["beta"])
+    with pytest.raises(ValueError, match="条件"):
+        study._validate_conditional_selection(selection, source)
+
+
 @pytest.mark.parametrize("arguments", (
     ("evaluate", "--beta", "0.7", "--alpha", "0.3"),
     ("evaluate", "--beta", "NaN", "--alpha", "1"),
