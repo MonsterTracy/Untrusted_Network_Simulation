@@ -10,6 +10,7 @@ import math
 import random
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from scripts import analyze_observer_dtrs_team_event as study
@@ -57,6 +58,21 @@ def test_single_wolf_excludes_dead_teammate_without_renormalizing_q():
     assert all(row.alive_wolves == 1 and row.y == row.speaker_hit for row in rows)
     assert rows[0].score == 0.25 and rows[0].y == 0 and not rows[0].successful_empty
     assert rows[1].y == 1
+
+
+@pytest.mark.parametrize("nonself, tv, entropy", (
+    ((1 / 6,) * 6, 0, 1),
+    ((0, 0, 1, 0, 0, 0), 5 / 6, 0),
+    ((0.125, 0.25, 0.125, 0.25, 0.125, 0.125), 1 / 6, 0.5 * math.log(32) / math.log(6)),
+))
+def test_team_sample_uses_all_six_nonself_seats_for_row_shape(nonself, tv, entropy):
+    pre, _, reports, q = pre_fixture(dead=("player4",))
+    q["q"][2] = (*nonself[:2], 0.0, *nonself[2:])
+    row = next(study.pre_samples(pre, WOLVES, reports, q, attempt_id=ATTEMPT))
+    assert row.observer_id == "player3"
+    assert row.score == sum(nonself[:2])
+    assert row.uniform_tv == pytest.approx(tv)
+    assert row.normalized_entropy == pytest.approx(entropy)
 
 
 @pytest.mark.parametrize("problem", ("missing", "failed", "wrong_observer", "wrong_attempt"))
@@ -164,7 +180,8 @@ def test_development_loader_rejects_invalid_frozen_population(mocked_development
 def samples(scores, labels, games=None):
     games = range(len(scores)) if games is None else games
     return [
-        study.TeamSample(str(game), f"pre-{i}", "player3", 1, "discussion", 2, float(score), y, bool(y), False)
+        study.TeamSample(str(game), f"pre-{i}", "player3", 1, "discussion", 2, float(score), y, bool(y), False,
+                         uniform_tv=0.5, normalized_entropy=0.5)
         for i, (score, y, game) in enumerate(zip(scores, labels, games, strict=True))
     ]
 
@@ -396,6 +413,187 @@ def test_evaluate_cli_applies_frozen_thresholds_without_loading_selection_or_sea
     regions = result["overall"]["regions"]
     assert regions["BND"]["records"] == 1
     assert regions["POS"]["records"] == 0 and regions["POS"]["error_rate"] is None
+
+
+@pytest.mark.parametrize("method, feature, cutoff, closer, farther, equality_passes", (
+    ("TV-0.05", "uniform_tv", 0.05, 0, 1, False),
+    ("TV-0.10", "uniform_tv", 0.10, 0, 1, False),
+    ("Entropy-0.99", "normalized_entropy", 0.99, 1, 0, True),
+))
+def test_distribution_gate_uses_python_float_window_and_feature_boundaries(
+    method, feature, cutoff, closer, farther, equality_passes,
+):
+    scores = (math.nextafter(0.3, 0.0), 0.3, math.nextafter(0.4, 0.0), 0.4, 0.33, 0.33, 0.33)
+    passing = math.nextafter(cutoff, closer)
+    shape = (passing, passing, passing, passing, cutoff, math.nextafter(cutoff, farther), passing)
+    rows = [replace(row, **{feature: value}) for row, value in zip(samples(scores, (0,) * 7), shape, strict=True)]
+    rows[-1] = replace(rows[-1], alive_wolves=1)
+    decimals = [Decimal.from_float(row.score) for row in rows]
+    pos = np.zeros(len(rows), dtype=bool)
+    gate = study.DISTRIBUTION_GATES[method]
+    low, additional = study._negative_masks(rows, decimals, pos, Decimal("0.1"), gate)
+    assert not low.any()
+    assert additional.tolist() == [False, True, True, False, equality_passes, False, False]
+
+    hit_rows = [replace(row, y=1, speaker_hit=True, successful_empty=False) for row in rows]
+    empty_rows = [replace(row, successful_empty=True) for row in rows]
+    for changed_reports in (hit_rows, empty_rows):
+        _, changed_additional = study._negative_masks(changed_reports, decimals, pos, Decimal("0.1"), gate)
+        assert np.array_equal(changed_additional, additional)
+
+
+def test_distribution_gives_pos_priority_and_keeps_strict_decimal_low_cut():
+    rows = samples((0.3, 0.3125, 0.375, math.nextafter(0.375, 1.0)), (0, 0, 0, 0))
+    rows = [replace(row, uniform_tv=0.07) for row in rows]
+    scores = [Decimal.from_float(row.score) for row in rows]
+    pos = np.asarray([score > Decimal("0.375") for score in scores])
+    gate = study.DISTRIBUTION_GATES["TV-0.10"]
+    low, additional = study._negative_masks(rows, scores, pos, Decimal("0.3125"), gate)
+    assert pos.tolist() == [False, False, False, True]
+    assert low.tolist() == [True, False, False, False]
+    assert additional.tolist() == [False, True, True, False]
+
+    # 0.3 的 float 小于精确 Decimal("0.3")，同时仍满足 float 窗口下界。
+    low, additional = study._negative_masks(rows, scores, pos, Decimal("0.3"), gate)
+    assert low.tolist() == [True, False, False, False]
+    assert not additional[0]
+
+
+@pytest.mark.parametrize("valid_pairs", (19, 18))
+def test_distribution_decomposes_neg_and_resamples_the_same_whole_games(monkeypatch, valid_pairs):
+    rows = samples((0.05, 0.10, 0.32, 0.33, 0.50, 0.25, 0.34, 0.36), (0, 1, 0, 1, 1, 0, 0, 0),
+                   ("long",) * 6 + ("short",) * 2)
+    rows = [replace(row, alive_wolves=1) if i in (0, 1, 5, 7) else row for i, row in enumerate(rows)]
+    rows[2] = replace(rows[2], uniform_tv=0.04, normalized_entropy=0.995, successful_empty=True)
+    rows[3] = replace(rows[3], uniform_tv=0.075)
+    rows[6] = replace(rows[6], uniform_tv=0.07, day=2, phase="pk_discussion")
+    calls = []
+
+    def draws(games, replicates, seed):
+        calls.append((games, replicates, seed))
+        return np.asarray([[0, 0]] * 9 + [[0, 1]] * (valid_pairs - 9) + [[1, 1]] * (20 - valid_pairs))
+
+    monkeypatch.setattr(study, "bootstrap_indices", draws)
+    monkeypatch.setattr(study.frozen, "BOOTSTRAP_REPLICATES", 20)
+    result = study.evaluate_distribution(rows)
+    assert calls == [(["long", "short"], 20, 1729)]
+    rules = result["operating_points"]["0.15"]["rules"]
+    direct, tv = rules["Direct"], rules["TV-0.10"]
+    assert result["shared_pos"]["region"]["correct_mass"] == pytest.approx(1 / 12)
+    assert direct["risk_budgets"]["NEG"]["empirical_met"] is True
+    assert tv["risk_budgets"]["NEG"]["empirical_met"] is False
+    neg = tv["overall"]["regions"]["NEG"]
+    assert (neg["mass"], neg["error_rate"], neg["error_mass"], neg["correct_mass"]) == pytest.approx(
+        (7 / 12, 2 / 7, 1 / 6, 5 / 12),
+    )
+    assert (neg["records"], neg["games"], neg["error_games"]) == (5, 2, 1)
+    low, additional = (tv["neg_subregions"][name] for name in ("L", "A"))
+    assert low["mass"] == pytest.approx(1 / 6) and low["error_mass"] == pytest.approx(1 / 12)
+    assert additional["mass"] == pytest.approx(5 / 12) and additional["error_rate"] == pytest.approx(0.2)
+    assert (additional["successful_empty_mass"], additional["nonempty_team_miss_mass"],
+            additional["team_hit_mass"]) == pytest.approx((1 / 12, 1 / 4, 1 / 12))
+    for field in ("mass_units", "error_units"):
+        assert neg[field] == low[field] + additional[field]
+
+    single = tv["subgroups"]["single_wolf"]
+    assert single["population_mass"] == 0.5
+    assert single["coverage"] == pytest.approx(1 / 3)
+    assert single["regions"]["NEG"]["error_rate"] == 0.5
+    assert tv["subgroups"]["pk"]["population_mass"] == 0.25
+    assert tv["subgroups"]["pk"]["coverage"] == 1
+
+    change = tv["relative_to_direct"]
+    assert change["added"]["mass"] == pytest.approx(0.5)
+    assert change["removed"]["records"] == 0 and change["removed"]["error_rate"] is None
+    assert change["added_by_region"]["L"]["error_mass"] == pytest.approx(1 / 12)
+    assert change["added_by_region"]["A"] == additional
+    assert change["net_coverage_gain"] == pytest.approx(0.5)
+    paired = change["paired_differences"]
+    assert paired["coverage"]["percentile_95"] == pytest.approx([0.5, 0.5])
+    assert paired["neg_error_mass"]["point_estimate"] == pytest.approx(1 / 6)
+    assert paired["neg_error_mass"]["valid_replicates"] == 20
+    assert paired["neg_error_rate"]["point_estimate"] == pytest.approx(2 / 7)
+    assert paired["neg_error_rate"]["valid_replicates"] == valid_pairs
+    assert paired["neg_error_rate"]["zero_denominator_replicates"] == 20 - valid_pairs
+    if valid_pairs == 19:
+        assert paired["neg_error_rate"]["percentile_95"] == pytest.approx([2 / 7, 0.5])
+    else:
+        assert paired["neg_error_rate"]["percentile_95"] is None
+    assert result["shared_pos"]["paired_error_rate_difference"]["point_estimate"] == 0
+    for op in result["operating_points"].values():
+        old = study.evaluate_candidate(rows, op["rules"]["Direct"]["beta"], str(study.DISTRIBUTION_ALPHA))
+        for rule in op["rules"].values():
+            assert rule["overall"]["regions"]["POS"] == result["shared_pos"]["region"]
+        for key, region in old["overall"]["regions"].items():
+            new = op["rules"]["Direct"]["overall"]["regions"][key]
+            assert {name: new[name] for name in region} == region
+        assert op["rules"]["Direct"]["overall"]["coverage"] == old["overall"]["coverage"]
+
+
+def test_distribution_change_counts_withdrawals_in_coverage_and_error_mass(monkeypatch):
+    monkeypatch.setattr(study.frozen, "BOOTSTRAP_REPLICATES", 20)
+    monkeypatch.setattr(study, "DISTRIBUTION_BETAS", {"0.15": {"Direct": "0.2", "TV-0.10": "0.04"}})
+    rows = samples((0.10, 0.33, 0.33, 0.5), (1, 0, 0, 1), ("g",) * 4)
+    rows[1:3] = [replace(row, uniform_tv=0.04) for row in rows[1:3]]
+    result = study.evaluate_distribution(rows)["operating_points"]["0.15"]["rules"]["TV-0.10"]
+    change = result["relative_to_direct"]
+    assert change["added"]["mass"] == 0.5 and change["added"]["error_rate"] == 0
+    assert change["removed"]["mass"] == 0.25 and change["removed"]["error_rate"] == 1
+    assert change["net_coverage_gain"] == 0.25
+    assert change["paired_differences"]["neg_error_mass"]["point_estimate"] == -0.25
+
+
+def test_budget_at_exact_empirical_boundary_can_have_an_interval_above_budget():
+    region = {"mass_units": 20, "error_units": 3}
+    metric = study._bootstrap_metric(0.15, np.asarray([0.1, 0.2]))
+    assert study._budget_summary(region, "0.15", metric) == {
+        "development_budget": "0.15", "empirical_met": True, "interval_upper_within_budget": False,
+    }
+
+
+def test_frozen_distribution_cli_uses_only_fold4_and_keeps_exact_parameters(
+    mocked_development, monkeypatch, capsys,
+):
+    def forbidden(*_, **__):
+        pytest.fail("冻结分布评价不应执行开发选择")
+
+    for function in ("analyze_development", "direction_cuts", "maximum_coverage"):
+        monkeypatch.setattr(study, function, forbidden)
+    assert study.main(["evaluate-distribution"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert mocked_development.opened == ["game-4"]
+    assert result["stage"] == "exploratory_fold4_distribution_evaluation" and result["folds"] == [4]
+    assert result["weighting"] == "game_equal"
+    assert result["primary_comparison"] == {
+        "neg_budget": "0.15", "pos_budget": "0.10", "reference": "Direct", "candidate": "TV-0.10",
+    }
+    assert result["source"]["q_predictions_sha256"] == study.frozen.Q_SHA256
+    shared_pos = result["shared_pos"]
+    assert shared_pos["alpha"] == "0.387551836669445037841796875"
+    assert shared_pos["matched_all_rules"] and shared_pos["region"]["error_rate"] is None
+    assert shared_pos["risk_budget"]["empirical_met"] is False
+    assert shared_pos["bootstrap"]["zero_denominator_replicates"] == 5000
+    assert shared_pos["paired_error_rate_difference"]["percentile_95"] is None
+    expected_betas = {
+        "0.15": ("0.079652510583400726318359375", "0.124301455914974212646484375",
+                 "0.1209847293794155120849609375", "0.12324838340282440185546875"),
+        "0.20": ("0.1065414138138294219970703125", "0.17849795520305633544921875",
+                 "0.183103973977267742156982421875", "0.18366961181163787841796875"),
+    }
+    assert set(result["operating_points"]) == set(expected_betas)
+    for budget, op in result["operating_points"].items():
+        rules = op["rules"]
+        assert tuple(rules) == ("Direct", "TV-0.05", "TV-0.10", "Entropy-0.99")
+        assert tuple(rule["beta"] for rule in rules.values()) == expected_betas[budget]
+        assert all(rule["alpha"] == shared_pos["alpha"] for rule in rules.values())
+        assert rules["Direct"]["risk_budgets"]["NEG"]["empirical_met"] is False
+        assert rules["TV-0.10"]["risk_budgets"]["NEG"] == {
+            "development_budget": budget, "empirical_met": True, "interval_upper_within_budget": True,
+        }
+        assert rules["TV-0.10"]["relative_to_direct"]["paired_differences"]["neg_error_rate"] == {
+            "point_estimate": None, "percentile_95": None, "valid_replicates": 0, "replicates": 5000,
+            "zero_denominator_replicates": 5000,
+        }
 
 
 @pytest.mark.parametrize("arguments", (

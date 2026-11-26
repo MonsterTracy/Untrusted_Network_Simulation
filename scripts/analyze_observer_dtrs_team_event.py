@@ -1,4 +1,4 @@
-"""在冻结 Development 上评价狼队原始报告事件的直接 ToM 三支规则。"""
+"""在冻结 Development 上评价狼队原始报告事件的 ToM 三支规则。"""
 
 import argparse
 from bisect import bisect_right
@@ -8,13 +8,17 @@ from decimal import Decimal, InvalidOperation, localcontext
 from fractions import Fraction
 from itertools import groupby
 import json
-from math import lcm
+from math import fsum, lcm, log
+from operator import ge, lt
 from pathlib import Path
 import sys
+
+import numpy as np
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts import analyze_observer_dtrs_report_event as report_study
 from scripts import fit_observer_dtrs_report_event as frozen
 from werewolf.artifact_io import open_artifact_envelope, read_artifact_file
 from werewolf.development_publication import open_role_sidecar
@@ -24,6 +28,7 @@ from werewolf.observer_dtrs.features import observer_features
 from werewolf.observer_dtrs.labels import label_from_observation
 from werewolf.observer_dtrs.probabilities import ProbabilityMatrix
 from werewolf.tom.development_input import open_development_input
+from werewolf.tom.protocol import BOOTSTRAP_VERSION, bootstrap_indices
 
 
 SELECTION_FOLDS = (*frozen.TRAIN_FOLDS, frozen.CAL_FOLD)
@@ -38,6 +43,31 @@ HISTORICAL_POPULATION = {
 PRE_IDENTITY = ("game_id", "boundary_id", "prefix_digest", "step_index")
 ZERO, ONE = Decimal(0), Decimal(1)
 
+# 以下切点来自研究者提供的服务器 Fold 0–3 结果，保留完整十进制字面值。
+DISTRIBUTION_ALPHA = Decimal("0.387551836669445037841796875")
+DISTRIBUTION_POS_BUDGET = "0.10"
+DISTRIBUTION_WINDOW = (0.3, 0.4)
+DISTRIBUTION_GATES = {
+    "Direct": None,
+    "TV-0.05": ("uniform_tv", "<", 0.05),
+    "TV-0.10": ("uniform_tv", "<", 0.10),
+    "Entropy-0.99": ("normalized_entropy", ">=", 0.99),
+}
+DISTRIBUTION_BETAS = {
+    "0.15": {
+        "Direct": "0.079652510583400726318359375",
+        "TV-0.05": "0.124301455914974212646484375",
+        "TV-0.10": "0.1209847293794155120849609375",
+        "Entropy-0.99": "0.12324838340282440185546875",
+    },
+    "0.20": {
+        "Direct": "0.1065414138138294219970703125",
+        "TV-0.05": "0.17849795520305633544921875",
+        "TV-0.10": "0.183103973977267742156982421875",
+        "Entropy-0.99": "0.18366961181163787841796875",
+    },
+}
+
 
 @dataclass(frozen=True, slots=True)
 class TeamSample:
@@ -51,6 +81,8 @@ class TeamSample:
     y: int
     speaker_hit: bool
     successful_empty: bool
+    uniform_tv: float
+    normalized_entropy: float
 
     @property
     def sample_id(self):
@@ -72,10 +104,15 @@ def pre_samples(pre, wolves, reports, q_record, *, attempt_id):
         if not label.label_observed or label.observation_id != report_id or label.attempt_id != attempt_id:
             raise ValueError(f"原始报告缺失、失败或身份错配：{identity[:2]} / {report_id}")
         raw = label.raw_suspicion_support
+        q_row = matrix.row(ctx.observer_id)
+        nonself = [value for seat, value in zip(q_row.seat_ids, q_row.values, strict=True)
+                   if seat != ctx.observer_id]
+        uniform_tv = 0.5 * fsum(abs(value - 1 / 6) for value in nonself)
+        entropy = -fsum(value * log(value) for value in nonself if value) / log(6)
         yield TeamSample(
             ctx.game_id, ctx.boundary_id, ctx.observer_id, ctx.day, ctx.phase, ctx.wolf_count,
-            observer_features(ctx, matrix).r, int(any(wolf in raw for wolf in ctx.alive_wolf_ids)),
-            ctx.acting_wolf in raw, not raw,
+            observer_features(ctx, q_row).r, int(any(wolf in raw for wolf in ctx.alive_wolf_ids)),
+            ctx.acting_wolf in raw, not raw, uniform_tv, entropy,
         )
 
 
@@ -359,27 +396,55 @@ def maximum_coverage(negative, positive, *, neg_risk, pos_risk, total_units):
     }
 
 
-def _rule_summary(entries, full_units):
+def _region_summary(selected, units, error_label, *, detailed=False):
+    errors = [(row, weight) for row, weight in selected if row.y == error_label]
+    region_units = sum(weight for _, weight in selected)
+    error_units = sum(weight for _, weight in errors)
+    summary = {
+        "mass": _ratio(region_units, units), "records": len(selected),
+        "games": len({row.game_id for row, _ in selected}),
+        "error_mass": _ratio(error_units, units) if error_label is not None else None,
+        "error_rate": _ratio(error_units, region_units) if error_label is not None else None,
+        "error_games": len({row.game_id for row, _ in errors}) if error_label is not None else None,
+    }
+    if detailed and error_label is not None:
+        summary.update(mass_units=region_units, error_units=error_units,
+                       correct_mass=_ratio(region_units - error_units, units))
+    return summary
+
+
+def _rule_summary(entries, full_units, *, detailed=False):
     units = sum(weight for _, weight, _ in entries)
     positive = sum(weight for row, weight, _ in entries if row.y)
     regions = {}
     for region, error_label in ((Region.NEG, 1), (Region.BND, None), (Region.POS, 0)):
         selected = [(row, weight) for row, weight, decision in entries if decision is region]
-        errors = [(row, weight) for row, weight in selected if row.y == error_label]
-        region_units = sum(weight for _, weight in selected)
-        error_units = sum(weight for _, weight in errors)
-        regions[region.value] = {
-            "mass": _ratio(region_units, units), "records": len(selected),
-            "games": len({row.game_id for row, _ in selected}),
-            "error_mass": _ratio(error_units, units) if error_label is not None else None,
-            "error_rate": _ratio(error_units, region_units) if error_label is not None else None,
-            "error_games": len({row.game_id for row, _ in errors}) if error_label is not None else None,
-        }
+        regions[region.value] = _region_summary(selected, units, error_label, detailed=detailed)
     return {
         **frozen.support([row for row, _, _ in entries]),
         "population_mass": _ratio(units, full_units), "game_equal_base_rate": _ratio(positive, units),
         "coverage": _ratio(sum(weight for _, weight, decision in entries if decision is not Region.BND), units),
         "regions": regions,
+    }
+
+
+def _candidate_summary(entries, full_units, *, detailed=False):
+    groups = {
+        "single_wolf": lambda row: row.alive_wolves == 1,
+        "two_wolves": lambda row: row.alive_wolves == 2,
+        "day_1": lambda row: row.day == 1,
+        "day_2": lambda row: row.day == 2,
+        "day_3_or_later": lambda row: row.day >= 3,
+        "discussion": lambda row: row.phase == "discussion",
+        "pk": lambda row: row.phase == "pk_discussion",
+    }
+    return {
+        "overall": _rule_summary(entries, full_units, detailed=detailed),
+        "subgroups": {
+            name: _rule_summary([entry for entry in entries if contains(entry[0])], full_units,
+                                detailed=detailed)
+            for name, contains in groups.items()
+        },
     }
 
 
@@ -393,23 +458,196 @@ def evaluate_candidate(rows, beta, alpha):
         score = Decimal.from_float(row.score)
         decision = Region.NEG if score < beta else Region.POS if score > alpha else Region.BND
         entries.append((row, weight, decision))
-    full_units = sum(weights)
-    groups = {
-        "single_wolf": lambda row: row.alive_wolves == 1,
-        "two_wolves": lambda row: row.alive_wolves == 2,
-        "day_1": lambda row: row.day == 1,
-        "day_2": lambda row: row.day == 2,
-        "day_3_or_later": lambda row: row.day >= 3,
-        "discussion": lambda row: row.phase == "discussion",
-        "pk": lambda row: row.phase == "pk_discussion",
-    }
+    return {"beta": str(beta), "alpha": str(alpha), **_candidate_summary(entries, sum(weights))}
+
+
+def _negative_masks(rows, scores, pos, beta, gate):
+    """分配互斥的 L 和 A。窗口和形状比较复现开发阶段的 float 语义。"""
+    low = np.asarray([score < beta for score in scores], dtype=bool) & ~pos
+    if gate is None:
+        return low, np.zeros_like(low)
+    feature, comparison, threshold = gate
+    compare = lt if comparison == "<" else ge
+    lower, upper = DISTRIBUTION_WINDOW
+    eligible = np.asarray([
+        row.alive_wolves == 2 and lower <= row.score < upper and compare(getattr(row, feature), threshold)
+        for row in rows
+    ], dtype=bool)
+    return low, eligible & ~(pos | low)
+
+
+def _negative_diagnostics(weighted_rows, mask, total_units):
+    selected = [entry for entry, included in zip(weighted_rows, mask, strict=True) if included]
+    result = _region_summary(selected, total_units, 1, detailed=True)
+    empty_units = sum(weight for row, weight in selected if row.successful_empty)
+    miss_units = sum(weight for row, weight in selected if not row.y and not row.successful_empty)
     return {
-        "beta": str(beta), "alpha": str(alpha),
-        "overall": _rule_summary(entries, full_units),
-        "subgroups": {
-            name: _rule_summary([entry for entry in entries if contains(entry[0])], full_units)
-            for name, contains in groups.items()
+        **result, "successful_empty_mass": _ratio(empty_units, total_units),
+        "nonempty_team_miss_mass": _ratio(miss_units, total_units),
+        "team_hit_mass": result["error_mass"],
+    }
+
+
+def _check_negative_split(whole, parts):
+    for field in ("mass_units", "error_units"):
+        if whole[field] != sum(region[field] for region in parts):
+            raise ValueError("NEG 质量或错误质量与子区域分解不一致")
+
+
+def _bootstrap_metric(point, values):
+    interval = report_study.interval(values)
+    return {
+        "point_estimate": point, **interval,
+        "zero_denominator_replicates": interval["replicates"] - interval["valid_replicates"],
+    }
+
+
+def _budget_summary(region, budget, risk_metric):
+    interval = risk_metric["percentile_95"]
+    return {
+        "development_budget": budget,
+        "empirical_met": (region["mass_units"] > 0
+                          and region["error_units"] <= Fraction(budget) * region["mass_units"]),
+        "interval_upper_within_budget": None if interval is None else interval[1] <= float(budget),
+    }
+
+
+def _relative_negative(weighted_rows, total_units, low, additional, direct_mask, neg, direct_neg):
+    mask = low | additional
+    added_mask, removed_mask = mask & ~direct_mask, direct_mask & ~mask
+    added = _negative_diagnostics(weighted_rows, added_mask, total_units)
+    removed = _negative_diagnostics(weighted_rows, removed_mask, total_units)
+    by_region = {
+        "L": _negative_diagnostics(weighted_rows, added_mask & low, total_units),
+        "A": _negative_diagnostics(weighted_rows, added_mask & additional, total_units),
+    }
+    _check_negative_split(added, by_region.values())
+    for field in ("mass_units", "error_units"):
+        if neg[field] - direct_neg[field] != added[field] - removed[field]:
+            raise ValueError("相对 Direct 的 NEG 质量或错误质量与新增、撤回分解不一致")
+    return {
+        "added": added, "removed": removed, "added_by_region": by_region,
+        "net_coverage_gain": _ratio(neg["mass_units"] - direct_neg["mass_units"], total_units),
+    }
+
+
+def evaluate_distribution(rows):
+    """对同一 Fold 4 人口应用八个冻结规则，按整局配对重采样。"""
+    weights = game_weight_units(rows)
+    weighted_rows = list(zip(rows, weights, strict=True))
+    total_units = sum(weights)
+    scores = [Decimal.from_float(row.score) for row in rows]
+    pos = np.asarray([score > DISTRIBUTION_ALPHA for score in scores], dtype=bool)
+    labels = np.asarray([row.y for row in rows], dtype=bool)
+
+    sizes = Counter(row.game_id for row in rows)
+    games = sorted(sizes)
+    game_index = {game: index for index, game in enumerate(games)}
+    row_games = np.asarray([game_index[row.game_id] for row in rows])
+    game_sizes = np.asarray([sizes[game] for game in games])
+    game_weights = 1 / game_sizes
+    draws = bootstrap_indices(games, frozen.BOOTSTRAP_REPLICATES, frozen.BOOTSTRAP_SEED)
+
+    def counts(mask):
+        return np.bincount(row_games[mask], minlength=len(games))
+
+    def resample(numerator, denominator):
+        return report_study.bootstrap_ratio(numerator, denominator, game_weights, draws)
+
+    pos_counts = counts(pos)
+    pos_risks = resample(counts(pos & ~labels), pos_counts)
+    pos_selected = [entry for entry, included in zip(weighted_rows, pos, strict=True) if included]
+    pos_summary = _region_summary(pos_selected, total_units, 0, detailed=True)
+    pos_metric = _bootstrap_metric(pos_summary["error_rate"], pos_risks)
+    pos_budget = _budget_summary(pos_summary, DISTRIBUTION_POS_BUDGET, pos_metric)
+
+    operating_points = {}
+    for neg_budget, betas in DISTRIBUTION_BETAS.items():
+        rules, masks, replicates = {}, {}, {}
+        for method, beta in betas.items():
+            gate = DISTRIBUTION_GATES[method]
+            low, additional = _negative_masks(rows, scores, pos, Decimal(beta), gate)
+            negative = low | additional
+            entries = []
+            for (row, weight), is_pos, is_neg in zip(weighted_rows, pos, negative, strict=True):
+                if is_pos:
+                    decision = Region.POS
+                elif is_neg:
+                    decision = Region.NEG
+                else:
+                    decision = Region.BND
+                entries.append((row, weight, decision))
+            evaluated = _candidate_summary(entries, total_units, detailed=True)
+            overall = evaluated["overall"]
+            if (not np.array_equal(pos, [decision is Region.POS for _, _, decision in entries])
+                    or overall["regions"]["POS"] != pos_summary):
+                raise ValueError(f"{method} 的 POS 人口或统计与共同 POS 不一致")
+
+            neg = overall["regions"]["NEG"]
+            neg_counts, neg_errors = counts(negative), counts(negative & labels)
+            metrics = {
+                "coverage": resample(pos_counts + neg_counts, game_sizes),
+                "neg_error_rate": resample(neg_errors, neg_counts),
+                "neg_error_mass": resample(neg_errors, game_sizes),
+            }
+            bootstrap = {
+                "coverage": _bootstrap_metric(overall["coverage"], metrics["coverage"]),
+                "neg_error_rate": _bootstrap_metric(neg["error_rate"], metrics["neg_error_rate"]),
+                "pos_error_rate": pos_metric,
+                "neg_error_mass": _bootstrap_metric(neg["error_mass"], metrics["neg_error_mass"]),
+            }
+            rules[method] = {
+                "beta": beta, "alpha": str(DISTRIBUTION_ALPHA),
+                "gate": None if gate is None else dict(zip(("feature", "comparison", "threshold"), gate)),
+                **evaluated, "bootstrap": bootstrap,
+                "risk_budgets": {"NEG": _budget_summary(neg, neg_budget, bootstrap["neg_error_rate"]),
+                                 "POS": pos_budget},
+            }
+            masks[method], replicates[method] = (low, additional), metrics
+
+        direct_mask = masks["Direct"][0]
+        direct_neg = rules["Direct"]["overall"]["regions"]["NEG"]
+        for method, result in rules.items():
+            if method == "Direct":
+                continue
+            low, additional = masks[method]
+            neg = result["overall"]["regions"]["NEG"]
+            subregions = {"L": _negative_diagnostics(weighted_rows, low, total_units),
+                          "A": _negative_diagnostics(weighted_rows, additional, total_units)}
+            _check_negative_split(neg, subregions.values())
+            result["neg_subregions"] = subregions
+            change = _relative_negative(weighted_rows, total_units, low, additional, direct_mask, neg, direct_neg)
+            risk_diff = None
+            if neg["error_rate"] is not None and direct_neg["error_rate"] is not None:
+                risk_diff = neg["error_rate"] - direct_neg["error_rate"]
+            points = {"coverage": change["net_coverage_gain"], "neg_error_rate": risk_diff,
+                      "neg_error_mass": _ratio(neg["error_units"] - direct_neg["error_units"], total_units)}
+            change["paired_differences"] = {
+                name: _bootstrap_metric(point, replicates[method][name] - replicates["Direct"][name])
+                for name, point in points.items()
+            }
+            result["relative_to_direct"] = change
+        operating_points[neg_budget] = {"rules": rules}
+
+    return {
+        "weighting": "game_equal",
+        "frozen_parameter_source": {"origin": "researcher_supplied_server_development_results",
+                                    "folds": SELECTION_FOLDS},
+        "primary_comparison": {"neg_budget": "0.15", "pos_budget": DISTRIBUTION_POS_BUDGET,
+                               "reference": "Direct", "candidate": "TV-0.10"},
+        "additional_neg_window": {"alive_wolves": 2, "lower_inclusive": DISTRIBUTION_WINDOW[0],
+                                  "upper_exclusive": DISTRIBUTION_WINDOW[1], "comparison_type": "float"},
+        "shared_pos": {
+            "alpha": str(DISTRIBUTION_ALPHA), "matched_all_rules": True,
+            "region": pos_summary, "risk_budget": pos_budget, "bootstrap": pos_metric,
+            "paired_error_rate_difference": _bootstrap_metric(
+                0.0 if pos_summary["mass_units"] else None, pos_risks - pos_risks,
+            ),
         },
+        "bootstrap": {"version": BOOTSTRAP_VERSION, "unit": "game", "seed": frozen.BOOTSTRAP_SEED,
+                      "replicates": frozen.BOOTSTRAP_REPLICATES, "scope": "fixed_rules_exploratory_marginal",
+                      "minimum_valid_fraction_for_interval": report_study.MIN_VALID_BOOTSTRAP},
+        "operating_points": operating_points,
     }
 
 
@@ -453,6 +691,7 @@ def main(argv=None):
     evaluate = stages.add_parser("evaluate", help="只用 Fold 4 评价给定的冻结阈值")
     evaluate.add_argument("--beta", type=_unit_decimal, required=True, help="NEG 切点，可直接复制输出中的十进制值")
     evaluate.add_argument("--alpha", type=_unit_decimal, required=True, help="POS 切点，可直接复制输出中的十进制值")
+    stages.add_parser("evaluate-distribution", help="只用 Fold 4 评价八个冻结分布感知规则")
     args = parser.parse_args(argv)
     if args.stage == "develop":
         if (args.neg_risk is None) != (args.pos_risk is None):
@@ -461,14 +700,19 @@ def main(argv=None):
         partitions, source = load_development(DEVELOPMENT_FOLDS)
         result = analyze_development(partitions, budgets=budgets)
     else:
-        if args.beta > args.alpha:
+        if args.stage == "evaluate" and args.beta > args.alpha:
             parser.error("须满足 beta ≤ alpha")
         partitions, source = load_development((EVALUATION_FOLD,))
         rows = partitions[EVALUATION_FOLD]
         audit = population_by_wolf_count(rows)
         _check_population(audit["overall"], EVALUATION_POPULATION, "Fold 4")
-        result = {"stage": "exploratory_fold4_evaluation", "folds": (EVALUATION_FOLD,),
-                  "population": audit, **evaluate_candidate(rows, args.beta, args.alpha)}
+        if args.stage == "evaluate":
+            stage = "exploratory_fold4_evaluation"
+            evaluation = evaluate_candidate(rows, args.beta, args.alpha)
+        else:
+            stage = "exploratory_fold4_distribution_evaluation"
+            evaluation = evaluate_distribution(rows)
+        result = {"stage": stage, "folds": (EVALUATION_FOLD,), "population": audit, **evaluation}
     result["source"] = source
     result["boundary_policy"] = "DEFER_FIRST"
     result["threshold_encoding"] = "exact_decimal"
