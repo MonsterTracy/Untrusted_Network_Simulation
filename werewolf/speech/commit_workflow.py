@@ -1,8 +1,8 @@
-"""Phase 3B orchestration at an already collected PRE; no planner imports."""
+"""在已采集的 PRE 上实现发言计划或原样提交指定正文。"""
 from werewolf.speech.realization import PublicRealizationContext, realize_parse_verify
 from werewolf.agents.prompt_template_v0 import build_public_claim_catalog
 from werewolf.canonical_collection.public_history import freeze_public_event_history
-from werewolf.speech.verified_commit import bind_verified_speech
+from werewolf.speech.verified_commit import bind_audited_public_speech, bind_verified_speech
 
 
 from dataclasses import dataclass
@@ -216,3 +216,26 @@ def realize_and_commit(payload, *, env, actor, recorder, precommit_audit=None):
         _audit_require(isinstance(result, tuple) and len(result) == 4,
                        'native commit result is unconfirmed; stop without retry or fallback')
     return result
+
+
+def commit_public_speech(speech, *, pre, env, recorder, handoff):
+    """在指定 PRE 上原样解析并提交调用者已确定的公开发言。"""
+    if recorder._env is not env or recorder.public_pre_for_handoff(handoff) != pre:
+        raise ValueError("公开发言要求匹配当前 pending PRE")
+    state = pre.public_temporal_state
+    phase = {"discussion": "speech", "pk_discussion": "speech_pk"}[state.phase.value]
+    speaker_id = env.current_act_idx + 1
+    if (env.phase != phase or env.day != state.day or f"player{speaker_id}" != pre.current_speaker
+            or freeze_public_event_history(env.public_events).digest != pre.public_event_digest):
+        raise ValueError("当前发言机会已偏离 PRE")
+
+    perceiver = env.speech_perceiver
+    with recorder.call_audit.speech_perception_context(
+        event_id=f"event-{len(env.public_events):06d}", boundary_id=pre.boundary_id, speaker_id=speaker_id,
+    ):
+        perception = perceiver.parse_with_audit(speaker=speaker_id, speech=speech, day=state.day, phase=phase)
+    envelope = bind_audited_public_speech(
+        speech=speech, speaker=pre.current_speaker, perception=perception, day=state.day, phase=phase,
+        public_history_digest=pre.public_event_digest, perceiver=perceiver,
+    )
+    return recorder.commit_verified_speech(env, envelope)

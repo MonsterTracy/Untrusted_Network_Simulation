@@ -367,6 +367,32 @@ class GPTAgent(LLMAgent):
             },
         }
 
+    def generate_speech_candidates(self, pre, *, known_wolf_ids, q):
+        """使用同一 PRE 的冻结 Q，一次生成有序的完整发言候选。"""
+        from werewolf.observer_dtrs.speech_candidates import (
+            SPEECH_CANDIDATE_PROMPT,
+            build_candidate_context,
+            candidate_response_properties,
+            parse_speech_candidates,
+        )
+
+        context = build_candidate_context(pre, known_wolf_ids, q)
+        replyable = context["replyable_observers"]
+        prompt = SPEECH_CANDIDATE_PROMPT + "\n\n" + json.dumps(context, ensure_ascii=False)
+        temperature, max_tokens = self._request_limits()
+        content, metadata = self._chat_with_metadata(
+            [{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=self._decision_response_format(
+                "speech_candidates", **candidate_response_properties(replyable),
+            ),
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        if metadata["finish_reason"] == "length":
+            raise GameplayActionValidationError("发言候选响应被截断")
+        return parse_speech_candidates(content, pre=pre, replyable_observers=replyable)
+
     def select_report_event_plan(self, context, *, basis_refs):
         """在私有策略调用中选一个合法发言计划，返回索引和显式依据。"""
         candidate_indices = list(range(len(context["candidates"])))
