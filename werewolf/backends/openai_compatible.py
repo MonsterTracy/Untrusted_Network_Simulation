@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from ipaddress import ip_address
 from time import perf_counter
 from urllib.parse import urlparse
@@ -26,6 +27,7 @@ class _RequestContext:
     kind: str = "UNKNOWN"
     attempt: int | str = "UNKNOWN"
     strategy: str | None = None
+    direct_tom: dict | None = None
 
 
 _request_context = ContextVar("openai_request_context", default=None)
@@ -191,7 +193,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
             create = client.chat.completions.create
             if scope is not None and scope.records is not None:
-                record = {
+                pending_record = {
                     "request_index": len(scope.records) + 1,
                     "game_seed": scope.game_seed, "step": scope.step, "seat": scope.seat,
                     "method": scope.method, "phase": scope.phase, "kind": scope.kind,
@@ -201,8 +203,15 @@ class OpenAICompatibleBackend(LLMBackend):
                     "sdk_retries": 0 if scope.gameplay_only or getattr(client, "max_retries", None) == 0 else "UNKNOWN",
                     **dict.fromkeys(_TOKEN_FIELDS, "UNKNOWN"),
                 }
-                scope.records.append(record)
+                if scope.direct_tom is not None:
+                    receipt = dict(scope.direct_tom)
+                    start, end = receipt.pop("span")
+                    payload = request["messages"][0]["content"][start:end]
+                    receipt["payload_digest"] = sha256(payload.encode("utf-8")).hexdigest()
+                    pending_record["direct_tom"] = receipt
                 started = perf_counter()
+                record = pending_record
+                scope.records.append(record)
 
             response = create(**request)
             if record is not None:

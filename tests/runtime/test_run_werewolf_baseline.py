@@ -4,6 +4,7 @@ from hashlib import sha256
 from itertools import combinations
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -507,3 +508,136 @@ def test_multimind_requires_pinned_device_and_checkpoint_before_dispatch(paired_
     wrong[3] = str(plan_path.parent / "missing-checkpoint")
     assert baseline.main(["run", "--plan", str(plan_path), "--first-scenario", *wrong]) == 1
     assert not (plan_path.parent / "attempts").exists()
+
+
+def _direct_tom_plan(frozen_plan, monkeypatch, *, smoke=False):
+    from scripts import tom_gameplay_collection as collection
+
+    base_path, config_path, parent = frozen_plan
+    old = base_path.parent / "historical" / "scenarios.json"
+    write_once(old, parent)
+    monkeypatch.setattr(collection, "BASELINE_PLAN_SHA256", parent["plan_sha256"])
+    monkeypatch.setattr(baseline, "_source_identity", lambda **kwargs: parent["source_identity"])
+    directory = base_path.parent / baseline.DIRECT_TOM_EXPERIMENT
+    destination = (directory / "smoke" if smoke else directory) / "scenarios.json"
+    plan_options = ["--runtime-config", str(config_path), "--direct-tom", "--paired-plan", str(old)]
+    if smoke:
+        plan_options.append("--smoke")
+    assert baseline.main(["plan", "--plan", str(destination), *plan_options]) == 0
+    run_options = ["run", "--plan", str(destination), "--runtime-config", str(config_path), "--first-scenario",
+                   "--checkpoint", str(base_path.parent / "checkpoint"), "--temporal", str(base_path.parent / "temporal")]
+    return old, destination, baseline._read_plan(destination), run_options
+
+
+@pytest.mark.parametrize("smoke", (False, True))
+def test_direct_tom_paired_plan_run_and_summary(frozen_plan, monkeypatch, capsys, smoke):
+    from scripts import tom_gameplay_ablation as ablation
+    from tests.tom.test_gameplay_ablation import _matrix
+
+    old, destination, plan, run = _direct_tom_plan(frozen_plan, monkeypatch, smoke=smoke)
+    original = old.read_bytes()
+    parent = baseline._read_plan(old)
+    assert plan["paired_plan_sha256"] == parent["plan_sha256"]
+    scene = plan["scenarios"][0]
+    if smoke:
+        assert len(plan["scenarios"]) == 1 and scene["seed"] == baseline.DIRECT_TOM_SMOKE_SEED
+        assert not any(item["seed"] == scene["seed"] for item in parent["scenarios"])
+    else:
+        assert plan["scenarios"] == parent["scenarios"]
+        empty = _summary(destination, capsys)
+        assert len(empty["tasks"]) == 420 and empty["paired"]["N"] == 0
+        assert [task["arm"] for task in empty["tasks"][:4]] == ["NoToM", "Direct-ToM", "Direct-ToM", "NoToM"]
+        assert [task["arm"] for task in empty["tasks"][210:212]] == ["Direct-ToM", "NoToM"]
+
+    class ScenarioBackend(_GameplayBackend):
+        def _vote(self, _prompt, legal):
+            return next((seat for seat in legal if seat and scene["roles"][seat - 1] != "Werewolf"), 0)
+
+    client = _GameplayClient(ScenarioBackend("Werewolf"))
+    backend = OpenAICompatibleBackend(client=client, supports_json_schema=True)
+    monkeypatch.setattr(baseline, "load_named_backends", Mock(return_value={"local_qwen": backend}))
+    prefixes = []
+
+    def predict(prefix, *, record_forward):
+        prefixes.append(prefix.boundary_id)
+        record_forward(0.25)
+        return _matrix()
+
+    def load(checkpoint, temporal, device):
+        assert checkpoint.name == "checkpoint" and temporal.name == "temporal" and device == "cpu"
+        assert client.calls  # 加载前 NoToM 已结束。
+        _, control = baseline._task_paths(destination.parent, scene, "NoToM")
+        attempt, _ = baseline._task_paths(destination.parent, scene, "Direct-ToM")
+        assert control.exists() and attempt.exists()
+        return SimpleNamespace(identity=plan["direct_tom"]["predictor"], predict=predict)
+
+    loader = Mock(side_effect=load)
+    monkeypatch.setattr(ablation, "Epoch35GameplayPredictor", loader)
+    assert baseline.main(run) == 0
+    requests = len(client.calls)
+    assert baseline.main(run) == 0
+    assert len(client.calls) == requests and loader.call_count == 1
+    assert len(prefixes) == len(set(prefixes)) > 0 and old.read_bytes() == original
+    summary = _summary(destination, capsys)
+    assert all(row["method"] == "react" and row["winner"] == "Werewolf" for row in summary["games"])
+    stats = summary["arms"]["Direct-ToM"]
+    assert stats["completed"] == stats["replay_passed"] == 1
+    assert stats["cost"]["llm_backend_seconds"]["sum"] > 0
+    evidence = stats["direct_tom"]["valid_games"]
+    assert evidence["A"] == evidence["P"] == evidence["U"] == evidence["S"] == len(prefixes)
+    assert evidence["forward_seconds"]["observed_sum"] == 0.25 * len(prefixes)
+    if smoke:
+        assert summary["smoke_verified"] and "paired" not in summary and len(summary["tasks"]) == 2
+        assert evidence["by_phase"]["speech_pk"]["E"] == 0
+
+        def fail_replay(_result):
+            raise ValueError("scripted independent replay failure")
+
+        monkeypatch.setattr(baseline.game_runtime, "replay_gameplay_history", fail_replay)
+        without_votes = _summary(destination, capsys)
+        assert not without_votes["smoke_verified"]
+        assert all(arm["completed"] == 1 and arm["votes"]["games_with_vote_evidence"] == 0
+                   for arm in without_votes["arms"].values())
+    else:
+        paired = summary["paired"]
+        assert paired["N"] == paired["n11"] == 1 and paired["exact_mcnemar_p"] == 1
+        assert paired["metrics"]["WWR"]["bootstrap_95_ci"] == [0.0, 0.0]
+        assert paired["bootstrap_replicates"] == 100_000
+
+
+def test_direct_tom_resume_preserves_explicit_failure_and_unfinished_claim(frozen_plan, monkeypatch, capsys):
+    old, destination, plan, run = _direct_tom_plan(frozen_plan, monkeypatch)
+    scene = plan["scenarios"][0]
+    _, no_tom = _publish_sample(destination, plan, scene, "NoToM", _sample_result(
+        plan, scene, "react", winner=None, replay_winner=None, terminal_reached=False, failure_type="ValueError",
+    ))
+    _, pending = _publish_sample(destination, plan, scene, "Direct-ToM")
+    original = no_tom.read_bytes()
+    assert baseline.main(run) == 0  # fixture 会拒绝任何非 Mock 的后端加载。
+    summary = _summary(destination, capsys)
+    assert no_tom.read_bytes() == original and not pending.exists()
+    assert [task["status"] for task in summary["tasks"][:2]] == ["failed", "unknown"]
+    evidence = summary["arms"]["Direct-ToM"]["direct_tom"]["all_observed_attempts"]
+    assert evidence["E"] == evidence["A"] == evidence["P"] == evidence["U"] == evidence["S"] == "UNKNOWN"
+    assert summary["paired"]["N"] == 0
+
+
+def test_direct_tom_pair_keeps_valid_games_without_exposure_and_recomputes_vote_denominators():
+    from werewolf import game_runtime
+
+    def row(scene, arm, wins, eligible_rounds, votes):
+        counts = dict.fromkeys(game_runtime._VOTE_FIELDS, 0)
+        counts.update(wolf_eligible_rounds=eligible_rounds, wolf_votes_received=votes)
+        return {"scenario_id": scene, "arm": arm, "winner": "Werewolf" if wins else "Villager",
+                "vote_counts": counts, "E": 0, "U": 0}
+
+    plan = {"scenarios": [{"scenario_id": scene} for scene in ("first", "second", "unpaired")]}
+    paired = baseline._direct_tom_pairs(plan, [
+        row("first", "NoToM", False, 2, 1), row("first", "Direct-ToM", True, 2, 2),
+        row("second", "NoToM", True, 4, 0), row("second", "Direct-ToM", True, 2, 1),
+        row("unpaired", "Direct-ToM", False, 2, 0),
+    ])
+    assert (paired["N"], paired["n00"], paired["n01"], paired["n10"], paired["n11"]) == (2, 0, 1, 0, 1)
+    assert paired["metrics"]["WWR"]["delta"] == 0.5 and paired["metrics"]["WWR"]["bootstrap_95_ci"] == [0.0, 1.0]
+    assert paired["metrics"]["VPR"]["delta"] == pytest.approx(3 / 4 - 1 / 6)
+    assert paired["exact_mcnemar_p"] == 1

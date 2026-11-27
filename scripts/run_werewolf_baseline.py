@@ -30,6 +30,9 @@ WOLF_PAIRS = tuple(combinations(SEATS, 2))
 ROLE_COUNTS = {"Werewolf": 2, "Seer": 1, "Witch": 1, "Villager": 3}
 METHOD_NAMES = {"react": "react", "dpins:no": "belief", "dpins:llm": "llm-ins", "dpins:random": "random-ins",
                 MULTIMIND_METHOD: MULTIMIND_METHOD}
+DIRECT_TOM_EXPERIMENT = "paper-tom-gameplay-ablation-direct"
+DIRECT_TOM_ARMS = ("NoToM", "Direct-ToM")
+DIRECT_TOM_SMOKE_SEED = 17
 WOLF_PROFILE = "baseline-wolf"
 BATCH_SIZE = 5 * len(WOLF_PAIRS)
 MISSING = object()
@@ -114,7 +117,7 @@ def _read_config(path):
     return config, sha256_bytes(raw)
 
 
-def _source_identity(*, multimind=False):
+def _source_identity(*, multimind=False, direct_tom=False):
     entry = Path(__file__).resolve()
     repo = entry.parents[1]
     identity = game_runtime._gameplay_source_identity(include_file_digests=True, multimind=multimind)
@@ -122,6 +125,12 @@ def _source_identity(*, multimind=False):
         ["git", "--no-optional-locks", "symbolic-ref", "--short", "HEAD"], cwd=repo, text=True,
     ).strip()
     identity["file_sha256"][entry.relative_to(repo).as_posix()] = sha256_bytes(entry.read_bytes())
+    if direct_tom:
+        for name in ("scripts/tom_gameplay_ablation.py", "scripts/analyze_tom_gameplay_ablation.py",
+                     "werewolf/structured_history.py", "werewolf/tom/dataset.py", "werewolf/tom/evaluation.py",
+                     "werewolf/tom/final_evaluation.py", "werewolf/tom/makto.py", "werewolf/tom/qwen3_large.py",
+                     "werewolf/tom/temporal.py"):
+            identity["file_sha256"][name] = sha256_bytes((repo / name).read_bytes())
     return game_runtime._copy_gameplay_source_identity(identity)
 
 
@@ -139,10 +148,31 @@ def _read_plan(path):
     return _validate_plan(plan)
 
 
+def _direct_tom_smoke_scene(default_profile):
+    return {**_scenarios(default_profile)[0], "scenario_id": f"scenario-{DIRECT_TOM_SMOKE_SEED}",
+            "seed": DIRECT_TOM_SMOKE_SEED}
+
+
 def _validate_plan(plan):
     body = {key: value for key, value in plan.items() if key != "plan_sha256"}
     if plan.get("plan_sha256") != digest(body):
         raise ValueError("plan SHA-256 mismatch")
+    if "direct_tom" in plan:
+        from scripts.tom_gameplay_ablation import epoch35_identity
+        from scripts.tom_gameplay_collection import BASELINE_PLAN_SHA256
+
+        direct = plan["direct_tom"]
+        if ({"methods", "reasoner"} & plan.keys() or plan.get("sdk_retries") != 0
+                or plan.get("paired_plan_sha256") != BASELINE_PLAN_SHA256
+                or direct["experiment_id"] != DIRECT_TOM_EXPERIMENT or type(direct["smoke"]) is not bool
+                or direct["predictor"] != epoch35_identity(direct["predictor"]["device"])):
+            raise ValueError("Direct-ToM plan differs from the frozen experiment inputs")
+        if direct["smoke"]:
+            if plan["scenarios"] != [_direct_tom_smoke_scene(plan["default_profile"])]:
+                raise ValueError("Direct-ToM Smoke requires its independent fixed scenario")
+        else:
+            _validate_scenarios(plan["scenarios"], plan["default_profile"])
+        return plan
     _validate_scenarios(plan["scenarios"], plan["default_profile"])
     if {"methods", "paired_plan_sha256", "reasoner"} & plan.keys():
         if plan.get("methods") != [MULTIMIND_METHOD] or plan.get("sdk_retries") != 0:
@@ -156,23 +186,50 @@ def _validate_plan(plan):
     return plan
 
 
+def _read_paired_plan(path, output, config_sha256, default_profile):
+    source_root, output_root = safe_path(path).parent, safe_path(output).parent
+    if source_root.is_relative_to(output_root) or output_root.is_relative_to(source_root):
+        raise ValueError("paired and historical plan output roots must be disjoint")
+    parent = _read_plan(path)
+    if {"methods", "direct_tom"} & parent.keys():
+        raise ValueError("--paired-plan must be the frozen four-method plan")
+    if (parent["runtime_config_sha256"], parent["default_profile"]) != (config_sha256, default_profile):
+        raise ValueError("the paired plan's exact runtime YAML and default profile are required")
+    return parent
+
+
 def _write_plan(args):
     config, config_sha256 = _read_config(args.runtime_config)
     default_profile = config["agent_config"]["all_candidates"][0]["profile_name"]
-    checkpoint_options = (args.paired_plan, args.reasoner_checkpoint, args.reasoner_checkpoint_digest, args.reasoner_device)
-    if args.method == MULTIMIND_METHOD:
+    checkpoint_options = (args.reasoner_checkpoint, args.reasoner_checkpoint_digest, args.reasoner_device)
+    if args.direct_tom:
+        from scripts.tom_gameplay_ablation import epoch35_identity
+        from scripts.tom_gameplay_collection import BASELINE_PLAN_SHA256
+
+        if not args.paired_plan or any(checkpoint_options):
+            raise ValueError("Direct-ToM requires --paired-plan without MultiMind Reasoner settings")
+        parent = _read_paired_plan(args.paired_plan, args.plan, config_sha256, default_profile)
+        if parent["plan_sha256"] != BASELINE_PLAN_SHA256:
+            raise ValueError("Direct-ToM requires the exact frozen four-method plan")
+        scenarios = parent["scenarios"]
+        if args.smoke:
+            if any(scene["seed"] == DIRECT_TOM_SMOKE_SEED for scene in scenarios):
+                raise ValueError("Direct-ToM Smoke seed overlaps the formal plan")
+            scenarios = [_direct_tom_smoke_scene(default_profile)]
+        plan = {**parent, "scenarios": scenarios, "source_identity": _source_identity(direct_tom=True),
+                "paired_plan_sha256": parent["plan_sha256"], "direct_tom": {
+                    "experiment_id": DIRECT_TOM_EXPERIMENT, "smoke": args.smoke,
+                    "predictor": epoch35_identity(args.predictor_device or "cpu"),
+                }}
+        del plan["plan_sha256"]
+    elif args.smoke or args.predictor_device is not None:
+        raise ValueError("--smoke and --predictor-device require --direct-tom")
+    elif args.method == MULTIMIND_METHOD:
         from werewolf.tom.multimind import multimind_device, open_multimind_checkpoint
 
-        if not all(checkpoint_options):
+        if not args.paired_plan or not all(checkpoint_options):
             raise ValueError("MultiMind plan requires --paired-plan, checkpoint path and digest, and device")
-        source_root, output_root = safe_path(args.paired_plan).parent, safe_path(args.plan).parent
-        if source_root.is_relative_to(output_root) or output_root.is_relative_to(source_root):
-            raise ValueError("MultiMind and historical plan output roots must be disjoint")
-        parent = _read_plan(args.paired_plan)
-        if "methods" in parent:
-            raise ValueError("--paired-plan must be the frozen four-method plan")
-        if (parent["runtime_config_sha256"], parent["default_profile"]) != (config_sha256, default_profile):
-            raise ValueError("MultiMind requires the paired plan's exact runtime YAML and default profile")
+        parent = _read_paired_plan(args.paired_plan, args.plan, config_sha256, default_profile)
         checkpoint = open_multimind_checkpoint(safe_path(args.reasoner_checkpoint), args.reasoner_checkpoint_digest)
         scenarios = parent["scenarios"]
         plan = {**parent, "source_identity": _source_identity(multimind=True), "methods": [MULTIMIND_METHOD],
@@ -181,8 +238,8 @@ def _write_plan(args):
                              "device": str(multimind_device(args.reasoner_device))}}
         del plan["plan_sha256"]
     else:
-        if any(checkpoint_options):
-            raise ValueError("paired plan and Reasoner settings require --method multimind")
+        if args.paired_plan or any(checkpoint_options):
+            raise ValueError("paired plan requires --method multimind or --direct-tom")
         scenarios = _scenarios(default_profile)
         plan = {
             "default_profile": default_profile, "runtime_config_sha256": config_sha256,
@@ -196,12 +253,22 @@ def _write_plan(args):
     print(json.dumps({"plan": str(args.plan), "plan_sha256": plan["plan_sha256"], "scenarios": len(scenarios)}))
 
 
+def _task_order(plan, scene, ordinal):
+    if "direct_tom" in plan:
+        return DIRECT_TOM_ARMS if ordinal % 2 == 0 else DIRECT_TOM_ARMS[::-1]
+    return plan.get("methods", scene["method_order"])
+
+
 def _task_key(plan, scene, method):
-    return {"plan_sha256": plan["plan_sha256"], "scenario_id": scene["scenario_id"], "method": method}
+    key = {"plan_sha256": plan["plan_sha256"], "scenario_id": scene["scenario_id"], "method": method}
+    if "direct_tom" in plan:
+        key.update(method="react", arm=method)
+    return key
 
 
 def _task_paths(output, scene, method):
-    filename = f"{scene['scenario_id']}-{METHOD_NAMES[method]}.json"
+    name = method.lower() if method in DIRECT_TOM_ARMS else METHOD_NAMES[method]
+    filename = f"{scene['scenario_id']}-{name}.json"
     return output / "attempts" / filename, output / "results" / filename
 
 
@@ -265,7 +332,7 @@ def _read_task(plan, scene, method, attempt_path, result_path):
         game = result["gameplay"]
         if result.get("gameplay_sha256") != digest(game):
             raise ValueError("gameplay result SHA-256 mismatch")
-        return started, _game_status(game, plan, scene, method), game, None
+        return started, _game_status(game, plan, scene, task["method"]), game, None
     except (OSError, ValueError, KeyError, TypeError) as error:
         return started, "unknown", None, f"{result_path.name}: {error}"
 
@@ -273,23 +340,48 @@ def _read_task(plan, scene, method, attempt_path, result_path):
 def _run(args, plan):
     config, config_sha256 = _read_config(args.runtime_config)
     multimind = "reasoner" in plan
-    source = _source_identity(multimind=True) if multimind else _source_identity()
+    direct = plan.get("direct_tom")
+    if direct is not None:
+        source = _source_identity(direct_tom=True)
+        if args.checkpoint is None or args.temporal is None:
+            raise ValueError("Direct-ToM run requires --checkpoint and --temporal")
+        if direct["smoke"] and not args.first_scenario:
+            raise ValueError("Direct-ToM Smoke runs with --first-scenario")
+    else:
+        source = _source_identity(multimind=True) if multimind else _source_identity()
+        if args.checkpoint is not None or args.temporal is not None:
+            raise ValueError("--checkpoint and --temporal require a Direct-ToM plan")
     if config_sha256 != plan["runtime_config_sha256"] or source != plan["source_identity"]:
         raise ValueError("runtime configuration or source has changed since the plan was frozen")
     if multimind and (args.reasoner_checkpoint is None or args.reasoner_device != plan["reasoner"]["device"]):
         raise ValueError("MultiMind run requires an explicit checkpoint path and the frozen --reasoner-device")
     if not multimind and (args.reasoner_checkpoint is not None or args.reasoner_device is not None):
         raise ValueError("Reasoner settings require a MultiMind plan")
-    scenes = plan["scenarios"][:1] if args.first_scenario else [
-        scene for scene in plan["scenarios"] if scene["batch"] == args.batch
+    scenes = list(enumerate(plan["scenarios"]))
+    scenes = scenes[:1] if args.first_scenario else [
+        (ordinal, scene) for ordinal, scene in scenes if scene["batch"] == args.batch
     ]
     default = config["agent_config"]["all_candidates"][0]
     backends = None
     reasoner = None
-    for scene in scenes:
-        for method in plan.get("methods", scene["method_order"]):
-            attempt_path, result_path = _task_paths(args.plan.parent, scene, method)
-            _, status, _, problem = _read_task(plan, scene, method, attempt_path, result_path)
+    epoch35 = None
+
+    def predict(prefix, observation, evidence):
+        from scripts.tom_gameplay_ablation import Epoch35GameplayPredictor, direct_tom_payload
+
+        nonlocal epoch35
+        if epoch35 is None:
+            model = Epoch35GameplayPredictor(safe_path(args.checkpoint), safe_path(args.temporal),
+                                             direct["predictor"]["device"])
+            if model.identity != direct["predictor"]:
+                raise ValueError("Epoch 35 predictor differs from the frozen Direct-ToM plan")
+            epoch35 = model
+        return direct_tom_payload(prefix, observation, predictor=epoch35, evidence=evidence)
+
+    for ordinal, scene in scenes:
+        for label in _task_order(plan, scene, ordinal):
+            attempt_path, result_path = _task_paths(args.plan.parent, scene, label)
+            _, status, _, problem = _read_task(plan, scene, label, attempt_path, result_path)
             if problem is not None:
                 raise ValueError(problem)
             if status != "not_started":
@@ -305,6 +397,8 @@ def _run(args, plan):
                     raise ValueError(f"MultiMind Reasoner could not be loaded on {args.reasoner_device}: {error}") from error
             if backends is None:
                 backends = load_named_backends(config, env_file=None, max_retries=0)
+            task = _task_key(plan, scene, label)
+            method = task["method"]
             wolf = {**default, "profile_name": WOLF_PROFILE,
                     "model_params": {**default["model_params"], "decision_method": method}}
             game_config = {**config, "agent_config": {
@@ -317,21 +411,25 @@ def _run(args, plan):
             if (list(roles) != scene["roles"] or list(profiles) != scene["seat_profiles"]
                     or [agent.decision_method for agent in agents] != _decision_methods(scene, method)):
                 raise ValueError("runtime seats do not match the frozen scenario and method")
-            task = _task_key(plan, scene, method)
+            options = {"multimind_reasoner": reasoner} if multimind else {}
+            if direct is not None:
+                options["direct_tom_game_id"] = f"{scene['scenario_id']}-{label.lower()}"
+                if label == "Direct-ToM":
+                    options["direct_wolf_speech_tom"] = predict
             attempt = {"task": task, "started_at_utc": datetime.now(timezone.utc).isoformat()}
             write_once(attempt_path, attempt)
             result = game_runtime.eval(
                 env, agents, roles, gameplay_only=True, record_requests=True,
                 max_steps=plan["max_steps"], request_timeout=plan["request_timeout_seconds"],
                 source_identity=plan["source_identity"],
-                **({"multimind_reasoner": reasoner} if multimind else {}),
+                **options,
             )
             game = asdict(result)
             write_once(result_path, {
                 "task": task, "attempt_sha256": digest(attempt),
                 "gameplay_sha256": digest(game), "gameplay": game,
             })
-            _, status, _, problem = _read_task(plan, scene, method, attempt_path, result_path)
+            _, status, _, problem = _read_task(plan, scene, label, attempt_path, result_path)
             if problem is not None:
                 raise ValueError(problem)
             print(json.dumps({**task, "status": status, "result": str(result_path)}), flush=True)
@@ -435,9 +533,40 @@ def _summarize_multimind(evidence):
     }
 
 
+def _direct_tom_pairs(plan, games):
+    from scripts.analyze_tom_gameplay_ablation import (
+        BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED, _exact_mcnemar, _paired_ratio_effects,
+    )
+
+    by_scene = {(row["scenario_id"], row["arm"]): row for row in games}
+    rows = []
+    for scene in plan["scenarios"]:
+        controls, treated = (by_scene.get((scene["scenario_id"], arm)) for arm in DIRECT_TOM_ARMS)
+        if controls is not None and treated is not None:
+            rows.append((controls, treated))
+    outcomes = Counter((control["winner"] == "Werewolf", treated["winner"] == "Werewolf")
+                       for control, treated in rows)
+    n00, n01, n10, n11 = (outcomes[a, b] for a, b in ((0, 0), (0, 1), (1, 0), (1, 1)))
+    metrics = _paired_ratio_effects(rows)
+    del metrics["coverage"]  # 接入统计由逐臂 PRE 证据汇总。
+    return {"N": len(rows), "n00": n00, "n01": n01, "n10": n10, "n11": n11,
+            "difference": "Direct-ToM - NoToM", "metrics": metrics,
+            "exact_mcnemar_p": _exact_mcnemar(n01, n10) if rows else None,
+            "bootstrap_seed": BOOTSTRAP_SEED, "bootstrap_replicates": BOOTSTRAP_REPLICATES,
+            "bootstrap_generator": "NumPy PCG64"}
+
+
 def _summarize(output, plan):
     metrics = ("elapsed_seconds", "model_requests", "input_tokens", "output_tokens", "total_tokens")
-    methods = plan.get("methods", DECISION_METHODS)
+    direct = plan.get("direct_tom")
+    methods = DIRECT_TOM_ARMS if direct is not None else plan.get("methods", DECISION_METHODS)
+    if direct is not None:
+        from scripts.tom_gameplay_ablation import direct_tom_coverage
+
+        metrics += ("llm_backend_seconds", "retries")
+        direct_attempts = {arm: [] for arm in DIRECT_TOM_ARMS}
+        direct_completed = {arm: [] for arm in DIRECT_TOM_ARMS}
+        tasks = []
     counts = {
         method: dict.fromkeys(("planned", "not_started", "started", "native_terminal", "replay_passed",
                                "completed", "failed", "unknown", "wolf_wins"), 0)
@@ -449,8 +578,8 @@ def _summarize(output, plan):
     multimind_attempts, multimind_completed = [], []
     games = []
     problems = []
-    for scene in plan["scenarios"]:
-        for method in plan.get("methods", scene["method_order"]):
+    for ordinal, scene in enumerate(plan["scenarios"]):
+        for method in _task_order(plan, scene, ordinal):
             started, status, game, problem = _read_task(plan, scene, method, *_task_paths(output, scene, method))
             stats = counts[method]
             stats["planned"] += 1
@@ -458,6 +587,15 @@ def _summarize(output, plan):
             stats[status] += 1
             if problem is not None:
                 problems.append(problem)
+            if direct is not None:
+                task = {**_task_key(plan, scene, method), "status": status, "started": started}
+                if game is not None:
+                    task.update({key: game[key] for key in ("failure_type", "failure_stage", "failure_phase")})
+                tasks.append(task)
+                if started or status == "unknown":
+                    direct_attempts[method].append(game)
+                if status == "completed":
+                    direct_completed[method].append(game)
             tom = no_tom
             if method == MULTIMIND_METHOD and (started or status == "unknown"):
                 evidence = _multimind_evidence(game)
@@ -474,6 +612,9 @@ def _summarize(output, plan):
                 row = {"scenario_id": scene["scenario_id"], "seed": scene["seed"], "method": method,
                        "winner": game["winner"], "public_event_digest": game["public_event_digest"],
                        "vote_counts": UNKNOWN, "tom_integration": tom}
+                if direct is not None:
+                    row.update(method="react", arm=method)
+                    del row["tom_integration"]
                 try:
                     history, _ = game_runtime.replay_gameplay_history(game_runtime.GameplayOnlyResult(**game))
                     row["vote_counts"] = count_game_votes(history, dict(zip(PLAYER_IDS, game["roles"], strict=True)))
@@ -483,7 +624,12 @@ def _summarize(output, plan):
             usage = game.get("token_usage")
             values = {"elapsed_seconds": game.get("elapsed_seconds"), "model_requests": game.get("model_requests")}
             if isinstance(usage, dict):
-                values.update((field, usage.get(field)) for field in metrics[2:])
+                values.update((field, usage.get(field)) for field in metrics[2:5])
+            if direct is not None:
+                durations = [request.get("elapsed_seconds") for request in game["request_records"]]
+                if all(type(seconds) in (int, float) for seconds in durations) and game["model_requests"] == len(durations):
+                    values["llm_backend_seconds"] = sum(durations)
+                values["retries"] = game["retries"]
             for field, value in values.items():
                 if type(value) in (int, float) and value >= 0:
                     totals[method][field] += value
@@ -497,8 +643,15 @@ def _summarize(output, plan):
             field: {"sum": totals[method][field] if available[method][field] else None,
                     "games_available": available[method][field]} for field in metrics
         }
-        stats["votes"] = summarize_game_votes([game["vote_counts"] for game in games if game["method"] == method])
-        if method == MULTIMIND_METHOD:
+        stats["votes"] = summarize_game_votes([game["vote_counts"] for game in games
+                                               if game.get("arm", game["method"]) == method])
+        if direct is not None:
+            stats["WWR"] = gameplay_ratio(stats["wolf_wins"], completed)
+            stats["direct_tom"] = {
+                "valid_games": direct_tom_coverage(direct_completed[method], applicable=method == "Direct-ToM"),
+                "all_observed_attempts": direct_tom_coverage(direct_attempts[method], applicable=method == "Direct-ToM"),
+            }
+        elif method == MULTIMIND_METHOD:
             stats["tom_integration"] = {
                 "complete_games": summarize_tom_integration(multimind_completed),
                 "all_observed_attempts": summarize_tom_integration([counts for counts, _, _ in multimind_attempts]),
@@ -509,6 +662,21 @@ def _summarize(output, plan):
                 "complete_games": summarize_tom_integration([no_tom] * completed, applicable=False),
                 "all_observed_attempts": summarize_tom_integration([no_tom] * stats["started"], applicable=False),
             }
+    if direct is not None:
+        summary = {"plan_sha256": plan["plan_sha256"], "paired_plan_sha256": plan["paired_plan_sha256"],
+                   "direct_tom": direct, "arms": counts, "games": games, "tasks": tasks, "record_errors": problems}
+        if direct["smoke"]:
+            control, treated = (counts[arm]["direct_tom"]["valid_games"] for arm in DIRECT_TOM_ARMS)
+            summary["smoke_verified"] = (all(counts[arm]["completed"] == counts[arm]["votes"]["games_with_vote_evidence"] == 1
+                                             for arm in DIRECT_TOM_ARMS)
+                                         and type(treated["E"]) is int and treated["E"] > 0
+                                         and all(treated[field] == treated["E"] for field in (
+                                             "A", "P", "S", "U", "response_and_submitted_action_decisions"))
+                                         and all(control[field] == 0 for field in ("A", "P", "S", "U"))
+                                         and control["unmatched_receipts"] == treated["unmatched_receipts"] == 0)
+        else:
+            summary["paired"] = _direct_tom_pairs(plan, games)
+        return summary
     summary = {"plan_sha256": plan["plan_sha256"], "methods": counts, "games": games, "record_errors": problems}
     if "reasoner" in plan:
         summary.update(paired_plan_sha256=plan["paired_plan_sha256"], reasoner=plan["reasoner"])
@@ -527,9 +695,15 @@ def main(argv=None):
         command.add_argument("--runtime-config", type=Path, required=True)
         command.add_argument("--reasoner-checkpoint", type=Path)
         command.add_argument("--reasoner-device")
-    plan_parser.add_argument("--method", choices=(MULTIMIND_METHOD,))
+    mode = plan_parser.add_mutually_exclusive_group()
+    mode.add_argument("--method", choices=(MULTIMIND_METHOD,))
+    mode.add_argument("--direct-tom", action="store_true")
     plan_parser.add_argument("--paired-plan", type=Path)
     plan_parser.add_argument("--reasoner-checkpoint-digest")
+    plan_parser.add_argument("--predictor-device", choices=("cpu", "cuda"))
+    plan_parser.add_argument("--smoke", action="store_true")
+    run_parser.add_argument("--checkpoint", type=Path, help="Direct-ToM 的冻结 Epoch 35 Checkpoint")
+    run_parser.add_argument("--temporal", type=Path, help="Direct-ToM 的冻结 Temporal")
     selection = run_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--first-scenario", action="store_true")
     selection.add_argument("--batch", type=int, choices=(1, 2))

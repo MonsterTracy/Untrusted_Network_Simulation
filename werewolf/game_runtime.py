@@ -417,7 +417,7 @@ def _multimind_plan_alignment(planned, realized):
     }
 
 
-def _complete_gameplay_result(result, *, env, agents, records, multimind_speeches, started, step):
+def _complete_gameplay_result(result, *, env, agents, records, multimind_speeches, direct_tom_speeches, started, step):
     result = replace(
         result, completed_steps=step, elapsed_seconds=perf_counter() - started,
         speech_parser_attempts=sum(len(item.attempts) for item in env.speech_annotations),
@@ -446,7 +446,7 @@ def _complete_gameplay_result(result, *, env, agents, records, multimind_speeche
     speech_results = []
     speech_steps = {index: kind for index, (kind, _) in enumerate(result.submitted_actions)
                     if kind in PUBLIC_SPEECH_RUNTIME_PHASES}
-    for index in sorted(speech_steps.keys() | multimind_speeches.keys()):
+    for index in sorted(speech_steps.keys() | multimind_speeches.keys() | direct_tom_speeches.keys()):
         # 原生 step 对每次已解析的提交生成一条标注。解析请求中断只会缺末条。
         submitted = index in speech_steps
         annotation = next(annotations, None) if submitted else None
@@ -472,6 +472,10 @@ def _complete_gameplay_result(result, *, env, agents, records, multimind_speeche
             if annotation is not None and not annotation.is_successful:
                 last = annotation.attempts[-1]
                 detail.update(v1_error_type=last.error_category, v1_error_message=last.error_message)
+        if index in direct_tom_speeches:
+            detail = dict(direct_tom_speeches[index])
+            speech.update(kind=detail.pop("kind"), seat=detail.pop("seat"), direct_tom=detail)
+            detail.update(speech_submitted=submitted, speech_committed=submitted and index < step)
         speech_results.append(speech)
     return replace(
         result, request_records=tuple(records or ()), speech_results=tuple(speech_results),
@@ -529,7 +533,8 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
          planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
          wolf_speech_tom=None, online_pilot=None, observer_shadow=None, f0_slice_control=None,
          gameplay_only=False, max_steps=None, record_requests=False, request_timeout=None,
-         source_identity=None, check_gameplay_interrupt=None, multimind_reasoner=None):
+         source_identity=None, check_gameplay_interrupt=None, multimind_reasoner=None,
+         direct_tom_game_id=None, direct_wolf_speech_tom=None):
     """运行原生游戏。默认执行 Canonical，显式 Gameplay-only 返回内存结果。"""
     if type(gameplay_only) is not bool:
         raise TypeError("gameplay_only must be a boolean")
@@ -546,6 +551,12 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
             raise TypeError("check_gameplay_interrupt must be callable")
     if multimind_reasoner is not None and not gameplay_only:
         raise ValueError("multimind_reasoner is only supported for Gameplay-only")
+    if direct_tom_game_id is not None and (
+        not gameplay_only or not record_requests or not isinstance(direct_tom_game_id, str) or not direct_tom_game_id
+    ):
+        raise ValueError("Direct-ToM requires a game ID and recorded Gameplay-only requests")
+    if direct_wolf_speech_tom is not None and (direct_tom_game_id is None or not callable(direct_wolf_speech_tom)):
+        raise ValueError("Direct-ToM requires a game ID and a speech predictor callable")
     if gameplay_only:
         if planning_mode != "original" or any(value is not None for value in (
             canonical_recorder, call_audit, plan_provider, speech_treatment, ablation_trace,
@@ -591,8 +602,10 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
         )
         request_records = [] if record_requests else None
         multimind_speeches = {}
+        direct_tom_speeches = {}
         gameplay_metrics = dict(env=env, agents=agent_list, records=request_records,
-                                multimind_speeches=multimind_speeches, started=perf_counter())
+                                multimind_speeches=multimind_speeches, direct_tom_speeches=direct_tom_speeches,
+                                started=perf_counter())
         submitted_actions = []
     else:
         if canonical_recorder is None or call_audit is None:
@@ -650,6 +663,7 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
         stage = "between_steps"
         phase = None
         multimind_speech = None
+        direct_tom_speech = None
         try:
             actor = observation["current_act_idx"]
             is_speech = env.phase in PUBLIC_SPEECH_RUNTIME_PHASES
@@ -668,6 +682,11 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
                     game_seed=env.random_seed, step=step, seat=actor,
                     method=acting_agent.decision_method or "default", phase=phase,
                 )
+                if (direct_tom_game_id is not None and is_speech and acting_agent.decision_method == "react"
+                        and observation.get("identity") == "Werewolf"
+                        and actor in observation["authoritative_public_state"]["alive_players"]):
+                    direct_tom_speech = dict(kind=env.phase, seat=actor, phase=phase, prediction_status=None)
+                    direct_tom_speeches[step] = direct_tom_speech
                 if is_speech and acting_agent.decision_method is None:
                     pending_check = (model_request_details(kind="speaker_pre")
                                      if check_gameplay_interrupt is not None else nullcontext())
@@ -730,7 +749,16 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
                 if check_gameplay_interrupt is not None:
                     check_gameplay_interrupt()
                 acting_agent = agent_list[actor - 1]
-                if gameplay_only and is_speech and acting_agent.decision_method == MULTIMIND_METHOD:
+                if direct_tom_speech is not None and direct_wolf_speech_tom is not None:
+                    stage = "direct_tom_prediction"
+                    prefix = freeze_classic7_speech_pre(env, game_id=direct_tom_game_id, actor=normalize_player(actor))
+                    direct_tom_speech.update(boundary_id=prefix.boundary_id, prefix_digest=prefix.prefix_digest)
+                    payload = direct_wolf_speech_tom(prefix, observation, direct_tom_speech)
+                    stage = "agent_action"
+                    if check_gameplay_interrupt is not None:
+                        check_gameplay_interrupt()
+                    action = acting_agent.act_with_direct_tom(observation, payload=payload, prediction=direct_tom_speech)
+                elif gameplay_only and is_speech and acting_agent.decision_method == MULTIMIND_METHOD:
                     multimind_speech = dict(
                         active_stage="multimind_history", kind=env.phase, seat=actor,
                         boundary_event_id=None, day=None, last_same_phase_speaker=None,

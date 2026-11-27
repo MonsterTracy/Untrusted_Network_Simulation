@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 import math
+from time import perf_counter
 
 import numpy as np
 import torch
@@ -17,11 +18,21 @@ from werewolf.tom.training import verify_checkpoint_set, verify_terminal, lineag
 from werewolf.tom.population import load_held_out_primary, load_held_out_all_alive
 
 
-def predict_structured_observers(plan, model, device):
+def predict_structured_observers(plan, model, device, *, record_forward=None):
     """每个公开计划一次前向，按原座号返回七席概率及六列非自身对数概率。"""
     with torch.inference_mode():
         batch = PublicTensors.stack([tensorize_structured_plan(plan, model.capacity)])
-        output = model(**{name: value.to(device) for name, value in batch.kwargs().items()})
+        inputs = {name: value.to(device) for name, value in batch.kwargs().items()}
+        if record_forward is not None:
+            cuda = torch.device(device).type == "cuda"
+            if cuda:
+                torch.cuda.synchronize(device)
+            started = perf_counter()
+        output = model(**inputs)
+        if record_forward is not None:
+            if cuda:
+                torch.cuda.synchronize(device)
+            record_forward(perf_counter() - started)
         if output.shape != (1, 7, 7):
             raise ValueError(f"seven-seat output shape mismatch for PRE {plan.prefix_digest}")
         logp = output[0].cpu()

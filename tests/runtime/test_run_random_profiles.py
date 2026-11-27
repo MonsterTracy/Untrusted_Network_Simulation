@@ -1,5 +1,6 @@
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
+from hashlib import sha256
 from inspect import getsourcelines
 import json
 import random
@@ -477,6 +478,128 @@ def test_gameplay_only_native_terminal_and_replay(method):
     assert wolf_calls.count("direct_gameplay_speech") == 6
     assert wolf_calls.count("belief_report") == (0 if method == "react" else 12)
     assert wolf_calls.count("discussion_tactic") == (6 if method == "dpins:llm" else 0)
+
+
+def test_direct_tom_only_appends_one_private_block_to_react_requests():
+    from scripts.tom_gameplay_ablation import direct_tom_coverage, direct_tom_payload
+    from tests.tom.test_gameplay_ablation import _matrix
+    from werewolf.agents.prompt_template_v0 import DIRECT_SPEECH_TOM_PREFIX
+
+    prefixes = []
+
+    def predict(prefix, *, record_forward):
+        prefixes.append(prefix)
+        record_forward(0.125)
+        return _matrix()
+
+    def treatment(prefix, observation, evidence):
+        return direct_tom_payload(prefix, observation, predictor=SimpleNamespace(predict=predict), evidence=evidence)
+
+    def play(**options):
+        _, (env, agents, roles, _) = _build_gameplay_fixture("react", use_openai_backend=True)
+        client = agents[0].backend.client
+        client.repair_kind = "direct_gameplay_speech"
+        result = run_game(env, agents, roles, gameplay_only=True, max_steps=80,
+                          record_requests=True, request_timeout=7.5, **options)
+        assert result.failure_type is None and result.winner == result.replay_winner == "Werewolf"
+        return result, client
+
+    legacy, old_client = play()
+    control, control_client = play(direct_tom_game_id="control")
+    treated, client = play(direct_tom_game_id="direct", direct_wolf_speech_tom=treatment)
+    assert old_client.request_arguments == control_client.request_arguments
+    assert legacy.request_records[0].keys() == control.request_records[0].keys()
+    assert legacy.submitted_actions == control.submitted_actions == treated.submitted_actions
+    assert legacy.public_event_digest == control.public_event_digest == treated.public_event_digest
+    assert not any("direct_tom" in speech for speech in legacy.speech_results)
+
+    by_boundary = {prefix.boundary_id: prefix for prefix in prefixes}
+    assert len(prefixes) == len(by_boundary) == 6
+    sent = []
+    for actual, original, record in zip(client.request_arguments, control_client.request_arguments,
+                                        treated.request_records, strict=True):
+        if "direct_tom" not in record:
+            assert DIRECT_SPEECH_TOM_PREFIX not in actual["messages"][0]["content"]
+            assert actual == original
+            continue
+        assert record["kind"] == "speech_realization" and record["method"] == "react" and record["seat"] in (1, 7)
+        assert actual["response_format"]["json_schema"]["name"] == "direct_gameplay_speech"
+        message = actual["messages"][0]["content"]
+        first, rest = message.split(DIRECT_SPEECH_TOM_PREFIX, 1)
+        payload, end = json.JSONDecoder().raw_decode(rest)
+        wire = rest[:end]
+        actual["messages"][0]["content"] = first + rest[end:]
+        assert actual == original
+        receipt = record["direct_tom"]
+        assert receipt["payload_digest"] == sha256(wire.encode()).hexdigest()
+        prefix = by_boundary[receipt["boundary_id"]]
+        assert receipt["prefix_digest"] == prefix.prefix_digest
+        assert payload["target_ids"] == [f"player{seat}" for seat in range(1, 8)]
+        assert [row["observer_id"] for row in payload["rows"]] == [
+            seat for seat in prefix.alive_observer_ids if seat not in ("player1", "player7")
+        ]
+        assert all(row["probabilities"] == _matrix()[int(row["observer_id"][-1]) - 1] for row in payload["rows"])
+        sent.append(record)
+
+    assert len(sent) == 7 and sent[0]["direct_tom"] == sent[1]["direct_tom"]
+    assert sent[0]["validation_error_type"] == "GameplaySpeechQualityError"
+    assert {speech["kind"] for speech in treated.speech_results if "direct_tom" in speech} == {"speech", "speech_pk"}
+    stats = direct_tom_coverage([asdict(treated)], applicable=True)
+    assert [stats[field] for field in ("E", "A", "P", "U", "S", "speech_committed")] == [6] * 6
+    assert stats["by_phase"]["speech_pk"]["S"] == 2 and stats["unmatched_receipts"] == 0
+    assert stats["forward_seconds"]["observed_sum"] == 0.75
+    stats = direct_tom_coverage([asdict(control)], applicable=False)
+    assert [stats[field] for field in ("E", "A", "P", "U", "S", "speech_committed")] == [6, 0, 0, 0, 0, 6]
+
+
+@pytest.mark.parametrize(("fault", "stage", "prediction", "sent", "received", "submitted"), [
+    ("prediction", "direct_tom_prediction", 0, 0, 0, False),
+    ("interrupt", "direct_tom_prediction", "UNKNOWN", 0, 0, False),
+    ("digest", "agent_action", 1, 0, 0, False),
+    ("transport", "agent_action", 1, 1, "UNKNOWN", False),
+    ("parser", "environment_step", 1, 1, 1, True),
+])
+def test_direct_tom_retains_partial_evidence_without_fallback(monkeypatch, fault, stage, prediction, sent, received, submitted):
+    from scripts.tom_gameplay_ablation import direct_tom_coverage, direct_tom_payload
+    from tests.tom.test_gameplay_ablation import _matrix
+    from werewolf.backends import openai_compatible
+
+    _, (env, agents, roles, _) = _build_gameplay_fixture("react", use_openai_backend=True)
+    client = agents[0].backend.client
+
+    def interrupt_digest(_payload):
+        raise KeyboardInterrupt()
+
+    def predict(prefix, *, record_forward):
+        if fault == "prediction":
+            raise ValueError("scripted predictor failure")
+        if fault == "interrupt":
+            raise KeyboardInterrupt()
+        record_forward(0.1)
+        if fault == "digest":
+            monkeypatch.setattr(openai_compatible, "sha256", interrupt_digest)
+        else:
+            client.error_kind = "direct_gameplay_speech" if fault == "transport" else "speech_parser"
+            client.error = TimeoutError("scripted transport failure")
+        return _matrix()
+
+    def treatment(prefix, observation, evidence):
+        return direct_tom_payload(prefix, observation, predictor=SimpleNamespace(predict=predict), evidence=evidence)
+
+    result = run_game(env, agents, roles, gameplay_only=True, record_requests=True,
+                      direct_tom_game_id="partial", direct_wolf_speech_tom=treatment)
+    assert result.failure_stage == stage and result.winner is None and not result.terminal_reached
+    if fault in ("interrupt", "digest"):
+        assert result.failure_type == "KeyboardInterrupt"
+    detail, = (speech["direct_tom"] for speech in result.speech_results if "direct_tom" in speech)
+    assert detail["speech_submitted"] is submitted and not detail["speech_committed"]
+    assert sum(kind == "direct_gameplay_speech" for kind, _ in client.calls) == sent
+    stats = direct_tom_coverage([asdict(result)], applicable=True)
+    assert [stats[field] for field in ("E", "A", "P", "U", "S", "speech_committed")] == [1, 1, prediction, sent, received, 0]
+    if fault == "transport":
+        result.request_records[-1]["direct_tom"]["payload_digest"] = "f" * 64
+        stats = direct_tom_coverage([asdict(result)], applicable=True)
+        assert stats["unmatched_receipts"] == 1 and stats["U"] == stats["S"] == 0
 
 
 class _SpeechLengthScorer:

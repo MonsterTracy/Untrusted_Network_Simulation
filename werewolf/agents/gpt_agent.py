@@ -20,6 +20,7 @@ from werewolf.agents.llm_agent import (
     vote_response_format,
 )
 from werewolf.agents.prompt_template_v0 import (
+    DIRECT_SPEECH_TOM_PREFIX,
     DISCUSSION_TACTICS,
     DiscussionAct,
     STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
@@ -88,6 +89,14 @@ class GPTAgent(LLMAgent):
     def act(self, observation):
         return self._act(observation, pre_speech_belief=None)
 
+    def act_with_direct_tom(self, observation, *, payload, prediction):
+        """同一次 ReAct 狼人发言请求可额外接收当前 PRE 的私有预测。"""
+        if (self.decision_method != "react" or observation.get("identity") != "Werewolf"
+                or not observation.get("phase", "").endswith(("_day_speech", "_day_speech_pk"))
+                or observation.get("current_act_idx") not in observation["authoritative_public_state"]["alive_players"]):
+            raise ValueError("Direct-ToM requires a living ReAct wolf's speech")
+        return self._act(observation, pre_speech_belief=None, direct_tom=(payload, prediction))
+
     def act_with_pre_speech_belief(
         self,
         observation,
@@ -121,7 +130,7 @@ class GPTAgent(LLMAgent):
             tom_context=tom_context,
         )
 
-    def _act(self, observation, *, pre_speech_belief, tom_context=None):
+    def _act(self, observation, *, pre_speech_belief, tom_context=None, direct_tom=None):
         phase = observation["phase"]
         is_speech = "speech" in phase
         speech_kind = "speech_pk" if "speech_pk" in phase else "speech"
@@ -156,6 +165,7 @@ class GPTAgent(LLMAgent):
                     observation,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    direct_tom=direct_tom,
                 )
             day_cognition, candidate_snapshot, claim_catalog = (
                 self._generate_day_cognition(
@@ -312,7 +322,7 @@ class GPTAgent(LLMAgent):
             pass
         return report
 
-    def _generate_direct_speech(self, observation, *, temperature, max_tokens):
+    def _generate_direct_speech(self, observation, *, temperature, max_tokens, direct_tom=None):
         legal_targets = derive_discussion_vote_targets(observation)
         belief = None
         if self.decision_method != "react":
@@ -340,14 +350,23 @@ class GPTAgent(LLMAgent):
             speech_seed = f"{self.game_seed}:{actor}:{phase}"
             tactic = Random(speech_seed).choice(tuple(DISCUSSION_TACTICS))
 
-        with model_request_details(strategy=tactic):
+        prompt = build_direct_speech_prompt(observation, belief=belief, tactic=tactic, legal_targets=legal_targets)
+        receipt = None
+        if direct_tom is not None:
+            payload, prediction = direct_tom
+            if not isinstance(payload, str) or not payload:
+                raise ValueError("Direct-ToM requires a valid prediction payload")
+            prompt += DIRECT_SPEECH_TOM_PREFIX
+            start = len(prompt)
+            prompt += payload
+            receipt = {key: prediction[key] for key in ("boundary_id", "prefix_digest", "request_id")}
+            receipt["span"] = (start, len(prompt))
+        with model_request_details(strategy=tactic, direct_tom=receipt):
             return self._generate_public_speech(
                 observation,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                direct_prompt=build_direct_speech_prompt(
-                    observation, belief=belief, tactic=tactic, legal_targets=legal_targets,
-                ),
+                direct_prompt=prompt,
             )
 
     def _decision_response_format(self, name, **properties):

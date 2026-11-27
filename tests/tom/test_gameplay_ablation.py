@@ -248,8 +248,10 @@ def test_epoch35_predictor_tensorizes_only_complete_public_pre(monkeypatch, faul
             predictor.predict(prefix)
         assert model.calls == 0
     else:
-        rows = predictor.predict(prefix)
+        seconds = []
+        rows = predictor.predict(prefix, record_forward=seconds.append)
         assert model.calls == 1
+        assert len(seconds) == 1 and seconds[0] >= 0
         assert len(rows) == 7 and all(row[seat] == 0.0 and sum(row) == pytest.approx(1)
                                       for seat, row in enumerate(rows))
 

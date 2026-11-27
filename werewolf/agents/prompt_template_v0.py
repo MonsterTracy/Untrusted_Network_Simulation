@@ -1211,6 +1211,15 @@ def build_discussion_tactic_prompt(observation, belief):
 只输出符合响应 Schema 的 strategy 字段，使用上面的完整策略标识。"""
 
 
+DIRECT_SPEECH_TOM_PREFIX = (
+    "\n\n【私有心智理论预测】\n"
+    "心智理论模型根据当前公开交互历史预测其他玩家在本次发言前的主观嫌疑分布。"
+    "每一行对应观察者，每一列对应嫌疑目标。数值越大表示预测的主观嫌疑程度越高。"
+    "这些数值是模型预测，并非真实私人报告，也不是目标玩家真实身份的概率。"
+    "该信息仅供内部推理参考，不属于公开游戏历史，不得直接披露矩阵或将预测描述为已发生的公开事实。\n"
+)
+
+
 def build_direct_speech_prompt(observation, *, belief, tactic, legal_targets):
     context = _build_gameplay_context(observation)
     if belief is not None:
