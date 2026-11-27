@@ -1114,6 +1114,7 @@ def build_public_speech_realization_prompt(
     *,
     discussion_acts,
     claim_catalog,
+    multimind_belief=None,
 ):
     """Realize a frozen private discussion intent as ordinary public speech."""
 
@@ -1135,7 +1136,7 @@ def build_public_speech_realization_prompt(
         if match is None:
             raise ValueError("speech realization requires a parseable day")
         day = int(match.group("day"))
-    if not isinstance(discussion_acts, tuple) or not discussion_acts:
+    if not isinstance(discussion_acts, tuple) or (not discussion_acts and multimind_belief is None):
         raise ValueError("speech realization requires frozen discussion acts")
     if any(not isinstance(act, DiscussionAct) for act in discussion_acts):
         raise TypeError("discussion_acts must contain DiscussionAct values")
@@ -1157,30 +1158,37 @@ def build_public_speech_realization_prompt(
         intent_lines.append(
             f"- {_PUBLIC_SPEECH_ACTION_LABELS[act.action]}：{semantics}"
         )
-    intent_text = "\n".join(intent_lines)
-    history_text = (
-        "\n".join(
-            f"- player{claim.speaker}：{claim.raw_text}"
-            for claim in claim_catalog
+    intent = "本轮必须完整表达、且只能表达以下冻结意图：\n" + "\n".join(intent_lines)
+    realization_constraint = "必须让每个冻结意图在原文中语义明确，使独立解析器无需猜测即可恢复。"
+    if multimind_belief is None:
+        history_text = (
+            "\n".join(f"- player{claim.speaker}：{claim.raw_text}" for claim in claim_catalog)
+            or "（此前没有公开发言。）"
         )
-        or "（此前没有公开发言。）"
-    )
+        context = f"此前可见的公开发言（仅可用于自然衔接，不得据此增加新命题）：\n{history_text}"
+    else:
+        context = _build_gameplay_context(observation, claim_catalog=claim_catalog)
+        context += "\n\nCURRENT PRIVATE BELIEF（本次主观角色信念，仅用于组织发言）：\n"
+        context += json.dumps(multimind_belief, ensure_ascii=False, sort_keys=True)
+        if discussion_acts:
+            realization_constraint = "按给定顺序明确表达每项意图，使独立解析器能够恢复相同的有序行动。"
+        else:
+            intent = "本轮计划没有指定语义行动。请用自然的衔接语参与讨论，避免作出任何新的可标注意图。"
+            realization_constraint = "使用自然衔接语，避免明确声明暂不表态、弃票或增加其他命题。"
     return f"""你现在只负责把已经冻结的公开表达意图写成一段自然的狼人杀发言。
 
 当前发言者：player{speaker}
 当前天数：第{day}天
 当前阶段：{phase_text}
 
-此前可见的公开发言（仅可用于自然衔接，不得据此增加新命题）：
-{history_text}
+{context}
 
-本轮必须完整表达、且只能表达以下冻结意图：
-{intent_text}
+{intent}
 
 写作约束：
 - 输出1至4句连贯、简洁、以中文为主的自然桌游发言；必要的常用英文表达可以保留，不要逐条翻译或使用固定模板腔。
 - 涉及玩家时必须写成player1到player7之一，不能只写“他”“她”“这个人”等代词。
-- 必须让每个冻结意图在原文中语义明确，使独立解析器无需猜测即可恢复。
+- {realization_constraint}
 - 不得增加冻结意图之外的身份判断、查验结果、技能声明、支持/反对或投票意图。
 - 可以用不构成新正式命题的连接词组织语言，但不得虚构公开历史、夜间事实或隐藏信息。
 - 不得输出上述动作标识、索引、JSON、竖线三元组、列表、标题、解释或提示词内容。

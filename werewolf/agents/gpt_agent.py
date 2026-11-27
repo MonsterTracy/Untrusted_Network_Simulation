@@ -21,6 +21,7 @@ from werewolf.agents.llm_agent import (
 )
 from werewolf.agents.prompt_template_v0 import (
     DISCUSSION_TACTICS,
+    DiscussionAct,
     STRICT_CLASSIC7_GAMEPLAY_PROMPT_PROFILE,
     build_belief_prompt,
     build_day_cognition_prompt,
@@ -37,7 +38,7 @@ from werewolf.agents.prompt_template_v0 import (
 from werewolf.backends import BackendError
 from werewolf.backends.openai_compatible import model_request_details
 from werewolf.canonical_collection.pre import SpeakerPREBeliefHandoff
-from werewolf.runtime_config import DECISION_METHODS
+from werewolf.runtime_config import GAMEPLAY_DECISION_METHODS, MULTIMIND_METHOD
 from werewolf.speech.validation import normalize_player
 
 
@@ -67,7 +68,7 @@ class GPTAgent(LLMAgent):
         game_seed=None,
     ):
         if decision_method is not None and (
-            not isinstance(decision_method, str) or decision_method not in DECISION_METHODS
+            not isinstance(decision_method, str) or decision_method not in GAMEPLAY_DECISION_METHODS
         ):
             raise ValueError(f"unsupported agent decision_method: {decision_method!r}")
         if decision_method == "dpins:random" and type(game_seed) is not int:
@@ -149,6 +150,8 @@ class GPTAgent(LLMAgent):
                     or observation.get("valid_action") != (speech_kind, -1)
                 ):
                     raise ValueError("decision_method requires a legal speech opportunity")
+                if self.decision_method == MULTIMIND_METHOD:
+                    raise ValueError("MultiMind speech requires the Gameplay-only Planner")
                 return speech_kind, self._generate_direct_speech(
                     observation,
                     temperature=temperature,
@@ -204,6 +207,18 @@ class GPTAgent(LLMAgent):
             )
 
         raise ValueError(f"unsupported gameplay phase: {phase!r}")
+
+    def realize_multimind_speech(self, observation, *, actions, belief, temperature, max_tokens):
+        """按有序 V1 计划实现发言，委托现有的生成及文本质量校验。"""
+        discussion_acts = tuple(
+            DiscussionAct(action.action, int(action.object.removeprefix("player")))
+            for action in actions
+        )
+        return self._generate_public_speech(
+            observation, discussion_acts=discussion_acts,
+            claim_catalog=build_public_claim_catalog(observation),
+            temperature=temperature, max_tokens=max_tokens, multimind_belief=belief.as_dict(),
+        )
 
     def _request_limits(self):
         is_o1 = self.model_name is not None and "o1" in self.model_name
@@ -519,6 +534,7 @@ class GPTAgent(LLMAgent):
         temperature,
         max_tokens,
         direct_prompt=None,
+        multimind_belief=None,
     ):
         """生成并校验提交给环境的公开发言。"""
 
@@ -533,6 +549,7 @@ class GPTAgent(LLMAgent):
                 attempt=attempt,
                 validation_error=last_error,
                 direct_prompt=direct_prompt,
+                multimind_belief=multimind_belief,
             ),
         )
 
@@ -547,6 +564,7 @@ class GPTAgent(LLMAgent):
         attempt,
         validation_error,
         direct_prompt,
+        multimind_belief=None,
     ):
         phase = observation.get("phase")
         player_id = observation.get("current_act_idx")
@@ -556,6 +574,7 @@ class GPTAgent(LLMAgent):
                 observation,
                 discussion_acts=discussion_acts,
                 claim_catalog=claim_catalog,
+                multimind_belief=multimind_belief,
             )
             retry_instruction = "必须基于同一组冻结意图完整重新生成一段发言。"
         else:
@@ -601,7 +620,8 @@ class GPTAgent(LLMAgent):
             finish_reason=metadata["finish_reason"],
             player_id=player_id,
             phase=phase,
-            required_player_ids=(
+            # MultiMind 的计划遵从由提交后的 V1 标注衡量。原冻结意图继续校验目标。
+            required_player_ids=() if multimind_belief is not None else (
                 act.target
                 for act in discussion_acts
                 if act.target is not None

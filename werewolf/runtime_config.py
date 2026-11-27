@@ -4,7 +4,10 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 
+# 既有正式批次使用固定的四方法顺序。
 DECISION_METHODS = ("react", "dpins:no", "dpins:llm", "dpins:random")
+MULTIMIND_METHOD = "multimind"
+GAMEPLAY_DECISION_METHODS = (*DECISION_METHODS, MULTIMIND_METHOD)
 
 
 def _as_mapping(value, field):
@@ -60,7 +63,7 @@ def normalize_agent_profile(profile, backends):
         raise ValueError("unsupported agent model parameters")
     if "decision_method" in params:
         method = params["decision_method"]
-        if not isinstance(method, str) or method not in DECISION_METHODS:
+        if not isinstance(method, str) or method not in GAMEPLAY_DECISION_METHODS:
             raise ValueError(f"unsupported agent decision_method: {method!r}")
     if params.get("gameplay_prompt_profile", "strict_classic7") != "strict_classic7":
         raise ValueError("only strict_classic7 gameplay is supported")

@@ -479,6 +479,317 @@ def test_gameplay_only_native_terminal_and_replay(method):
     assert wolf_calls.count("discussion_tactic") == (6 if method == "dpins:llm" else 0)
 
 
+class _SpeechLengthScorer:
+    """受控终止评分依次偏好不同动作长度，仍运行真实 MCTS。"""
+
+    def __init__(self, lengths=(0,)):
+        import torch
+
+        self.lengths = lengths
+        self.histories = []
+        self.score_counts = []
+        self.uniform = torch.full((7, 7), 1 / 6).fill_diagonal_(0)
+        self.preferred = []
+        for column in range(7):
+            matrix = torch.full((7, 7), 1 / 5).fill_diagonal_(0)
+            matrix[:, column] = 0
+            matrix[column] = self.uniform[column]
+            self.preferred.append(matrix)
+
+    def score_candidate(self, history, speaker, actions):
+        if not self.histories or self.histories[-1] is not history:
+            self.histories.append(history)
+            self.score_counts.append(0)
+        self.score_counts[-1] += 1
+        target_length = self.lengths[(len(self.histories) - 1) % len(self.lengths)]
+        return self.preferred[int(speaker[-1]) - 1] if len(actions) == target_length else self.uniform
+
+
+def test_multimind_native_game_uses_real_mcts_and_v1_realizations(monkeypatch):
+    from werewolf.canonical_collection.public_history import freeze_public_event_history
+    from werewolf.strategy import multimind_planning
+    from werewolf.tom.multimind import encode_history
+
+    expected_lengths = (0, 1, 2, 3, 1, 0)
+    scorer = _SpeechLengthScorer(expected_lengths)
+    script, (env, agents, roles, profiles) = _build_gameplay_fixture("multimind", use_openai_backend=True)
+    planner = multimind_planning.plan_speech
+    planned, realized, speeches = [], [], {}
+    assert all(agents[i].model_name == "agent-model-a" for i in (0, 6)) and agents[0] is not agents[6]
+    assert all(agent.backend is agents[0].backend for agent in agents)
+
+    def observe_plan(history, speaker, **kwargs):
+        scope = _request_context.get()
+        assert scope.method == "multimind" and speaker == f"player{scope.seat}"
+        assert kwargs["reasoner"] is scorer and kwargs["known_wolves"] == ["player1", "player7"]
+        assert kwargs["alive_players"] == tuple(f"player{i}" for i, alive in enumerate(env.alive, 1) if alive)
+        assert kwargs.get("budget", 500) == 500
+        public = freeze_public_event_history(env.public_events)
+        assert history == encode_history(public, tuple(env.speech_annotations))
+        for annotation in env.speech_annotations:
+            raw = public.events[annotation.event_index].raw_text
+            if raw in speeches:
+                assert [a.to_record() for a in annotation.actions] == speeches[raw]
+        assert script.requests[-1][1] == "belief_report"
+        plan = planner(history, speaker, **kwargs)
+        planned.append([action.to_record() for action in plan.actions])
+        return plan
+
+    monkeypatch.setattr(multimind_planning, "plan_speech", observe_plan)
+    native_generation = script.chat_with_metadata
+    native_parse = script.chat
+
+    def generate(*, messages, model, response_format=None, **kwargs):
+        output = native_generation(messages=messages, model=model, response_format=response_format, **kwargs)
+        scope = _request_context.get()
+        if scope.method != "multimind" or scope.kind != "speech_realization":
+            return output
+        prompt = messages[-1]["content"]
+        assert "真实狼队信息（仅用于内部策略）：player1, player7" in prompt
+        assert "CURRENT PRIVATE BELIEF" in prompt and "本次根据当前信息判断。" in prompt
+        assert "Game rules:" in prompt and "player8" not in prompt
+        assert len(planned) == len(realized) + 1
+        actual = list(planned[-1])
+        labels = {
+            "point_as_werewolf": "指认为狼人", "point_as_villager": "指认为普通村民",
+            "point_as_seer": "指认为预言家", "point_as_witch": "指认为女巫",
+            "support": "公开支持", "oppose": "公开质疑",
+        }
+        if actual:
+            ordered_lines = prompt.split("本轮必须完整表达、且只能表达以下冻结意图：\n", 1)[1].split("\n\n", 1)[0].splitlines()
+            assert len(ordered_lines) == len(actual)
+            for line, (_, predicate, target) in zip(ordered_lines, actual, strict=True):
+                assert line.startswith(f"- {labels[predicate]}：") and target in line
+        else:
+            assert "本轮计划没有指定语义行动" in prompt and "冻结意图：" not in prompt
+
+        index = len(realized)
+        if index == 2:  # 合法省略整条意图，即使省掉目标也保留为遵从证据。
+            actual = []
+        elif index == 3:
+            actual.reverse()
+        elif index in (4, 5):
+            actual.append([f"player{scope.seat}", "no_commitment", None])
+        text_templates = {
+            "point_as_werewolf": "{}是狼人", "point_as_villager": "{}就是普通村民",
+            "point_as_seer": "{}是预言家", "point_as_witch": "{}是女巫",
+            "support": "我支持{}", "oppose": "我质疑{}", "no_commitment": "本轮我明确暂不表态",
+        }
+        body = "。".join(text_templates[predicate].format(target) for _, predicate, target in actual)
+        text = f"这一轮我说第{index + 1}句。" + (body + "。" if body else "声音都听得到。")
+        realized.append(actual)
+        speeches[text] = actual
+        return text, output[1]
+
+    def parse(*, messages, model, response_format=None, **kwargs):
+        default = native_parse(messages=messages, model=model, response_format=response_format, **kwargs)
+        prompt = messages[-1]["content"]
+        raw = prompt.rsplit(": ", 1)[-1]
+        if model != "parser-model" or raw not in speeches:
+            return default
+        actions = speeches[raw]
+        lines = [f"{subject} | {predicate} | {target or 'NONE'}" for subject, predicate, target in actions]
+        if len(actions) == 1:
+            lines += lines  # 真实 V1 Parser 去重后才进入环境历史。
+        return "\n".join(lines) or "NONE"
+
+    monkeypatch.setattr(script, "chat_with_metadata", generate)
+    monkeypatch.setattr(script, "chat", parse)
+    result = run_game(env, agents, roles, gameplay_only=True, record_requests=True,
+                      max_steps=80, request_timeout=7.5, multimind_reasoner=scorer)
+    assert result.failure_type is None, result.failure_message
+    assert result.terminal_reached and result.winner == result.replay_winner == "Werewolf"
+    assert result.seat_profiles == tuple(profiles)
+    assert result.decision_methods == ("multimind", None, None, None, None, None, "multimind")
+    assert verify_gameplay_replay(result) == result.winner and env.day == 2 and result.completed_steps == 38
+    assert result.model_requests == len(result.request_records) == len(script.requests)
+    assert "werewolf/strategy/multimind_planning.py" in result.source_identity["file_sha256"]
+    rows = [row for row in result.speech_results if "multimind" in row]
+    assert len(rows) == len(scorer.histories) == 6 and scorer.score_counts == [500] * 6
+    assert {row["kind"] for row in rows} == {"speech", "speech_pk"}
+    assert {row["seat"] for row in rows} == {1, 7}
+    assert any(row["multimind"]["last_same_phase_speaker"] for row in rows)
+    assert tuple(map(len, planned)) == expected_lengths
+    public = freeze_public_event_history(env.public_events)
+    events = {event.event_id: event for event in public.events}
+    for index, row in enumerate(rows):
+        detail = row["multimind"]
+        assert detail["planned_actions"] == planned[index] and detail["realized_actions"] == realized[index]
+        assert detail["realized_speech"] == result.submitted_actions[row["step"]][1]
+        event = events[row["event_id"]]
+        assert event.raw_text == detail["realized_speech"]
+        assert public.events[event.event_index - 1].event_id == detail["boundary_event_id"]
+        next_event = public.events[event.event_index + 1]
+        assert detail["last_same_phase_speaker"] == (next_event.temporal_state != event.temporal_state)
+        assert detail["planner_attempted"] and detail["reasoner_prediction_succeeded"] and detail["planner_completed"]
+        assert detail["plan_delivered_to_actor"] and detail["speech_submitted"] and detail["speech_committed"]
+        assert detail["completed_simulations"] == detail["candidate_score_calls"] == 500
+        assert detail["reasoner_forward_calls"] is None and detail["mcts_elapsed_seconds"] > 0
+        assert detail["failure_stage"] is None and row["v1_status"] == ("ok" if realized[index] else "no_action")
+        assert [r["kind"] for r in result.request_records if r["step"] == row["step"]] == [
+            "belief", "speech_realization", "v1_parser",
+        ]
+    alignments = [row["multimind"]["alignment"] for row in rows]
+    assert alignments[0] == dict(exact_match=True, plan_precision=None, plan_recall=None,
+                                 order_match=None, stop_compliance=True)
+    assert alignments[1]["exact_match"] and alignments[1]["plan_precision"] == 1
+    assert not alignments[2]["exact_match"] and alignments[2]["plan_recall"] == 0
+    assert not alignments[3]["order_match"] and alignments[3]["plan_recall"] == 1
+    assert alignments[4]["plan_precision"] == 0.5 and alignments[4]["plan_recall"] == 1
+    assert alignments[5]["stop_compliance"] is False and alignments[5]["plan_recall"] is None
+    wolf_requests = [r for r in result.request_records if r["method"] == "multimind"]
+    assert {r["kind"] for r in wolf_requests} == {"night_action", "belief", "speech_realization", "v1_parser", "vote"}
+    assert {r["phase"].split("_day_")[-1] for r in wolf_requests if r["kind"] == "vote"} == {"vote", "vote_pk"}
+    for request in wolf_requests:
+        if request["kind"] == "vote":
+            assert [r["kind"] for r in wolf_requests if r["step"] == request["step"]] == ["belief", "vote"]
+    assert all("multimind" not in row for row in result.speech_results if row["seat"] not in (1, 7))
+
+
+def test_multimind_alignment_treats_actual_duplicates_as_extra_and_keeps_matched_order():
+    first = ["player1", "support", "player2"]
+    second = ["player1", "oppose", "player3"]
+    third = ["player1", "point_as_seer", "player4"]
+    alignment = game_runtime._multimind_plan_alignment([first, second, third], [second, second, first])
+    assert alignment == dict(exact_match=False, plan_precision=2 / 3, plan_recall=2 / 3,
+                             order_match=False, stop_compliance=None)
+    assert game_runtime._multimind_plan_alignment([first], None) is None
+
+
+@pytest.mark.parametrize(("fault", "stage", "error_type", "actor_attempts", "parser_attempts"), [
+    ("belief", "multimind_belief", "GameplayGenerationExhausted", 0, 0),
+    ("planner", "multimind_planner", "ValueError", 0, 0),
+    ("reasoner", "multimind_reasoner", "RuntimeError", 0, 0),
+    ("capacity", "multimind_reasoner", "ValueError", 0, 0),
+    ("actor_quality", "multimind_actor", "GameplayGenerationExhausted", 3, 0),
+    ("actor_timeout", "multimind_actor", "BackendError", 1, 0),
+    ("parser_quality", "environment_step", "V1SpeechPerceptionExhausted", 1, 3),
+    ("parser_timeout", "environment_step", "BackendError", 1, 1),
+])
+def test_multimind_failures_keep_stage_and_partial_speech_without_fallback(
+    monkeypatch, fault, stage, error_type, actor_attempts, parser_attempts,
+):
+    from werewolf.strategy import multimind_planning
+
+    script, (env, agents, roles, _) = _build_gameplay_fixture("multimind", use_openai_backend=True)
+    scorer = _SpeechLengthScorer()
+    if fault == "planner":
+        def fail_plan(*args, **kwargs):
+            raise ValueError("scripted planner failure")
+        monkeypatch.setattr(multimind_planning, "plan_speech", fail_plan)
+    if fault in ("reasoner", "capacity"):
+        from werewolf.tom.dataset import ExperimentCapacity
+        from werewolf.tom.multimind import MultiMindReasoner
+
+        capacity = ExperimentCapacity(1 if fault == "capacity" else 96)
+        scorer = MultiMindReasoner(capacity, hidden_size=16, num_layers=1, num_heads=2).eval()
+        if fault == "reasoner":
+            forward = scorer.forward
+            entered = 0
+
+            def fail_second_forward(*args, **kwargs):
+                nonlocal entered
+                entered += 1
+                if entered == 2:
+                    raise RuntimeError("scripted Reasoner failure")
+                return forward(*args, **kwargs)
+
+            monkeypatch.setattr(scorer, "forward", fail_second_forward)
+    client = agents[0].backend.client
+    create = client.create
+
+    def fail_selected_request(**kwargs):
+        scope = _request_context.get()
+        if scope.method == "multimind" and "speech" in scope.phase:
+            if (fault, scope.kind) in {("belief", "belief"), ("parser_quality", "v1_parser")}:
+                client.repair_kind = {"belief": "belief_report", "v1_parser": "speech_parser"}[scope.kind]
+            if (fault, scope.kind) in {("actor_timeout", "speech_realization"), ("parser_timeout", "v1_parser")}:
+                client.error_kind = "speech_realization" if scope.kind == "speech_realization" else "speech_parser"
+                client.error = TimeoutError("scripted MultiMind timeout")
+        return create(**kwargs)
+
+    monkeypatch.setattr(client, "create", fail_selected_request)
+    generation = script.chat_with_metadata
+
+    def invalid_actor(**kwargs):
+        content, metadata = generation(**kwargs)
+        scope = _request_context.get()
+        if fault == "actor_quality" and scope.method == "multimind" and scope.kind == "speech_realization":
+            return "player8 不在合法座位内。", metadata
+        return content, metadata
+
+    # 文本无效与请求结果未知沿用现有 Backend 和 Agent 的重试边界。
+    monkeypatch.setattr(script, "chat_with_metadata", invalid_actor)
+    result = run_game(env, agents, roles, gameplay_only=True, record_requests=True,
+                      request_timeout=7.5, max_steps=80, multimind_reasoner=scorer)
+    assert result.failure_stage == stage and result.failure_type == error_type
+    assert not result.terminal_reached and result.winner is None and result.replay_winner is None
+    row = result.speech_results[-1]
+    detail = row["multimind"]
+    assert detail["failure_stage"] == stage and detail["failure_type"] == error_type
+    assert detail["failure_message"] and row["step"] == result.completed_steps
+    assert detail["realized_actions"] is None and detail["alignment"] is None and not detail["speech_committed"]
+    assert detail["planner_attempted"] == (fault != "belief")
+    assert detail["planner_completed"] == detail["plan_delivered_to_actor"] == (actor_attempts > 0)
+    if fault in ("reasoner", "capacity"):
+        actual_counts = (detail["completed_simulations"], detail["candidate_score_calls"],
+                         detail["reasoner_forward_calls"], detail["reasoner_prediction_succeeded"])
+        assert actual_counts == ((1, 2, 2, True) if fault == "reasoner" else (0, 1, 0, False))
+        assert not scorer._forward_pre_hooks
+    else:
+        expected_scores = 500 if actor_attempts else {"belief": 0, "planner": None}[fault]
+        assert detail["candidate_score_calls"] == expected_scores
+    assert detail["speech_submitted"] == (parser_attempts > 0)
+    if fault == "parser_quality":
+        assert row["v1_status"] == "error" and detail["v1_error_message"]
+    else:
+        assert row["v1_status"] == "UNKNOWN"
+    requests = [r for r in result.request_records if r["step"] == row["step"]]
+    assert [r["kind"] for r in requests] == (
+        ["belief"] * (3 if fault == "belief" else 1)
+        + ["speech_realization"] * actor_attempts + ["v1_parser"] * parser_attempts
+    )
+    if fault.endswith("timeout"):
+        assert requests[-1]["response_received"] == "UNKNOWN" and requests[-1]["sdk_retries"] == 0
+
+
+def test_multimind_keeps_speech_evidence_when_request_recording_is_off():
+    _, (env, agents, roles, _) = _build_gameplay_fixture("multimind")
+    result = run_game(env, agents, roles, gameplay_only=True, max_steps=11,
+                      multimind_reasoner=_SpeechLengthScorer())
+    assert result.failure_stage == "step_limit" and result.request_records == ()
+    assert result.speech_results
+    for row in result.speech_results:
+        detail = row["multimind"]
+        assert row["seat"] in (1, 7) and row["v1_status"] == "no_action"
+        assert detail["plan_delivered_to_actor"] and detail["speech_committed"]
+        assert detail["alignment"]["stop_compliance"]
+
+
+def test_multimind_requires_wolf_assignment_and_explicit_resource_before_gameplay():
+    script, (env, agents, roles, profiles) = _build_gameplay_fixture("multimind")
+    with pytest.raises(ValueError, match="bound Reasoner"):
+        run_game(env, agents, roles, gameplay_only=True)
+    scorer = _SpeechLengthScorer()
+    misplaced = list(agents)
+    misplaced[0], misplaced[1] = misplaced[1], misplaced[0]
+    with pytest.raises(ValueError, match="requires Werewolf seats"):
+        run_game(env, misplaced, roles, gameplay_only=True, multimind_reasoner=scorer)
+    with pytest.raises(ValueError, match="only supported for Gameplay-only"):
+        run_game(env, agents, roles, multimind_reasoner=scorer)
+    assert not script.requests and not scorer.histories and env.game_count == 0
+
+    config = runtime_config()
+    config["agent_config"]["all_candidates"][0]["model_params"]["decision_method"] = "multimind"
+    seats = list(profiles)
+    seats[0], seats[1] = seats[1], seats[0]
+    config["agent_config"]["allow_cross_team_profiles"] = True
+    with pytest.raises(ValueError, match="MultiMind profile requires a Werewolf seat"):
+        build_runtime(config, None, roles=roles, random_seed=17, seat_profiles=seats,
+                      backends={name: script for name in config["backends"]})
+    assert not script.requests
+
+
 @pytest.fixture
 def source_snapshot():
     return {

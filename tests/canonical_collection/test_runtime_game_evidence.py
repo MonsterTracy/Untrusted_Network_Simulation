@@ -236,7 +236,7 @@ def test_real_runtime_constructs_complete_pre_v1_handoff_evidence():
     )
 
 
-@pytest.mark.parametrize("method", ("react", "dpins:no", "dpins:llm", "dpins:random"))
+@pytest.mark.parametrize("method", ("react", "dpins:no", "dpins:llm", "dpins:random", "multimind"))
 def test_canonical_entry_points_reject_opt_in_before_any_call(method):
     _, claim, env, agents, audit, recorder, backend = _runtime()
     config = new_config()

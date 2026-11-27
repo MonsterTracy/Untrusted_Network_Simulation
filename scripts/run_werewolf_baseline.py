@@ -20,15 +20,16 @@ from werewolf.artifact_io import sha256_bytes
 from werewolf.artifact_io.canonical import _load_canonical_json, require_sha256
 from werewolf.backends import load_named_backends
 from werewolf.canonical_collection.public_history import PLAYER_IDS
-from werewolf.game_runtime import UNKNOWN, count_game_votes, summarize_game_votes, summarize_tom_integration
+from werewolf.game_runtime import UNKNOWN, count_game_votes, gameplay_ratio, summarize_game_votes, summarize_tom_integration
 from werewolf.interventions.gameplay import digest, safe_path, write_once
-from werewolf.runtime_config import DECISION_METHODS, normalize_runtime_config
+from werewolf.runtime_config import DECISION_METHODS, MULTIMIND_METHOD, normalize_runtime_config
 
 
 SEATS = tuple(range(1, 8))
 WOLF_PAIRS = tuple(combinations(SEATS, 2))
 ROLE_COUNTS = {"Werewolf": 2, "Seer": 1, "Witch": 1, "Villager": 3}
-METHOD_NAMES = {"react": "react", "dpins:no": "belief", "dpins:llm": "llm-ins", "dpins:random": "random-ins"}
+METHOD_NAMES = {"react": "react", "dpins:no": "belief", "dpins:llm": "llm-ins", "dpins:random": "random-ins",
+                MULTIMIND_METHOD: MULTIMIND_METHOD}
 WOLF_PROFILE = "baseline-wolf"
 BATCH_SIZE = 5 * len(WOLF_PAIRS)
 MISSING = object()
@@ -113,10 +114,10 @@ def _read_config(path):
     return config, sha256_bytes(raw)
 
 
-def _source_identity():
+def _source_identity(*, multimind=False):
     entry = Path(__file__).resolve()
     repo = entry.parents[1]
-    identity = game_runtime._gameplay_source_identity(include_file_digests=True)
+    identity = game_runtime._gameplay_source_identity(include_file_digests=True, multimind=multimind)
     identity["branch"] = subprocess.check_output(
         ["git", "--no-optional-locks", "symbolic-ref", "--short", "HEAD"], cwd=repo, text=True,
     ).strip()
@@ -143,20 +144,53 @@ def _validate_plan(plan):
     if plan.get("plan_sha256") != digest(body):
         raise ValueError("plan SHA-256 mismatch")
     _validate_scenarios(plan["scenarios"], plan["default_profile"])
+    if {"methods", "paired_plan_sha256", "reasoner"} & plan.keys():
+        if plan.get("methods") != [MULTIMIND_METHOD] or plan.get("sdk_retries") != 0:
+            raise ValueError("paired plan requires only MultiMind and zero SDK retries")
+        require_sha256(plan.get("paired_plan_sha256"), "paired plan digest")
+        reasoner = plan.get("reasoner")
+        if (not isinstance(reasoner, dict) or set(reasoner) != {"checkpoint_sha256", "device"}
+                or not isinstance(reasoner["device"], str) or not reasoner["device"]):
+            raise ValueError("MultiMind plan requires a pinned checkpoint and explicit device")
+        require_sha256(reasoner["checkpoint_sha256"], "MultiMind checkpoint digest")
     return plan
 
 
 def _write_plan(args):
     config, config_sha256 = _read_config(args.runtime_config)
     default_profile = config["agent_config"]["all_candidates"][0]["profile_name"]
-    scenarios = _scenarios(default_profile)
-    _validate_scenarios(scenarios, default_profile)
-    plan = {
-        "default_profile": default_profile, "runtime_config_sha256": config_sha256,
-        "source_identity": _source_identity(), "max_steps": 128, "request_timeout_seconds": 300, "sdk_retries": 0,
-        "scenarios": scenarios,
-    }
+    checkpoint_options = (args.paired_plan, args.reasoner_checkpoint, args.reasoner_checkpoint_digest, args.reasoner_device)
+    if args.method == MULTIMIND_METHOD:
+        from werewolf.tom.multimind import multimind_device, open_multimind_checkpoint
+
+        if not all(checkpoint_options):
+            raise ValueError("MultiMind plan requires --paired-plan, checkpoint path and digest, and device")
+        source_root, output_root = safe_path(args.paired_plan).parent, safe_path(args.plan).parent
+        if source_root.is_relative_to(output_root) or output_root.is_relative_to(source_root):
+            raise ValueError("MultiMind and historical plan output roots must be disjoint")
+        parent = _read_plan(args.paired_plan)
+        if "methods" in parent:
+            raise ValueError("--paired-plan must be the frozen four-method plan")
+        if (parent["runtime_config_sha256"], parent["default_profile"]) != (config_sha256, default_profile):
+            raise ValueError("MultiMind requires the paired plan's exact runtime YAML and default profile")
+        checkpoint = open_multimind_checkpoint(safe_path(args.reasoner_checkpoint), args.reasoner_checkpoint_digest)
+        scenarios = parent["scenarios"]
+        plan = {**parent, "source_identity": _source_identity(multimind=True), "methods": [MULTIMIND_METHOD],
+                "paired_plan_sha256": parent["plan_sha256"],
+                "reasoner": {"checkpoint_sha256": checkpoint.manifest_digest,
+                             "device": str(multimind_device(args.reasoner_device))}}
+        del plan["plan_sha256"]
+    else:
+        if any(checkpoint_options):
+            raise ValueError("paired plan and Reasoner settings require --method multimind")
+        scenarios = _scenarios(default_profile)
+        plan = {
+            "default_profile": default_profile, "runtime_config_sha256": config_sha256,
+            "source_identity": _source_identity(), "max_steps": 128, "request_timeout_seconds": 300, "sdk_retries": 0,
+            "scenarios": scenarios,
+        }
     plan["plan_sha256"] = digest(plan)
+    _validate_plan(plan)
     write_once(args.plan, plan)
     _read_plan(args.plan)
     print(json.dumps({"plan": str(args.plan), "plan_sha256": plan["plan_sha256"], "scenarios": len(scenarios)}))
@@ -238,21 +272,37 @@ def _read_task(plan, scene, method, attempt_path, result_path):
 
 def _run(args, plan):
     config, config_sha256 = _read_config(args.runtime_config)
-    if config_sha256 != plan["runtime_config_sha256"] or _source_identity() != plan["source_identity"]:
+    multimind = "reasoner" in plan
+    source = _source_identity(multimind=True) if multimind else _source_identity()
+    if config_sha256 != plan["runtime_config_sha256"] or source != plan["source_identity"]:
         raise ValueError("runtime configuration or source has changed since the plan was frozen")
+    if multimind and (args.reasoner_checkpoint is None or args.reasoner_device != plan["reasoner"]["device"]):
+        raise ValueError("MultiMind run requires an explicit checkpoint path and the frozen --reasoner-device")
+    if not multimind and (args.reasoner_checkpoint is not None or args.reasoner_device is not None):
+        raise ValueError("Reasoner settings require a MultiMind plan")
     scenes = plan["scenarios"][:1] if args.first_scenario else [
         scene for scene in plan["scenarios"] if scene["batch"] == args.batch
     ]
     default = config["agent_config"]["all_candidates"][0]
     backends = None
+    reasoner = None
     for scene in scenes:
-        for method in scene["method_order"]:
+        for method in plan.get("methods", scene["method_order"]):
             attempt_path, result_path = _task_paths(args.plan.parent, scene, method)
             _, status, _, problem = _read_task(plan, scene, method, attempt_path, result_path)
             if problem is not None:
                 raise ValueError(problem)
             if status != "not_started":
                 continue
+            if multimind and reasoner is None:
+                from werewolf.tom.multimind import load_multimind_checkpoint
+
+                try:
+                    reasoner = load_multimind_checkpoint(
+                        safe_path(args.reasoner_checkpoint), plan["reasoner"]["checkpoint_sha256"], device=args.reasoner_device,
+                    )
+                except RuntimeError as error:
+                    raise ValueError(f"MultiMind Reasoner could not be loaded on {args.reasoner_device}: {error}") from error
             if backends is None:
                 backends = load_named_backends(config, env_file=None, max_retries=0)
             wolf = {**default, "profile_name": WOLF_PROFILE,
@@ -274,6 +324,7 @@ def _run(args, plan):
                 env, agents, roles, gameplay_only=True, record_requests=True,
                 max_steps=plan["max_steps"], request_timeout=plan["request_timeout_seconds"],
                 source_identity=plan["source_identity"],
+                **({"multimind_reasoner": reasoner} if multimind else {}),
             )
             game = asdict(result)
             write_once(result_path, {
@@ -291,20 +342,115 @@ def _run(args, plan):
     return 0
 
 
+def _multimind_evidence(game):
+    """每个真实发言边界最多计一次，Actor 回执按同局、同座位和同一步匹配。"""
+    unknown = dict.fromkeys(("A", "P", "S"), UNKNOWN)
+    if game is None or not isinstance(game.get("speech_results"), list):
+        return unknown, [], True
+    responses = {}
+    for request in game["request_records"]:
+        if (request.get("kind") == "speech_realization" and request.get("method") == MULTIMIND_METHOD
+                and request.get("game_seed") == game["seed"] and request.get("dispatched") is True):
+            step, seat, phase = request.get("step"), request.get("seat"), request.get("phase")
+            if type(step) is int and type(seat) is int and isinstance(phase, str):
+                responses.setdefault((step, seat, phase), []).append(request)
+
+    boundaries, rows = [], []
+    recorded_steps = set()
+    missing = False
+    for speech in game["speech_results"]:
+        if (not isinstance(speech, dict) or type(speech.get("step")) is not int or speech["step"] < 0
+                or speech.get("kind") not in ("speech", "speech_pk")):
+            missing = True
+            continue
+        step, seat = speech["step"], speech.get("seat")
+        if step in recorded_steps:
+            missing = True
+            continue
+        recorded_steps.add(step)
+        if type(seat) is not int or not 1 <= seat <= len(SEATS):
+            missing = True
+            continue
+        if game["decision_methods"][seat - 1] != MULTIMIND_METHOD:
+            continue
+        detail = speech.get("multimind")
+        if not isinstance(detail, dict):
+            missing = True
+            continue
+        rows.append((speech["kind"], detail))
+        attempted = detail.get("planner_attempted")
+        predicted = detail.get("reasoner_prediction_succeeded")
+        delivered = detail.get("plan_delivered_to_actor")
+        confirmed = UNKNOWN
+        if delivered is False:
+            confirmed = 0
+        elif delivered is True and attempted is True and predicted is True and detail.get("planner_completed") is True:
+            phase = f"{detail.get('day')}_day_{speech['kind']}"
+            matching = responses.get((step, seat, phase), [])
+            if any(r.get("response_received") is True
+                   and r.get("status") in {"response_received", "invalid_response"} for r in matching):
+                confirmed = 1
+            elif matching and all(r.get("response_received") is True for r in matching):
+                confirmed = 0
+        boundaries.append({"A": int(attempted) if type(attempted) is bool else UNKNOWN,
+                           "P": int(predicted) if type(predicted) is bool else UNKNOWN, "S": confirmed})
+    if any(kind in game_runtime.PUBLIC_SPEECH_RUNTIME_PHASES and index not in recorded_steps
+           for index, (kind, _) in enumerate(game["submitted_actions"])):
+        missing = True
+    if missing:
+        boundaries.append(unknown)
+    aggregate = summarize_tom_integration(boundaries)
+    counts = {field: aggregate[field] for field in ("A", "P", "S")}
+    counts.update({f"{field}_verified": value for field, value in aggregate["verified_minimum"].items()})
+    return counts, rows, missing
+
+
+def _summarize_multimind(evidence):
+    rows = [row for _, speeches, _ in evidence for row in speeches]
+    phases = {}
+    for name in ("speech", "speech_pk", "last_same_phase_speaker"):
+        selected = [detail for kind, detail in rows if kind == name or detail.get(name) is True]
+        phases[name] = {"boundaries": len(selected),
+                        "planning_attempts": sum(detail.get("planner_attempted") is True for detail in selected),
+                        "alignment_available": sum(isinstance(detail.get("alignment"), dict) for detail in selected)}
+    costs = {}
+    for field in ("completed_simulations", "candidate_score_calls", "reasoner_forward_calls", "mcts_elapsed_seconds"):
+        values = [detail[field] for _, detail in rows if type(detail.get(field)) in (int, float)]
+        costs[field] = {"sum": sum(values) if values else None, "boundaries_available": len(values),
+                        "unknown_boundaries": len(rows) - len(values)}
+    alignment = {}
+    for field in ("exact_match", "plan_precision", "plan_recall", "order_match", "stop_compliance"):
+        values = [record[field] for _, detail in rows if isinstance(record := detail.get("alignment"), dict)
+                  and type(record.get(field)) in (bool, int, float)]
+        alignment[field] = gameplay_ratio(sum(values), len(values))
+    return {
+        "missing_game_evidence": sum(missing for _, _, missing in evidence),
+        "observed_speech_boundaries": len(rows),
+        "planning_attempts": sum(detail.get("planner_attempted") is True for _, detail in rows),
+        "completed_plans": sum(detail.get("planner_completed") is True for _, detail in rows),
+        "actor_plan_handoffs": sum(detail.get("plan_delivered_to_actor") is True for _, detail in rows),
+        "actor_confirmed_boundaries": sum(counts.get("S_verified", 0) for counts, _, _ in evidence),
+        "alignment_available": sum(isinstance(detail.get("alignment"), dict) for _, detail in rows),
+        "phase_support": phases, "cost": costs, "alignment": alignment,
+    }
+
+
 def _summarize(output, plan):
     metrics = ("elapsed_seconds", "model_requests", "input_tokens", "output_tokens", "total_tokens")
+    methods = plan.get("methods", DECISION_METHODS)
     counts = {
         method: dict.fromkeys(("planned", "not_started", "started", "native_terminal", "replay_passed",
                                "completed", "failed", "unknown", "wolf_wins"), 0)
-        for method in DECISION_METHODS
+        for method in methods
     }
-    totals = {method: Counter() for method in DECISION_METHODS}
-    available = {method: Counter() for method in DECISION_METHODS}
+    totals = {method: Counter() for method in methods}
+    available = {method: Counter() for method in methods}
     no_tom = dict.fromkeys(("A", "P", "S"), 0)
+    multimind_attempts, multimind_completed = [], []
     games = []
     problems = []
     for scene in plan["scenarios"]:
-        for method in scene["method_order"]:
+        for method in plan.get("methods", scene["method_order"]):
             started, status, game, problem = _read_task(plan, scene, method, *_task_paths(output, scene, method))
             stats = counts[method]
             stats["planned"] += 1
@@ -312,6 +458,13 @@ def _summarize(output, plan):
             stats[status] += 1
             if problem is not None:
                 problems.append(problem)
+            tom = no_tom
+            if method == MULTIMIND_METHOD and (started or status == "unknown"):
+                evidence = _multimind_evidence(game)
+                multimind_attempts.append(evidence)
+                tom = evidence[0]
+                if status == "completed":
+                    multimind_completed.append(tom)
             if game is None:
                 continue
             stats["native_terminal"] += game["terminal_reached"]
@@ -320,7 +473,7 @@ def _summarize(output, plan):
             if status == "completed":
                 row = {"scenario_id": scene["scenario_id"], "seed": scene["seed"], "method": method,
                        "winner": game["winner"], "public_event_digest": game["public_event_digest"],
-                       "vote_counts": UNKNOWN, "tom_integration": no_tom}
+                       "vote_counts": UNKNOWN, "tom_integration": tom}
                 try:
                     history, _ = game_runtime.replay_gameplay_history(game_runtime.GameplayOnlyResult(**game))
                     row["vote_counts"] = count_game_votes(history, dict(zip(PLAYER_IDS, game["roles"], strict=True)))
@@ -345,11 +498,21 @@ def _summarize(output, plan):
                     "games_available": available[method][field]} for field in metrics
         }
         stats["votes"] = summarize_game_votes([game["vote_counts"] for game in games if game["method"] == method])
-        stats["tom_integration"] = {
-            "complete_games": summarize_tom_integration([no_tom] * completed, applicable=False),
-            "all_observed_attempts": summarize_tom_integration([no_tom] * stats["started"], applicable=False),
-        }
-    return {"plan_sha256": plan["plan_sha256"], "methods": counts, "games": games, "record_errors": problems}
+        if method == MULTIMIND_METHOD:
+            stats["tom_integration"] = {
+                "complete_games": summarize_tom_integration(multimind_completed),
+                "all_observed_attempts": summarize_tom_integration([counts for counts, _, _ in multimind_attempts]),
+            }
+            stats["multimind"] = _summarize_multimind(multimind_attempts)
+        else:
+            stats["tom_integration"] = {
+                "complete_games": summarize_tom_integration([no_tom] * completed, applicable=False),
+                "all_observed_attempts": summarize_tom_integration([no_tom] * stats["started"], applicable=False),
+            }
+    summary = {"plan_sha256": plan["plan_sha256"], "methods": counts, "games": games, "record_errors": problems}
+    if "reasoner" in plan:
+        summary.update(paired_plan_sha256=plan["paired_plan_sha256"], reasoner=plan["reasoner"])
+    return summary
 
 
 def main(argv=None):
@@ -362,6 +525,11 @@ def main(argv=None):
         command.add_argument("--plan", type=Path, required=True)
     for command in (plan_parser, run_parser):
         command.add_argument("--runtime-config", type=Path, required=True)
+        command.add_argument("--reasoner-checkpoint", type=Path)
+        command.add_argument("--reasoner-device")
+    plan_parser.add_argument("--method", choices=(MULTIMIND_METHOD,))
+    plan_parser.add_argument("--paired-plan", type=Path)
+    plan_parser.add_argument("--reasoner-checkpoint-digest")
     selection = run_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--first-scenario", action="store_true")
     selection.add_argument("--batch", type=int, choices=(1, 2))

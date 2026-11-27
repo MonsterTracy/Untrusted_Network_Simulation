@@ -142,6 +142,20 @@ def build_parser():
     fit = commands.add_parser("run-final-fit")
     fit.add_argument("--experiment", type=Path, required=True)
     fit.add_argument("--resume", action="store_true")
+    multimind = commands.add_parser("train-multimind", help="统计 Development 或训练并保存 MultiMind Reasoner")
+    multimind.add_argument("--publication", type=Path, required=True)
+    multimind.add_argument("--publication-digest", required=True)
+    multimind.add_argument("--split-digest")
+    multimind.add_argument("--validation-fold", type=int, choices=range(5), required=True)
+    multimind.add_argument("--inspect-only", action="store_true")
+    multimind.add_argument("--destination", type=Path)
+    multimind.add_argument("--max-seq-len", type=int)
+    multimind.add_argument("--learning-rate", type=float)
+    multimind.add_argument("--game-batch-size", type=int)
+    multimind.add_argument("--optimizer-steps", type=int)
+    multimind.add_argument("--validate-every", type=int)
+    multimind.add_argument("--seed", type=int)
+    multimind.add_argument("--device")
     seal = commands.add_parser("seal-final-models")
     seal.add_argument("--experiment", type=Path, required=True)
     final_publication = commands.add_parser("publish-final-evaluation")
@@ -337,6 +351,27 @@ def main(argv=None):
         print(json.dumps(result, sort_keys=True))
         return 0
     root = _storage_root(args.storage_profile)
+    if args.command == "train-multimind":
+        from werewolf.tom.development_input import open_development_input
+        from werewolf.tom.multimind import inspect_multimind_development, train_multimind_reasoner
+
+        publication_path = _artifact_path(root, args.publication, "publications")
+        settings = {key: getattr(args, key) for key in (
+            "max_seq_len", "learning_rate", "game_batch_size", "optimizer_steps", "validate_every", "seed", "device",
+        )}
+        if not args.inspect_only and (args.destination is None or None in settings.values()):
+            raise ValueError("train-multimind requires --destination and explicit capacity, learning rate, "
+                             "game batch size, optimizer steps, validation interval, seed and device")
+        publication = open_development_input(publication_path, expected_publication_digest=args.publication_digest,
+                                             expected_split_digest=args.split_digest)
+        if args.inspect_only:
+            print(json.dumps(inspect_multimind_development(publication, validation_fold=args.validation_fold)))
+        else:
+            checkpoint = train_multimind_reasoner(
+                publication, _artifact_path(root, args.destination), validation_fold=args.validation_fold, **settings,
+            )
+            print(checkpoint.artifact.manifest_digest)
+        return 0
     if args.command == "independent-test":
         from werewolf.tom.final_evaluation import predict_independent_test, score_independent_test
         split = _artifact_path(root, args.split, "splits")

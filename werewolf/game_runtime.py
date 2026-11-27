@@ -37,7 +37,8 @@ from werewolf.canonical_collection.runtime import (
 )
 from werewolf.speech.private_belief_perceiver import PlayingAgentBeliefReporter, STATUS_OK
 from werewolf.speech.speech_perceiver import SpeechPerceiver
-from werewolf.runtime_config import normalize_runtime_config
+from werewolf.speech.validation import normalize_player
+from werewolf.runtime_config import MULTIMIND_METHOD, normalize_runtime_config
 
 
 PUBLIC_SPEECH_RUNTIME_PHASES = frozenset({"speech", "speech_pk"})
@@ -54,6 +55,11 @@ _GAMEPLAY_SOURCE_FILES = (
     "werewolf/envs/werewolf_text_env_v0.py",
     "werewolf/speech/private_belief_perceiver.py",
     "werewolf/speech/speech_perceiver.py",
+)
+_MULTIMIND_SOURCE_FILES = (
+    "werewolf/tom/multimind.py",
+    "werewolf/strategy/multimind_planning.py",
+    "werewolf/strategy/speech_planning.py",
 )
 
 UNKNOWN = "UNKNOWN"
@@ -96,7 +102,7 @@ class GameplayOnlyResult:
     token_usage: dict[str, int | str] | str = "UNKNOWN"
 
 
-def _gameplay_source_identity(*, include_file_digests=False):
+def _gameplay_source_identity(*, include_file_digests=False, multimind=False):
     repo = Path(__file__).resolve().parents[1]
     identity = {"commit": "UNKNOWN", "tracked_source_diff_sha256": "UNKNOWN"}
     try:
@@ -113,7 +119,8 @@ def _gameplay_source_identity(*, include_file_digests=False):
         pass
     if include_file_digests:
         files = {}
-        for name in _GAMEPLAY_SOURCE_FILES:
+        source_files = _GAMEPLAY_SOURCE_FILES + (_MULTIMIND_SOURCE_FILES if multimind else ())
+        for name in source_files:
             try:
                 files[name] = sha256_bytes((repo / name).read_bytes())
             except OSError:
@@ -162,6 +169,79 @@ def _gameplay_speaker_handoff(env, agent, observation):
         observation_digest=sha256_bytes(canonical_json_bytes(report)),
         observation_status="success", suspicion_support=report["suspected_werewolves"],
     )
+
+
+def _is_last_public_speaker(history, alive):
+    """只从已发生的公开发言和普通投票确认当前发言是否末位。"""
+    state = history.current_state
+    turn_count = sum(e.event_type == "turn_start" and e.temporal_state == state for e in history.events)
+    if state.phase is PublicPhase.DISCUSSION:
+        return turn_count == len(alive)
+    ballot = next(e for e in reversed(history.events)
+                  if e.event_type == "vote_result" and e.temporal_state.phase is PublicPhase.VOTE
+                  and e.temporal_state.day == state.day)
+    counts = list(Counter(v.target for v in ballot.votes if v.target is not None).values())
+    return turn_count == counts.count(max(counts))
+
+
+def _gameplay_multimind_speech(env, agent, observation, reasoner, evidence, check_interrupt):
+    from werewolf.strategy.multimind_planning import plan_speech
+    from werewolf.tom.multimind import encode_history
+
+    seat = observation["current_act_idx"]
+    speaker = normalize_player(seat)
+    if (observation.get("observer_id") != seat or observation.get("identity") != "Werewolf"
+            or observation.get("valid_action") != (env.phase, -1)):
+        raise ValueError("MultiMind requires the current wolf's legal speech observation")
+    public = freeze_public_event_history(env.public_events)
+    turn = public.events[-1]
+    if turn.event_type != "turn_start" or turn.speaker != speaker:
+        raise ValueError("MultiMind speech does not match the current public turn")
+    alive = tuple(normalize_player(p) for p in observation["authoritative_public_state"]["alive_players"])
+    evidence.update(boundary_event_id=turn.event_id, day=turn.temporal_state.day,
+                    last_same_phase_speaker=_is_last_public_speaker(public, alive))
+    history = encode_history(public, tuple(env.speech_annotations))
+    known_wolves, _ = env.observer_private_knowledge(seat)
+    seed = int(sha256_bytes(canonical_json_bytes([env.random_seed, speaker, turn.event_id]))[:16], 16)
+    temperature, max_tokens = agent._request_limits()
+
+    evidence["active_stage"] = "multimind_belief"
+    belief = agent._generate_belief(observation, temperature=temperature, max_tokens=max_tokens)
+    evidence["active_stage"] = "multimind_planner"
+    if check_interrupt is not None:
+        check_interrupt()
+    evidence.update(planner_attempted=True, reasoner_prediction_succeeded=None,
+                    completed_simulations=None, candidate_score_calls=None, reasoner_forward_calls=None,
+                    planner_seed=seed)
+    failed_search = {}
+    started = perf_counter()
+    try:
+        plan = plan_speech(history, speaker, alive_players=alive,
+                           known_wolves=known_wolves, reasoner=reasoner, seed=seed,
+                           failure_evidence=failed_search)
+    finally:
+        evidence["mcts_elapsed_seconds"] = perf_counter() - started
+        if failed_search:
+            evidence["active_stage"] = f"multimind_{failed_search.pop('failure_stage')}"
+            evidence.update(failed_search)
+    evidence.update(reasoner_prediction_succeeded=plan.candidate_score_calls > 0,
+                    planner_completed=plan.completed, completed_simulations=plan.completed_simulations,
+                    candidate_score_calls=plan.candidate_score_calls,
+                    reasoner_forward_calls=plan.reasoner_forward_calls)
+    if not plan.completed:
+        raise RuntimeError("MultiMind Planner did not complete")
+    evidence.update(planned_actions=[action.to_record() for action in plan.actions], reward=plan.reward)
+
+    evidence["active_stage"] = "multimind_actor"
+    if check_interrupt is not None:
+        check_interrupt()
+    evidence["plan_delivered_to_actor"] = True
+    speech = agent.realize_multimind_speech(
+        observation, actions=plan.actions, belief=belief, temperature=temperature, max_tokens=max_tokens,
+    )
+    evidence["realized_speech"] = speech
+    evidence.pop("active_stage")
+    return env.phase, speech
 
 
 def _require_legal_gameplay_action(observation, action):
@@ -320,16 +400,33 @@ def summarize_tom_integration(counts, *, applicable=True):
     }
 
 
-def _complete_gameplay_result(result, *, env, agents, records, started, step):
+def _multimind_plan_alignment(planned, realized):
+    """分母为零或共同动作不足两个时，对应比例或顺序没有定义。"""
+    if planned is None or realized is None:
+        return None
+    expected, observed = tuple(map(tuple, planned)), tuple(map(tuple, realized))
+    common = set(expected) & set(observed)  # 计划三元组唯一，实际重复项计入 precision 分母。
+    expected_order = tuple(action for action in expected if action in common)
+    realized_order = tuple(action for action in dict.fromkeys(observed) if action in common)
+    return {
+        "exact_match": expected == observed,
+        "plan_precision": len(common) / len(observed) if observed else None,
+        "plan_recall": len(common) / len(expected) if expected else None,
+        "order_match": expected_order == realized_order if len(common) >= 2 else None,
+        "stop_compliance": not observed if not expected else None,
+    }
+
+
+def _complete_gameplay_result(result, *, env, agents, records, multimind_speeches, started, step):
     result = replace(
         result, completed_steps=step, elapsed_seconds=perf_counter() - started,
         speech_parser_attempts=sum(len(item.attempts) for item in env.speech_annotations),
     )
-    if records is None:
+    if records is None and not multimind_speeches:
         return result
 
     # 只有所有实际调用都经同一种已记录的 Backend，才能给出整局合计。
-    complete = all(type(agent.backend) is OpenAICompatibleBackend for agent in agents)
+    complete = records is not None and all(type(agent.backend) is OpenAICompatibleBackend for agent in agents)
     complete = complete and type(getattr(env.speech_perceiver, "backend", None)) is OpenAICompatibleBackend
     model_requests = len(records) if complete else "UNKNOWN"
     retries = "UNKNOWN"
@@ -343,25 +440,41 @@ def _complete_gameplay_result(result, *, env, agents, records, started, step):
             token_usage[field] = sum(values) if values and all(type(value) is int for value in values) else "UNKNOWN"
 
     speech_requests = {
-        record["step"]: record for record in records if record["kind"] == "speech_realization"
+        record["step"]: record for record in (records or ()) if record["kind"] == "speech_realization"
     }
     annotations = iter(env.speech_annotations)
     speech_results = []
-    for index, (kind, _) in enumerate(result.submitted_actions):
-        if kind not in PUBLIC_SPEECH_RUNTIME_PHASES:
-            continue
+    speech_steps = {index: kind for index, (kind, _) in enumerate(result.submitted_actions)
+                    if kind in PUBLIC_SPEECH_RUNTIME_PHASES}
+    for index in sorted(speech_steps.keys() | multimind_speeches.keys()):
         # 原生 step 对每次已解析的提交生成一条标注。解析请求中断只会缺末条。
-        annotation = next(annotations, None)
+        submitted = index in speech_steps
+        annotation = next(annotations, None) if submitted else None
+        multimind = multimind_speeches.get(index)
+        if records is None and multimind is None:
+            continue
         request = speech_requests.get(index, {})
-        speech_results.append({
-            "step": index, "kind": kind,
+        speech = {
+            "step": index, "kind": speech_steps.get(index),
             "seat": int(annotation.speaker.removeprefix("player")) if annotation else request.get("seat", "UNKNOWN"),
             "strategy": request.get("strategy", "UNKNOWN"),
             "event_id": annotation.event_id if annotation else "UNKNOWN",
             "v1_status": annotation.status.value if annotation else "UNKNOWN",
-        })
+        }
+        if multimind is not None:
+            detail = dict(multimind)
+            speech.update(kind=detail.pop("kind"), seat=detail.pop("seat"), multimind=detail)
+            realized = None
+            if annotation is not None and annotation.is_successful:
+                realized = [action.to_record() for action in annotation.actions]
+            detail.update(realized_actions=realized, speech_submitted=submitted, speech_committed=index < step,
+                          alignment=_multimind_plan_alignment(detail["planned_actions"], realized))
+            if annotation is not None and not annotation.is_successful:
+                last = annotation.attempts[-1]
+                detail.update(v1_error_type=last.error_category, v1_error_message=last.error_message)
+        speech_results.append(speech)
     return replace(
-        result, request_records=tuple(records), speech_results=tuple(speech_results),
+        result, request_records=tuple(records or ()), speech_results=tuple(speech_results),
         model_requests=model_requests, retries=retries, token_usage=token_usage,
     )
 
@@ -416,7 +529,7 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
          planning_mode="original", plan_provider=None, speech_treatment=None, ablation_trace=None,
          wolf_speech_tom=None, online_pilot=None, observer_shadow=None, f0_slice_control=None,
          gameplay_only=False, max_steps=None, record_requests=False, request_timeout=None,
-         source_identity=None, check_gameplay_interrupt=None):
+         source_identity=None, check_gameplay_interrupt=None, multimind_reasoner=None):
     """运行原生游戏。默认执行 Canonical，显式 Gameplay-only 返回内存结果。"""
     if type(gameplay_only) is not bool:
         raise TypeError("gameplay_only must be a boolean")
@@ -431,6 +544,8 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
             raise ValueError("interrupt checkpoints are only supported for Gameplay-only")
         if not callable(check_gameplay_interrupt):
             raise TypeError("check_gameplay_interrupt must be callable")
+    if multimind_reasoner is not None and not gameplay_only:
+        raise ValueError("multimind_reasoner is only supported for Gameplay-only")
     if gameplay_only:
         if planning_mode != "original" or any(value is not None for value in (
             canonical_recorder, call_audit, plan_provider, speech_treatment, ablation_trace,
@@ -443,6 +558,13 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
             raise ValueError("Gameplay-only requires an explicit game seed")
         if len(agent_list) != 7 or not all(isinstance(agent, GPTAgent) for agent in agent_list):
             raise ValueError("Gameplay-only requires seven configured GPTAgents")
+        roles = tuple(roles_)
+        multimind_seats = tuple(i for i, agent in enumerate(agent_list) if agent.decision_method == MULTIMIND_METHOD)
+        if multimind_seats:
+            if len(roles) != 7 or any(roles[i] != "Werewolf" for i in multimind_seats):
+                raise ValueError("Gameplay-only MultiMind requires Werewolf seats")
+            if not callable(getattr(multimind_reasoner, "score_candidate", None)):
+                raise ValueError("Gameplay-only MultiMind requires a bound Reasoner with score_candidate")
         if any(agent.decision_method == "dpins:random" and agent.game_seed != env.random_seed
                for agent in agent_list):
             raise ValueError("Random-Ins agent seed does not match the game seed")
@@ -455,18 +577,22 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
         ):
             raise ValueError("request_timeout must be a positive finite number of seconds")
         if source_identity is None:
-            source_identity = _gameplay_source_identity(include_file_digests=record_requests)
+            source_identity = _gameplay_source_identity(
+                include_file_digests=record_requests, multimind=bool(multimind_seats),
+            )
         else:
             source_identity = _copy_gameplay_source_identity(source_identity)
         result = GameplayOnlyResult(
-            seed=env.random_seed, roles=tuple(roles_),
+            seed=env.random_seed, roles=roles,
             seat_profiles=tuple(getattr(agent, "profile_name", "UNKNOWN") for agent in agent_list),
             decision_methods=tuple(agent.decision_method for agent in agent_list),
             source_identity=source_identity,
             request_timeout_seconds=request_timeout,
         )
         request_records = [] if record_requests else None
-        gameplay_metrics = dict(env=env, agents=agent_list, records=request_records, started=perf_counter())
+        multimind_speeches = {}
+        gameplay_metrics = dict(env=env, agents=agent_list, records=request_records,
+                                multimind_speeches=multimind_speeches, started=perf_counter())
         submitted_actions = []
     else:
         if canonical_recorder is None or call_audit is None:
@@ -523,6 +649,7 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
     while not done:
         stage = "between_steps"
         phase = None
+        multimind_speech = None
         try:
             actor = observation["current_act_idx"]
             is_speech = env.phase in PUBLIC_SPEECH_RUNTIME_PHASES
@@ -603,7 +730,20 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
                 if check_gameplay_interrupt is not None:
                     check_gameplay_interrupt()
                 acting_agent = agent_list[actor - 1]
-                if (wolf_speech_tom is not None and is_speech
+                if gameplay_only and is_speech and acting_agent.decision_method == MULTIMIND_METHOD:
+                    multimind_speech = dict(
+                        active_stage="multimind_history", kind=env.phase, seat=actor,
+                        boundary_event_id=None, day=None, last_same_phase_speaker=None,
+                        planner_attempted=False, reasoner_prediction_succeeded=False,
+                        planner_completed=False, plan_delivered_to_actor=False, planner_seed=None,
+                        planned_actions=None, reward=None, completed_simulations=0, candidate_score_calls=0,
+                        reasoner_forward_calls=0, mcts_elapsed_seconds=None, realized_speech=None,
+                        failure_stage=None, failure_type=None, failure_message=None,
+                    )
+                    multimind_speeches[step] = multimind_speech
+                    action = _gameplay_multimind_speech(env, acting_agent, observation, multimind_reasoner,
+                                                        multimind_speech, check_gameplay_interrupt)
+                elif (wolf_speech_tom is not None and is_speech
                         and observation.get("identity") == "Werewolf"
                         and actor in observation["authoritative_public_state"]["alive_players"]):
                     if handoff is None:
@@ -650,6 +790,10 @@ def eval(env, agent_list, roles_, *, canonical_recorder=None, call_audit=None,
                 online_pilot.after_step(env=env, done=done, info=info)
         except (Exception, KeyboardInterrupt) as error:
             if gameplay_only:
+                if multimind_speech is not None:
+                    stage = multimind_speech.pop("active_stage", stage)
+                    multimind_speech.update(failure_stage=stage, failure_type=type(error).__name__,
+                                            failure_message=str(error))
                 completed = len(submitted_actions)
                 if stage == "environment_step" and completed == step and is_speech:
                     # V1 异常或本步 V1 请求能证明动作已交给环境，不能证明该步完成。
@@ -865,6 +1009,8 @@ def assign_agents(
         profile_name = profile[
             "profile_name"
         ]
+        if profile["model_params"].get("decision_method") == MULTIMIND_METHOD and role not in werewolf_team:
+            raise ValueError("MultiMind profile requires a Werewolf seat")
         profile_backend_ids[profile_name] = profile["backend"]
 
         if role in werewolf_team:

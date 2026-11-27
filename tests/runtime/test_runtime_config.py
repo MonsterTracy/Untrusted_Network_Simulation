@@ -53,7 +53,7 @@ class RuntimeConfigNormalizationTest(unittest.TestCase):
         old_params = {"temperature": 1.0, "gameplay_prompt_profile": "strict_classic7"}
         self.assertEqual(normalize_params(config), old_params)
         params = config["agent_config"]["all_candidates"][0]["model_params"]
-        for method in ("react", "dpins:no", "dpins:llm", "dpins:random"):
+        for method in ("react", "dpins:no", "dpins:llm", "dpins:random", "multimind"):
             with self.subTest(method=method):
                 params["decision_method"] = method
                 self.assertEqual(normalize_params(config), {**old_params, "decision_method": method})

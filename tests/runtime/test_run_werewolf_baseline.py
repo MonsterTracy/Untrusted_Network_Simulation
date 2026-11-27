@@ -11,6 +11,7 @@ import yaml
 
 from scripts import run_werewolf_baseline as baseline
 from tests.canonical_collection.test_public_history import _event, _phase
+from tests.tom.test_multimind import multimind_checkpoint
 from werewolf.artifact_io import canonical_json_bytes
 from werewolf.backends import OpenAICompatibleBackend
 from werewolf.canonical_collection.public_history import PLAYER_IDS, freeze_public_event_history
@@ -366,4 +367,143 @@ def test_run_requires_frozen_source_and_yaml(frozen_plan, monkeypatch, changed):
         source = {**plan["source_identity"], "commit": "d" * 40}
         monkeypatch.setattr(baseline, "_source_identity", lambda: source)
     assert _run_first(plan_path, config_path) == 1
+    assert not (plan_path.parent / "attempts").exists()
+
+
+@pytest.fixture
+def paired_plan(frozen_plan, multimind_checkpoint, monkeypatch):
+    base_path, config_path, base_plan = frozen_plan
+    old_path = base_path.parent / "historical" / "scenarios.json"
+    write_once(old_path, base_plan)
+    new_path = base_path.parent / "multimind" / "scenarios.json"
+    checkpoint_path, identity, *_ = multimind_checkpoint
+    monkeypatch.setattr(baseline, "_source_identity", lambda *, multimind=False: base_plan["source_identity"])
+    options = ["--runtime-config", str(config_path), "--reasoner-checkpoint", str(checkpoint_path),
+               "--reasoner-device", "cpu"]
+    assert baseline.main(["plan", "--plan", str(new_path), "--method", "multimind", "--paired-plan", str(old_path),
+                          "--reasoner-checkpoint-digest", identity, *options]) == 0
+    return old_path, new_path, baseline._read_plan(new_path), options
+
+
+def test_multimind_reuses_frozen_scenarios_and_keeps_old_plan_readable(paired_plan, capsys):
+    old, new, plan, options = paired_plan
+    original = old.read_bytes()
+    parent = baseline._read_plan(old)
+    assert "methods" not in parent and plan["methods"] == ["multimind"]
+    assert plan["paired_plan_sha256"] == parent["plan_sha256"]
+    assert plan["scenarios"] == parent["scenarios"] and plan["runtime_config_sha256"] == parent["runtime_config_sha256"]
+    assert set(_summary(old, capsys)["methods"]) == set(METHODS)
+    summary = _summary(new, capsys)["methods"]["multimind"]
+    assert summary["planned"] == summary["not_started"] == 210
+    assert summary["tom_integration"]["all_observed_attempts"]["integration_success_rate"]["value"] is None
+    assert baseline.main(["plan", "--plan", str(old.with_name("multimind.json")), "--method", "multimind",
+                          "--paired-plan", str(old), "--reasoner-checkpoint-digest",
+                          plan["reasoner"]["checkpoint_sha256"], *options]) == 1
+    assert old.read_bytes() == original and not old.with_name("multimind.json").exists()
+
+
+def test_multimind_loads_one_real_checkpoint_for_two_mock_games(paired_plan, monkeypatch, capsys):
+    from werewolf.tom import multimind
+
+    old, plan_path, plan, options = paired_plan
+    original = old.read_bytes()
+    scenes = plan["scenarios"][:2]
+    tested_scenes = {scene["scenario_id"] for scene in scenes}
+
+    class ScenarioBackend(_GameplayBackend):
+        def _vote(self, _prompt, legal):
+            return next((seat for seat in legal if seat and self.roles[seat - 1] != "Werewolf"), 0)
+
+    script = ScenarioBackend("Werewolf")
+    client = _GameplayClient(script)
+    backend = OpenAICompatibleBackend(client=client, supports_json_schema=True)
+    named = Mock(return_value={"local_qwen": backend})
+    monkeypatch.setattr(baseline, "load_named_backends", named)
+    loader = Mock(wraps=multimind.load_multimind_checkpoint)
+    monkeypatch.setattr(multimind, "load_multimind_checkpoint", loader)
+    native_eval = baseline.game_runtime.eval
+    reasoners = []
+
+    def record_model(env, agents, roles, **kwargs):
+        script.roles = list(roles)
+        assert [agent.decision_method for agent in agents] == baseline._decision_methods(
+            scenes[len(reasoners)], "multimind",
+        )
+        reasoner = kwargs["multimind_reasoner"]
+        assert not reasoner.training and next(reasoner.parameters()).device.type == "cpu"
+        reasoners.append(reasoner)
+        return native_eval(env, agents, roles, **kwargs)
+
+    monkeypatch.setattr(baseline.game_runtime, "eval", record_model)
+    read_task = baseline._read_task
+    with monkeypatch.context() as patch:
+        def two_tasks(plan, scene, method, *paths):
+            return (read_task(plan, scene, method, *paths) if scene["scenario_id"] in tested_scenes
+                    else (True, "completed", None, None))
+
+        patch.setattr(baseline, "_read_task", two_tasks)
+        assert baseline.main(["run", "--plan", str(plan_path), "--batch", "1", *options]) == 0
+        assert baseline.main(["run", "--plan", str(plan_path), "--batch", "1", *options]) == 0
+    assert loader.call_count == named.call_count == 1
+    assert len(reasoners) == 2 and reasoners[0] is reasoners[1]
+    assert old.read_bytes() == original
+
+    stats = _summary(plan_path, capsys)["methods"]["multimind"]
+    assert stats["planned"] == 210 and stats["completed"] == stats["replay_passed"] == stats["wolf_wins"] == 2
+    assert stats["votes"]["games_with_vote_evidence"] == 2
+    assert stats["cost"]["model_requests"]["sum"] == len(client.calls)
+    metrics = stats["multimind"]
+    logical_count = metrics["planning_attempts"]
+    assert logical_count > 0 and metrics["completed_plans"] == metrics["actor_confirmed_boundaries"] == logical_count
+    assert metrics["cost"]["candidate_score_calls"]["sum"] == 500 * logical_count
+    assert metrics["cost"]["reasoner_forward_calls"]["sum"] == 500 * logical_count
+    assert metrics["alignment"]["exact_match"]["denominator"] == logical_count
+    assert stats["tom_integration"]["all_observed_attempts"]["integration_success_rate"]["value"] == 1
+
+
+def test_multimind_summary_preserves_partial_unknown_and_matches_actor_receipts(paired_plan, capsys):
+    _, plan_path, plan, _ = paired_plan
+    first, second, third = plan["scenarios"][:3]
+
+    def publish_failure(scene, kind, *, receipt):
+        seat = next(i for i, role in enumerate(scene["roles"], 1) if role == "Werewolf")
+        game = _sample_result(
+            plan, scene, "multimind", decision_methods=tuple(baseline._decision_methods(scene, "multimind")),
+            terminal_reached=False, winner=None, replay_winner=None, failure_type="RuntimeError",
+            public_event_digest=None, submitted_actions=(), completed_steps=0,
+            speech_results=({"seat": seat, "step": 0, "kind": kind, "multimind": {
+                "day": 1, "planner_attempted": True, "reasoner_prediction_succeeded": True,
+                "planner_completed": True, "plan_delivered_to_actor": True, "last_same_phase_speaker": kind == "speech_pk",
+                "candidate_score_calls": 500, "reasoner_forward_calls": None, "mcts_elapsed_seconds": 0.1,
+                "alignment": None,
+            }},),
+            request_records=({"kind": "speech_realization", "method": "multimind", "step": 0,
+                              "phase": f"1_day_{kind}", "seat": seat if receipt else (seat % 7) + 1,
+                              "game_seed": scene["seed"], "dispatched": True, "response_received": True,
+                              "status": "response_received"},),
+        )
+        _publish_sample(plan_path, plan, scene, "multimind", game)
+
+    publish_failure(first, "speech", receipt=True)
+    publish_failure(second, "speech_pk", receipt=False)
+    _publish_sample(plan_path, plan, third, "multimind")
+    stats = _summary(plan_path, capsys)["methods"]["multimind"]
+    assert stats["failed"] == 2 and stats["unknown"] == 1 and stats["wolf_wins"] == 0
+    assert stats["conditional_wolf_win_rate"] is None
+    integration = stats["tom_integration"]["all_observed_attempts"]
+    assert integration["verified_minimum"] == {"A": 2, "P": 2, "S": 1}
+    assert integration["integration_success_rate"]["value"] == "UNKNOWN"
+    evidence = stats["multimind"]
+    assert evidence["missing_game_evidence"] == 1 and evidence["actor_plan_handoffs"] == 2
+    assert evidence["actor_confirmed_boundaries"] == 1 and evidence["phase_support"]["last_same_phase_speaker"]["boundaries"] == 1
+    assert evidence["cost"]["reasoner_forward_calls"]["unknown_boundaries"] == 2
+    assert evidence["alignment"]["stop_compliance"]["value"] is None
+
+
+def test_multimind_requires_pinned_device_and_checkpoint_before_dispatch(paired_plan):
+    _, plan_path, _, options = paired_plan
+    assert baseline.main(["run", "--plan", str(plan_path), "--first-scenario", *options[:-1], "cuda:0"]) == 1
+    wrong = list(options)
+    wrong[3] = str(plan_path.parent / "missing-checkpoint")
+    assert baseline.main(["run", "--plan", str(plan_path), "--first-scenario", *wrong]) == 1
     assert not (plan_path.parent / "attempts").exists()
