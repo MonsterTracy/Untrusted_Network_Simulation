@@ -10,6 +10,7 @@ from itertools import combinations
 import json
 from pathlib import Path
 from random import Random
+from re import fullmatch
 import subprocess
 import sys
 
@@ -33,6 +34,11 @@ METHOD_NAMES = {"react": "react", "dpins:no": "belief", "dpins:llm": "llm-ins", 
 DIRECT_TOM_EXPERIMENT = "paper-tom-gameplay-ablation-direct"
 DIRECT_TOM_ARMS = ("NoToM", "Direct-ToM")
 DIRECT_TOM_SMOKE_SEED = 17
+HISTORICAL_REACT = "Historical ReAct"
+REACT_CROSS_DAY_FIX = "41ae37e3bf2527c7a17986381ffa8bbd34aface5"
+REVIEWED_DIRECT_TOM_SOURCE = "11eff20e1e8bcb639db95f8f1c330e89efdeb81d"
+_COST_FIELDS = ("elapsed_seconds", "model_requests", "input_tokens", "output_tokens", "total_tokens")
+_EXTENDED_COST_FIELDS = (*_COST_FIELDS, "llm_backend_seconds", "retries")
 WOLF_PROFILE = "baseline-wolf"
 BATCH_SIZE = 5 * len(WOLF_PAIRS)
 MISSING = object()
@@ -311,28 +317,35 @@ def _game_status(game, plan, scene, method):
     return "completed" if replay is not None else "unknown"
 
 
-def _read_task(plan, scene, method, attempt_path, result_path):
+def _read_task(plan, scene, method, attempt_path, result_path, *, evidence=None):
     started = False
     try:
         task = _task_key(plan, scene, method)
         attempt = _read_record(attempt_path)
+        attempt_sha = None
         if attempt is not MISSING:
             if not isinstance(attempt, dict) or attempt.get("task") != task:
                 raise ValueError("attempt identity mismatch")
             if not isinstance(attempt.get("started_at_utc"), str):
                 raise ValueError("attempt is missing its start time")
             started = True
+            attempt_sha = digest(attempt)
+            if evidence is not None:
+                evidence["attempt_sha256"] = attempt_sha
         result = _read_record(result_path)
         if result is MISSING:
             return started, "unknown" if started else "not_started", None, None
-        if not started or not isinstance(result, dict) or result.get("attempt_sha256") != digest(attempt):
+        if not started or not isinstance(result, dict) or result.get("attempt_sha256") != attempt_sha:
             raise ValueError("result is missing a matching attempt")
         if result.get("task") != task:
             raise ValueError("result task identity mismatch")
         game = result["gameplay"]
         if result.get("gameplay_sha256") != digest(game):
             raise ValueError("gameplay result SHA-256 mismatch")
-        return started, _game_status(game, plan, scene, task["method"]), game, None
+        status = _game_status(game, plan, scene, task["method"])
+        if evidence is not None:
+            evidence.update(result_sha256=digest(result), gameplay_sha256=result["gameplay_sha256"])
+        return started, status, game, None
     except (OSError, ValueError, KeyError, TypeError) as error:
         return started, "unknown", None, f"{result_path.name}: {error}"
 
@@ -341,6 +354,8 @@ def _run(args, plan):
     config, config_sha256 = _read_config(args.runtime_config)
     multimind = "reasoner" in plan
     direct = plan.get("direct_tom")
+    if args.arm is not None and (direct is None or direct["smoke"]):
+        raise ValueError("--arm requires a formal Direct-ToM plan")
     if direct is not None:
         source = _source_identity(direct_tom=True)
         if args.checkpoint is None or args.temporal is None:
@@ -380,6 +395,8 @@ def _run(args, plan):
 
     for ordinal, scene in scenes:
         for label in _task_order(plan, scene, ordinal):
+            if args.arm is not None and label != args.arm:
+                continue
             attempt_path, result_path = _task_paths(args.plan.parent, scene, label)
             _, status, _, problem = _read_task(plan, scene, label, attempt_path, result_path)
             if problem is not None:
@@ -533,7 +550,7 @@ def _summarize_multimind(evidence):
     }
 
 
-def _direct_tom_pairs(plan, games):
+def _direct_tom_pairs(plan, games, *, control_arm="NoToM"):
     from scripts.analyze_tom_gameplay_ablation import (
         BOOTSTRAP_REPLICATES, BOOTSTRAP_SEED, _exact_mcnemar, _paired_ratio_effects,
     )
@@ -541,7 +558,8 @@ def _direct_tom_pairs(plan, games):
     by_scene = {(row["scenario_id"], row["arm"]): row for row in games}
     rows = []
     for scene in plan["scenarios"]:
-        controls, treated = (by_scene.get((scene["scenario_id"], arm)) for arm in DIRECT_TOM_ARMS)
+        controls = by_scene.get((scene["scenario_id"], control_arm))
+        treated = by_scene.get((scene["scenario_id"], "Direct-ToM"))
         if controls is not None and treated is not None:
             rows.append((controls, treated))
     outcomes = Counter((control["winner"] == "Werewolf", treated["winner"] == "Werewolf")
@@ -549,21 +567,247 @@ def _direct_tom_pairs(plan, games):
     n00, n01, n10, n11 = (outcomes[a, b] for a, b in ((0, 0), (0, 1), (1, 0), (1, 1)))
     metrics = _paired_ratio_effects(rows)
     del metrics["coverage"]  # 接入统计由逐臂 PRE 证据汇总。
+    if control_arm == HISTORICAL_REACT:
+        for metric in metrics.values():
+            metric["historical_react"] = metric.pop("notom")
+            metric["direct_tom"] = metric.pop("tom")
     return {"N": len(rows), "n00": n00, "n01": n01, "n10": n10, "n11": n11,
-            "difference": "Direct-ToM - NoToM", "metrics": metrics,
+            "difference": f"Direct-ToM - {control_arm}", "metrics": metrics,
             "exact_mcnemar_p": _exact_mcnemar(n01, n10) if rows else None,
             "bootstrap_seed": BOOTSTRAP_SEED, "bootstrap_replicates": BOOTSTRAP_REPLICATES,
             "bootstrap_generator": "NumPy PCG64"}
 
 
-def _summarize(output, plan):
-    metrics = ("elapsed_seconds", "model_requests", "input_tokens", "output_tokens", "total_tokens")
+def _record_cost(game, totals, available, *, extended):
+    usage = game.get("token_usage")
+    values = {"elapsed_seconds": game.get("elapsed_seconds"), "model_requests": game.get("model_requests")}
+    if isinstance(usage, dict):
+        values.update((field, usage.get(field)) for field in _COST_FIELDS[2:])
+    if extended:
+        durations = [request.get("elapsed_seconds") for request in game["request_records"]]
+        if all(type(seconds) in (int, float) for seconds in durations) and game.get("model_requests") == len(durations):
+            values["llm_backend_seconds"] = sum(durations)
+        values["retries"] = game.get("retries")
+    for field, value in values.items():
+        if type(value) in (int, float) and value >= 0:
+            totals[field] += value
+            available[field] += 1
+
+
+def _summarize_cost(fields, totals, available):
+    return {field: {"sum": totals[field] if available[field] else None,
+                    "games_available": available[field]} for field in fields}
+
+
+def _replay_votes(game):
+    """区分终局回放失败与回放后的投票指标缺失。"""
+    try:
+        history, _ = game_runtime.replay_gameplay_history(game_runtime.GameplayOnlyResult(**game))
+    except (ValueError, TypeError, KeyError) as error:
+        return False, UNKNOWN, str(error)
+    try:
+        return True, count_game_votes(history, dict(zip(PLAYER_IDS, game["roles"], strict=True))), None
+    except (ValueError, TypeError, KeyError) as error:
+        return True, UNKNOWN, str(error)
+
+
+def _react_source_comparison(historical_source, direct_source):
+    """用实际文件摘要确认审阅过的 ReAct 路径，Git 祖先关系只作版本证据。"""
+    historical = game_runtime._copy_gameplay_source_identity(historical_source)
+    current = game_runtime._copy_gameplay_source_identity(direct_source)
+    repo = Path(__file__).resolve().parents[1]
+
+    def git(*args):
+        return subprocess.run(["git", "--no-optional-locks", *args], cwd=repo,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+
+    def file_sha(revision, path):
+        result = git("show", f"{revision}:{path}")
+        return sha256_bytes(result.stdout) if result.returncode == 0 else UNKNOWN
+
+    revision = historical["commit"]
+    ancestry = git("merge-base", "--is-ancestor", REACT_CROSS_DAY_FIX, revision).returncode
+    reviewed_history = ancestry == 0 and git("merge-base", "--is-ancestor", revision, REVIEWED_DIRECT_TOM_SOURCE).returncode == 0
+    old, new = historical["file_sha256"], current["file_sha256"]
+    validator = "werewolf/agents/llm_agent.py"
+    prior = file_sha(f"{REACT_CROSS_DAY_FIX}^", validator)
+    fixed = file_sha(REACT_CROSS_DAY_FIX, validator)
+    validator_rules = {prior: "reject_cross_day", fixed: "allow_cross_day"}
+    old_rule = validator_rules.get(old.get(validator), UNKNOWN)
+    new_rule = validator_rules.get(new.get(validator), UNKNOWN)
+    unreviewed = []
+    for path in game_runtime._GAMEPLAY_SOURCE_FILES:
+        if old.get(path) is not None and old[path] == new.get(path):
+            continue
+        # 只接受经过源码审阅的提交范围，以及能与其对应的实际文件。
+        if (new.get(path) == file_sha(REVIEWED_DIRECT_TOM_SOURCE, path)
+                and (old.get(path) == file_sha(REACT_CROSS_DAY_FIX, path)
+                     or (reviewed_history and old.get(path) == file_sha(revision, path)))):
+            continue
+        unreviewed.append(path)
+    status = "compatible"
+    if old_rule != UNKNOWN and new_rule != UNKNOWN and old_rule != new_rule:
+        status = "incompatible"
+    elif unreviewed or old_rule != "allow_cross_day" or new_rule != "allow_cross_day":
+        status = "review_required"
+    return {"status": status, "reviewed_source": REVIEWED_DIRECT_TOM_SOURCE, "unreviewed_files": unreviewed,
+            "cross_day_fix": {"commit": REACT_CROSS_DAY_FIX,
+                              "in_historical_git_ancestry": ancestry == 0 if ancestry in (0, 1) else UNKNOWN,
+                              "historical_validator": old_rule, "direct_tom_validator": new_rule}}
+
+
+def _formal_direct_plan(plan):
+    if "direct_tom" not in plan or plan["direct_tom"]["smoke"]:
+        raise ValueError("historical ReAct requires a formal Direct-ToM plan")
+
+
+def _scene_identity(scene):
+    return {field: scene[field] for field in ("scenario_id", "seed", "roles", "seat_profiles")}
+
+
+def _valid_game_outcomes(games):
+    wins = sum(game["winner"] == "Werewolf" for game in games)
+    return {"completed": len(games), "wolf_wins": wins, "villager_wins": len(games) - wins,
+            "WWR": gameplay_ratio(wins, len(games)),
+            "votes": summarize_game_votes([game["vote_counts"] for game in games])}
+
+
+def _audit_historical_react(args, plan):
+    _formal_direct_plan(plan)
+    historical_path = safe_path(args.historical_plan)
+    historical = _read_plan(historical_path)
+    if historical["plan_sha256"] != plan["paired_plan_sha256"] or historical["scenarios"] != plan["scenarios"]:
+        raise ValueError("historical ReAct scenarios differ from the frozen Direct-ToM parent plan")
+    config, runtime_sha = _read_config(args.runtime_config)
+    settings = {field: historical[field] for field in (
+        "runtime_config_sha256", "default_profile", "max_steps", "request_timeout_seconds", "sdk_retries",
+    )}
+    if runtime_sha != settings["runtime_config_sha256"] or any(plan[key] != value for key, value in settings.items()):
+        raise ValueError("historical and Direct-ToM runtime settings differ")
+    if plan["source_identity"] != _source_identity(direct_tom=True):
+        raise ValueError("audit must use the frozen Direct-ToM source")
+    source_check = _react_source_comparison(historical["source_identity"], plan["source_identity"])
+
+    included, excluded = [], []
+    totals, available, statuses = Counter(), Counter(), Counter()
+    models, unexpected_models = set(), set()
+    default_model = config["agent_config"]["all_candidates"][0]["model"]
+    for scene in historical["scenarios"]:
+        attempt, result = _task_paths(historical_path.parent, scene, "react")
+        row = {**_scene_identity(scene), "method": "react", "attempt_file": f"attempts/{attempt.name}",
+               "result_file": f"results/{result.name}"}
+        started, status, game, problem = _read_task(historical, scene, "react", attempt, result, evidence=row)
+        statuses[status] += 1
+        row.update(started=started, status=status)
+        if game is not None:
+            for request in game["request_records"]:
+                alias = request.get("model")
+                if isinstance(alias, str) and alias != UNKNOWN and request.get("dispatched") is True:
+                    models.add(alias)
+                    expected = config["parser"]["model"] if request.get("kind") == "v1_parser" else default_model
+                    if alias != expected:
+                        unexpected_models.add(alias)
+            cost, measured = Counter(), Counter()
+            _record_cost(game, cost, measured, extended=True)
+            totals.update(cost)
+            available.update(measured)
+            row["cost"] = {field: cost[field] if measured[field] else UNKNOWN for field in _EXTENDED_COST_FIELDS}
+        if status == "completed":
+            replay_ok, votes, replay_error = _replay_votes(game)
+            if replay_ok:
+                row.update(winner=game["winner"], public_event_digest=game["public_event_digest"], vote_counts=votes)
+                if replay_error is not None:
+                    row["vote_evidence_error"] = replay_error
+                included.append(row)
+                continue
+            reason = f"independent replay failed: {replay_error}"
+        elif problem is not None:
+            reason = problem
+        elif game is not None:
+            row.update(failure_type=game["failure_type"], failure_stage=game["failure_stage"])
+            reason = game["failure_message"] or game["failure_type"] or status
+        else:
+            reason = "attempt has no result record" if started else "no attempt or result record"
+        excluded.append({**row, "reason": reason})
+
+    provenance = historical.get("runtime_provenance") or {}
+    service = {}
+    for field, length in (("model_manifest_sha256", 64), ("hf_revision", 40), ("serve_config_sha256", 64)):
+        value = provenance.get(field)
+        service[field] = value if isinstance(value, str) and fullmatch(f"[0-9a-f]{{{length}}}", value) else UNKNOWN
+    service.update(request_model_aliases=sorted(models), unexpected_request_aliases=sorted(unexpected_models),
+                   configured_model_aliases={"agent": default_model, "v1_parser": config["parser"]["model"]},
+                   live_service_match=UNKNOWN)
+    missing = [f"historical_service.{field}" for field, value in service.items() if value == UNKNOWN]
+    return {
+        "historical_plan_path": str(historical_path), "historical_plan_sha256": historical["plan_sha256"],
+        "historical_source": historical["source_identity"], "runtime": settings,
+        "direct_tom_plan_sha256": plan["plan_sha256"], "source_comparison": source_check,
+        "historical_service": service, "missing_evidence": missing,
+        "pairing_status": "incompatible" if unexpected_models else source_check["status"],
+        "included": included, "excluded": excluded,
+        "summary": {"planned": len(historical["scenarios"]), "archive_status_counts": dict(statuses),
+                    "excluded": len(excluded), **_valid_game_outcomes(included),
+                    "cost": _summarize_cost(_EXTENDED_COST_FIELDS, totals, available)},
+    }
+
+
+def _lock_historical_reference(output, reference, direct_plan_path, plan):
+    output = safe_path(output)
+    if output.is_relative_to(Path(reference["historical_plan_path"]).parent):
+        raise ValueError("historical reference must be outside the original ReAct archive")
+    for scene in plan["scenarios"]:
+        if any(safe_path(path).exists() for path in _task_paths(direct_plan_path.parent, scene, "Direct-ToM")):
+            raise ValueError("lock the historical reference before the first Direct-ToM attempt")
+    reference["locked_at_utc"] = datetime.now(timezone.utc).isoformat()
+    reference["reference_sha256"] = digest(reference)
+    write_once(output, reference)
+
+
+def _read_historical_reference(path, plan):
+    _formal_direct_plan(plan)
+    reference = _read_record(path)
+    if not isinstance(reference, dict) or not isinstance(reference.get("locked_at_utc"), str):
+        raise ValueError("expected a locked historical ReAct reference")
+    body = {key: value for key, value in reference.items() if key != "reference_sha256"}
+    if (reference.get("reference_sha256") != digest(body)
+            or reference.get("historical_plan_sha256") != plan["paired_plan_sha256"]
+            or reference.get("direct_tom_plan_sha256") != plan["plan_sha256"]):
+        raise ValueError("historical reference digest or plan identity mismatch")
+    scenes = {scene["scenario_id"]: _scene_identity(scene) for scene in plan["scenarios"]}
+    for row in reference["included"] + reference["excluded"]:
+        if row["method"] != "react" or scenes.pop(row["scenario_id"], None) != _scene_identity(row):
+            raise ValueError("historical reference scene ID, Seed, roles or profiles differ from the plan")
+    if scenes or any(row["status"] != "completed" or row["winner"] not in ("Werewolf", "Villager")
+                     for row in reference["included"]):
+        raise ValueError("historical reference has incomplete or invalid population records")
+    return reference
+
+
+def _historical_comparison(plan, games, reference, replay_failures):
+    invalid = {row["scenario_id"] for row in replay_failures}
+    treated = [row for row in games if row["arm"] == "Direct-ToM" and row["scenario_id"] not in invalid]
+    report = {"design": "cross_batch_historical_pairing", "difference": f"Direct-ToM - {HISTORICAL_REACT}",
+              "status": reference["pairing_status"], "historical_plan_sha256": reference["historical_plan_sha256"],
+              "reference_sha256": reference["reference_sha256"], "historical_react": reference["summary"],
+              "direct_tom": _valid_game_outcomes(treated),
+              "source_comparison": reference["source_comparison"], "historical_service": reference["historical_service"],
+              "missing_evidence": reference["missing_evidence"], "direct_tom_replay_failures": replay_failures,
+              "paired": None}
+    if report["status"] == "compatible":
+        historical = [{**row, "arm": HISTORICAL_REACT} for row in reference["included"]]
+        report["paired"] = _direct_tom_pairs(plan, historical + treated, control_arm=HISTORICAL_REACT)
+    return report
+
+
+def _summarize(output, plan, *, historical_reference=None):
+    metrics = _COST_FIELDS
     direct = plan.get("direct_tom")
     methods = DIRECT_TOM_ARMS if direct is not None else plan.get("methods", DECISION_METHODS)
     if direct is not None:
         from scripts.tom_gameplay_ablation import direct_tom_coverage
 
-        metrics += ("llm_backend_seconds", "retries")
+        metrics = _EXTENDED_COST_FIELDS
         direct_attempts = {arm: [] for arm in DIRECT_TOM_ARMS}
         direct_completed = {arm: [] for arm in DIRECT_TOM_ARMS}
         tasks = []
@@ -578,6 +822,7 @@ def _summarize(output, plan):
     multimind_attempts, multimind_completed = [], []
     games = []
     problems = []
+    direct_replay_failures = []
     for ordinal, scene in enumerate(plan["scenarios"]):
         for method in _task_order(plan, scene, ordinal):
             started, status, game, problem = _read_task(plan, scene, method, *_task_paths(output, scene, method))
@@ -615,34 +860,19 @@ def _summarize(output, plan):
                 if direct is not None:
                     row.update(method="react", arm=method)
                     del row["tom_integration"]
-                try:
-                    history, _ = game_runtime.replay_gameplay_history(game_runtime.GameplayOnlyResult(**game))
-                    row["vote_counts"] = count_game_votes(history, dict(zip(PLAYER_IDS, game["roles"], strict=True)))
-                except (ValueError, TypeError, KeyError) as error:
-                    row["vote_evidence_error"] = str(error)
+                replay_ok, row["vote_counts"], vote_error = _replay_votes(game)
+                if vote_error is not None:
+                    row["vote_evidence_error"] = vote_error
+                if historical_reference is not None and method == "Direct-ToM" and not replay_ok:
+                    direct_replay_failures.append({"scenario_id": scene["scenario_id"], "reason": vote_error})
                 games.append(row)
-            usage = game.get("token_usage")
-            values = {"elapsed_seconds": game.get("elapsed_seconds"), "model_requests": game.get("model_requests")}
-            if isinstance(usage, dict):
-                values.update((field, usage.get(field)) for field in metrics[2:5])
-            if direct is not None:
-                durations = [request.get("elapsed_seconds") for request in game["request_records"]]
-                if all(type(seconds) in (int, float) for seconds in durations) and game["model_requests"] == len(durations):
-                    values["llm_backend_seconds"] = sum(durations)
-                values["retries"] = game["retries"]
-            for field, value in values.items():
-                if type(value) in (int, float) and value >= 0:
-                    totals[method][field] += value
-                    available[method][field] += 1
+            _record_cost(game, totals[method], available[method], extended=direct is not None)
     for method, stats in counts.items():
         completed = stats["completed"]
         stats["native_terminal_rate"] = stats["native_terminal"] / stats["planned"]
         stats["valid_result_coverage"] = completed / stats["planned"]
         stats["conditional_wolf_win_rate"] = stats["wolf_wins"] / completed if completed else None
-        stats["cost"] = {
-            field: {"sum": totals[method][field] if available[method][field] else None,
-                    "games_available": available[method][field]} for field in metrics
-        }
+        stats["cost"] = _summarize_cost(metrics, totals[method], available[method])
         stats["votes"] = summarize_game_votes([game["vote_counts"] for game in games
                                                if game.get("arm", game["method"]) == method])
         if direct is not None:
@@ -676,6 +906,9 @@ def _summarize(output, plan):
                                          and control["unmatched_receipts"] == treated["unmatched_receipts"] == 0)
         else:
             summary["paired"] = _direct_tom_pairs(plan, games)
+            if historical_reference is not None:
+                summary["historical_comparison"] = _historical_comparison(plan, games, historical_reference,
+                                                                        direct_replay_failures)
         return summary
     summary = {"plan_sha256": plan["plan_sha256"], "methods": counts, "games": games, "record_errors": problems}
     if "reasoner" in plan:
@@ -689,7 +922,8 @@ def main(argv=None):
     plan_parser = commands.add_parser("plan", help="生成并冻结 210 个场景")
     run_parser = commands.add_parser("run", help="运行尚未开始的任务")
     summary_parser = commands.add_parser("summarize", help="只读汇总全部计划任务")
-    for command in (plan_parser, run_parser, summary_parser):
+    audit_parser = commands.add_parser("audit-react", help="只读核验历史 ReAct，可一次性锁定对照人口")
+    for command in (plan_parser, run_parser, summary_parser, audit_parser):
         command.add_argument("--plan", type=Path, required=True)
     for command in (plan_parser, run_parser):
         command.add_argument("--runtime-config", type=Path, required=True)
@@ -704,6 +938,11 @@ def main(argv=None):
     plan_parser.add_argument("--smoke", action="store_true")
     run_parser.add_argument("--checkpoint", type=Path, help="Direct-ToM 的冻结 Epoch 35 Checkpoint")
     run_parser.add_argument("--temporal", type=Path, help="Direct-ToM 的冻结 Temporal")
+    run_parser.add_argument("--arm", choices=("Direct-ToM",), help="仅执行正式计划的 Direct-ToM 任务")
+    audit_parser.add_argument("--historical-plan", type=Path, required=True)
+    audit_parser.add_argument("--runtime-config", type=Path, required=True)
+    audit_parser.add_argument("--output", type=Path, help="在新对局前不可覆盖地写出历史人口")
+    summary_parser.add_argument("--historical-reference", type=Path, help="已锁定的历史 ReAct 人口")
     selection = run_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--first-scenario", action="store_true")
     selection.add_argument("--batch", type=int, choices=(1, 2))
@@ -715,7 +954,14 @@ def main(argv=None):
         plan = _read_plan(args.plan)
         if args.command == "run":
             return _run(args, plan)
-        print(json.dumps(_summarize(args.plan.parent, plan), ensure_ascii=False, indent=2))
+        if args.command == "audit-react":
+            report = _audit_historical_react(args, plan)
+            if args.output is not None:
+                _lock_historical_reference(args.output, report, args.plan, plan)
+        else:
+            reference = _read_historical_reference(args.historical_reference, plan) if args.historical_reference else None
+            report = _summarize(args.plan.parent, plan, historical_reference=reference)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, yaml.YAMLError) as error:
         print(f"werewolf baseline: {error}", file=sys.stderr)

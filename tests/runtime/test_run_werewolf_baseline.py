@@ -4,6 +4,7 @@ from hashlib import sha256
 from itertools import combinations
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -108,7 +109,7 @@ def mock_sdk(frozen_plan, monkeypatch):
 def _sample_result(plan, scene, method, **changes):
     fields = {
         "seed": scene["seed"], "roles": tuple(scene["roles"]), "seat_profiles": tuple(scene["seat_profiles"]),
-        "decision_methods": (method, method, None, None, None, None, None),
+        "decision_methods": tuple(baseline._decision_methods(scene, method)),
         "source_identity": plan["source_identity"], "request_timeout_seconds": 300,
         "terminal_reached": True, "winner": "Werewolf", "replay_winner": "Werewolf",
         "public_event_digest": "d" * 64, "submitted_actions": (("kill", 3),), "completed_steps": 1,
@@ -529,12 +530,14 @@ def _direct_tom_plan(frozen_plan, monkeypatch, *, smoke=False):
     return old, destination, baseline._read_plan(destination), run_options
 
 
-@pytest.mark.parametrize("smoke", (False, True))
-def test_direct_tom_paired_plan_run_and_summary(frozen_plan, monkeypatch, capsys, smoke):
+@pytest.mark.parametrize(("smoke", "arm_only"), ((False, False), (True, False), (False, True)))
+def test_direct_tom_paired_plan_run_and_summary(frozen_plan, monkeypatch, capsys, smoke, arm_only):
     from scripts import tom_gameplay_ablation as ablation
     from tests.tom.test_gameplay_ablation import _matrix
 
     old, destination, plan, run = _direct_tom_plan(frozen_plan, monkeypatch, smoke=smoke)
+    if arm_only:
+        run += ["--arm", "Direct-ToM"]
     original = old.read_bytes()
     parent = baseline._read_plan(old)
     assert plan["paired_plan_sha256"] == parent["plan_sha256"]
@@ -565,10 +568,10 @@ def test_direct_tom_paired_plan_run_and_summary(frozen_plan, monkeypatch, capsys
 
     def load(checkpoint, temporal, device):
         assert checkpoint.name == "checkpoint" and temporal.name == "temporal" and device == "cpu"
-        assert client.calls  # 加载前 NoToM 已结束。
-        _, control = baseline._task_paths(destination.parent, scene, "NoToM")
+        assert client.calls
+        control_paths = baseline._task_paths(destination.parent, scene, "NoToM")
         attempt, _ = baseline._task_paths(destination.parent, scene, "Direct-ToM")
-        assert control.exists() and attempt.exists()
+        assert all(path.exists() is not arm_only for path in control_paths) and attempt.exists()
         return SimpleNamespace(identity=plan["direct_tom"]["predictor"], predict=predict)
 
     loader = Mock(side_effect=load)
@@ -598,6 +601,11 @@ def test_direct_tom_paired_plan_run_and_summary(frozen_plan, monkeypatch, capsys
         assert not without_votes["smoke_verified"]
         assert all(arm["completed"] == 1 and arm["votes"]["games_with_vote_evidence"] == 0
                    for arm in without_votes["arms"].values())
+    elif arm_only:
+        assert summary["paired"]["N"] == 0 and len(summary["games"]) == 1
+        assert summary["arms"]["NoToM"]["not_started"] == 210
+        assert requests == stats["cost"]["model_requests"]["sum"]
+        assert not any(destination.parent.glob("*/scenario-*-notom.json"))
     else:
         paired = summary["paired"]
         assert paired["N"] == paired["n11"] == 1 and paired["exact_mcnemar_p"] == 1
@@ -641,3 +649,160 @@ def test_direct_tom_pair_keeps_valid_games_without_exposure_and_recomputes_vote_
     assert paired["metrics"]["WWR"]["delta"] == 0.5 and paired["metrics"]["WWR"]["bootstrap_95_ci"] == [0.0, 1.0]
     assert paired["metrics"]["VPR"]["delta"] == pytest.approx(3 / 4 - 1 / 6)
     assert paired["exact_mcnemar_p"] == 1
+
+
+def test_direct_tom_arm_batches_skip_started_tasks(frozen_plan, monkeypatch, capsys):
+    _, destination, plan, run = _direct_tom_plan(frozen_plan, monkeypatch)
+    first, failed, pending, interrupted = plan["scenarios"][:4]
+    by_seed = {scene["seed"]: scene for scene in plan["scenarios"]}
+    backend = object()
+    monkeypatch.setattr(baseline, "load_named_backends", Mock(return_value={"local_qwen": backend}))
+    dispatched = []
+
+    def evaluate(env, agents, roles, **kwargs):
+        scene = by_seed[env.random_seed]
+        dispatched.append(scene["scenario_id"])
+        assert tuple(roles) == tuple(scene["roles"])
+        assert tuple(agent.decision_method for agent in agents) == tuple(baseline._decision_methods(scene, "react"))
+        assert kwargs.get("direct_wolf_speech_tom") and kwargs["direct_tom_game_id"].endswith("-direct-tom")
+        attempt, result = baseline._task_paths(destination.parent, scene, "Direct-ToM")
+        assert attempt.exists() and not result.exists()
+        failure = {"failure_type": "KeyboardInterrupt", "terminal_reached": False, "winner": None, "replay_winner": None}
+        return GameplayOnlyResult(**_sample_result(plan, scene, "react", **(failure if scene == interrupted else {})))
+
+    monkeypatch.setattr(baseline.game_runtime, "eval", evaluate)
+    run += ["--arm", "Direct-ToM"]
+    assert baseline.main(run) == 0
+    assert dispatched == [first["scenario_id"]]
+    paths = baseline._task_paths(destination.parent, first, "Direct-ToM")
+    paths += _publish_sample(destination, plan, failed, "Direct-ToM", _sample_result(
+        plan, failed, "react", failure_type="ValueError", winner=None, replay_winner=None, terminal_reached=False,
+    ))
+    attempt, result = _publish_sample(destination, plan, pending, "Direct-ToM")
+    original = {path: path.read_bytes() for path in (*paths, attempt)}
+    batch = [arg for arg in run if arg != "--first-scenario"] + ["--batch"]
+    assert baseline.main(batch + ["1"]) == 1
+    assert dispatched == [first["scenario_id"], interrupted["scenario_id"]]
+    assert baseline.main(batch + ["1"]) == 0 and baseline.main(batch + ["2"]) == 0
+    assert len(dispatched) == len(set(dispatched)) == 208
+    assert dispatched == [scene["scenario_id"] for scene in plan["scenarios"] if scene not in (failed, pending)]
+    assert {path: path.read_bytes() for path in original} == original and not result.exists()
+    assert not any(destination.parent.glob("*/scenario-*-notom.json"))
+    stats = _summary(destination, capsys)["arms"]
+    treated = stats["Direct-ToM"]
+    assert (treated["completed"], treated["failed"], treated["unknown"]) == (207, 1, 2)
+    assert stats["NoToM"]["not_started"] == 210 and stats["NoToM"]["started"] == 0
+
+
+@pytest.mark.parametrize("source_status", ("compatible", "incompatible"))
+def test_historical_react_audit_locks_valid_records_before_pairing(frozen_plan, mock_sdk, monkeypatch, capsys, source_status):
+    old, destination, plan, _ = _direct_tom_plan(frozen_plan, monkeypatch)
+    history = baseline._read_plan(old)
+    base_path, config_path, _ = frozen_plan
+    assert _run_first(base_path, config_path) == 0  # 取得原生完成及回放的脚本化局。
+    valid, failed, pending, bad_identity, bad_replay, malformed = history["scenarios"][:6]
+    _, native = baseline._task_paths(base_path.parent, valid, "react")
+    game = json.loads(native.read_bytes())["gameplay"]
+    _publish_sample(old, history, valid, "react", game)
+    _publish_sample(old, history, failed, "react", _sample_result(
+        history, failed, "react", failure_type="ValueError", failure_message="scripted failure",
+        winner=None, replay_winner=None, terminal_reached=False,
+    ))
+    _publish_sample(old, history, pending, "react")
+    _publish_sample(old, history, bad_identity, "react", _sample_result(history, bad_identity, "react", seed=-1))
+    _publish_sample(old, history, bad_replay, "react", _sample_result(history, bad_replay, "react"))
+    claim, broken = _publish_sample(old, history, malformed, "react")
+    broken.write_text("{invalid", encoding="utf-8")
+    original = {path: path.read_bytes() for path in old.parent.rglob("*.json")}
+    monkeypatch.setattr(baseline, "_react_source_comparison", lambda *_: {"status": source_status})
+    backend_loader = Mock(side_effect=AssertionError("审阅和汇总不可加载 Backend"))
+    monkeypatch.setattr(baseline, "load_named_backends", backend_loader)
+    audit = ["audit-react", "--plan", str(destination), "--historical-plan", str(old),
+             "--runtime-config", str(config_path)]
+    reference_path = destination.parent.parent / "historical_react_reference.json"
+    capsys.readouterr()
+    assert baseline.main(audit) == 0 and not reference_path.exists()
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["summary"]["planned"] == 210 and preview["summary"]["WWR"] == {
+        "numerator": 1, "denominator": 1, "value": 1.0,
+    }
+    assert preview["summary"]["votes"]["games_with_vote_evidence"] == 1
+    included, = preview["included"]
+    assert included["scenario_id"] == valid["scenario_id"] and included["gameplay_sha256"] == digest(game)
+    assert included["cost"]["model_requests"] > 0 and included["result_sha256"]
+    excluded = {row["scenario_id"]: row for row in preview["excluded"]}
+    assert [excluded[scene["scenario_id"]]["status"] for scene in (failed, pending, bad_identity, bad_replay)] == [
+        "failed", "unknown", "unknown", "completed",
+    ]
+    assert excluded[failed["scenario_id"]]["reason"] == "scripted failure"
+    assert "no result" in excluded[pending["scenario_id"]]["reason"]
+    assert "identity mismatch" in excluded[bad_identity["scenario_id"]]["reason"]
+    assert "independent replay failed" in excluded[bad_replay["scenario_id"]]["reason"]
+    assert excluded[malformed["scenario_id"]]["attempt_sha256"] == digest(json.loads(claim.read_bytes()))
+    assert excluded[malformed["scenario_id"]]["status"] == "unknown"
+    assert preview["historical_service"]["request_model_aliases"]
+    assert preview["historical_service"]["model_manifest_sha256"] == "UNKNOWN"
+    assert baseline.main(audit + ["--output", str(old.parent / reference_path.name)]) == 1
+    assert baseline.main(audit + ["--output", str(reference_path)]) == 0
+    reference_bytes = reference_path.read_bytes()
+    assert baseline.main(audit + ["--output", str(reference_path)]) == 1
+    assert reference_path.read_bytes() == reference_bytes
+
+    _publish_sample(destination, plan, valid, "Direct-ToM", game)
+    assert baseline.main(audit + ["--output", str(destination.parent / reference_path.name)]) == 1
+    summary_args = ["summarize", "--plan", str(destination), "--historical-reference", str(reference_path)]
+    capsys.readouterr()
+    read_record = baseline._read_record
+
+    def read_without_original(path):
+        assert not path.is_relative_to(old.parent)
+        return read_record(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(baseline, "_read_record", read_without_original)
+        assert baseline.main(summary_args) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["paired"]["N"] == 0 and summary["arms"]["NoToM"]["not_started"] == 210
+    comparison = summary["historical_comparison"]
+    assert comparison["direct_tom"]["completed"] == comparison["historical_react"]["completed"] == 1
+    assert comparison["status"] == source_status
+    paired = comparison["paired"]
+    if source_status == "compatible":
+        assert paired["N"] == paired["n11"] == 1 and paired["exact_mcnemar_p"] == 1
+        assert paired["difference"] == "Direct-ToM - Historical ReAct"
+        assert paired["bootstrap_replicates"] == 100_000 and paired["metrics"]["WWR"]["bootstrap_95_ci"] == [0.0, 0.0]
+    else:
+        assert paired is None
+    assert {path: path.read_bytes() for path in old.parent.rglob("*.json")} == original
+    assert not backend_loader.called
+
+    reference = json.loads(reference_bytes)
+    for field, wrong in (("seed", 999), ("roles", list(reversed(valid["roles"])))):
+        wrong_ref = {**reference, "included": [{**included, field: wrong}]}
+        del wrong_ref["reference_sha256"]
+        wrong_ref["reference_sha256"] = digest(wrong_ref)
+        wrong_path = reference_path.with_name(f"wrong-{field}.json")
+        write_once(wrong_path, wrong_ref)
+        assert baseline.main(summary_args[:-1] + [str(wrong_path)]) == 1
+
+
+def test_historical_react_source_audits_cross_day_fix_using_archived_file_digests():
+    def source(revision):
+        def git(*args):
+            return subprocess.check_output(["git", "--no-optional-locks", *args], cwd=RUNTIME_YAML.parents[2])
+
+        return {"commit": git("rev-parse", revision).decode().strip(), "branch": "twd/mainline",
+                "tracked_source_diff_sha256": sha256(b"").hexdigest(),
+                "file_sha256": {path: sha256(git("show", f"{revision}:{path}")).hexdigest()
+                                for path in baseline.game_runtime._GAMEPLAY_SOURCE_FILES}}
+
+    fixed = baseline.REACT_CROSS_DAY_FIX
+    target = source(baseline.REVIEWED_DIRECT_TOM_SOURCE)
+    after = baseline._react_source_comparison(source(fixed), target)
+    assert after["status"] == "compatible" and after["cross_day_fix"]["in_historical_git_ancestry"] is True
+    before = baseline._react_source_comparison(source(f"{fixed}^"), target)
+    assert before["status"] == "incompatible" and before["cross_day_fix"]["historical_validator"] == "reject_cross_day"
+    modified = source(fixed)
+    modified["file_sha256"]["werewolf/agents/llm_agent.py"] = "f" * 64
+    unknown = baseline._react_source_comparison(modified, target)
+    assert unknown["status"] == "review_required" and unknown["cross_day_fix"]["historical_validator"] == "UNKNOWN"
