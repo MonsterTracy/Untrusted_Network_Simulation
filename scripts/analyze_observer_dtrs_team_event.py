@@ -111,20 +111,25 @@ class TeamSample:
         return self.game_id, self.boundary_id, self.observer_id
 
 
-def pre_samples(pre, wolves, reports, q_record, *, attempt_id):
+def bind_q(pre, q_record):
     identity = tuple(getattr(pre, name) for name in PRE_IDENTITY)
     if tuple(q_record[name] for name in PRE_IDENTITY) != identity:
         raise ValueError(f"冻结 Q 与 PRE 身份不符：{identity[:2]}")
-    matrix = ProbabilityMatrix(*identity[:3], q_record["q"])
+    return ProbabilityMatrix(*identity[:3], q_record["q"])
+
+
+def pre_samples(pre, wolves, reports, q_record, *, attempt_id):
+    matrix = bind_q(pre, q_record)
+    identity = matrix.game_id, matrix.boundary_id
     contexts = contexts_for_pre(pre, wolves)
     if not contexts:
-        raise ValueError(f"狼人发言 PRE 缺少合格观察者：{identity[:2]}")
+        raise ValueError(f"狼人发言 PRE 缺少合格观察者：{identity}")
     links = {link.observer_id: link.observation_id for link in pre.belief_observation_links}
     for ctx in contexts:
         report_id = links[ctx.observer_id]
         label = label_from_observation(ctx, reports.get(report_id))
         if not label.label_observed or label.observation_id != report_id or label.attempt_id != attempt_id:
-            raise ValueError(f"原始报告缺失、失败或身份错配：{identity[:2]} / {report_id}")
+            raise ValueError(f"原始报告缺失、失败或身份错配：{identity} / {report_id}")
         raw = label.raw_suspicion_support
         q_row = matrix.row(ctx.observer_id)
         nonself = [value for seat, value in zip(q_row.seat_ids, q_row.values, strict=True)
@@ -166,7 +171,7 @@ def _frozen_q(publication, selected_games):
     return by_pre
 
 
-def load_development(folds):
+def load_development(folds, *, build_samples=pre_samples):
     """按冻结名单读完整游戏，仅消费所请求折的 PRE 和 Q。"""
     publication = open_artifact_envelope(
         frozen.DEVELOPMENT, expected_artifact_type=frozen.PUBLICATION_TYPE,
@@ -218,7 +223,7 @@ def load_development(folds):
                 q_record = by_pre.pop(key, None)
                 if q_record is None:
                     raise ValueError(f"合法狼人发言 PRE 缺少冻结 Q：{key}")
-                rows.extend(pre_samples(pre, wolves, reports, q_record, attempt_id=member["attempt_id"]))
+                rows.extend(build_samples(pre, wolves, reports, q_record, attempt_id=member["attempt_id"]))
     if by_pre:
         raise ValueError(f"所选折有 {len(by_pre)} 个 Q PRE 未匹配，首个为 {next(iter(by_pre))}")
     source = {
