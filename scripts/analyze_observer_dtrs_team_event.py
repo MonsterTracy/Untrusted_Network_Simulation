@@ -171,7 +171,7 @@ def _frozen_q(publication, selected_games):
     return by_pre
 
 
-def load_development(folds, *, build_samples=pre_samples):
+def load_development(folds, *, build_samples=pre_samples, visit_game=None):
     """按冻结名单读完整游戏，仅消费所请求折的 PRE 和 Q。"""
     publication = open_artifact_envelope(
         frozen.DEVELOPMENT, expected_artifact_type=frozen.PUBLICATION_TYPE,
@@ -190,7 +190,8 @@ def load_development(folds, *, build_samples=pre_samples):
             or fold_record["manifest_digest"] != pm["development_fold_manifest_digest"]):
         raise ValueError("冻结 Development Fold 名单不符")
     selected_folds = {fold: fold_games[fold] for fold in folds}
-    selected_games = {game_id for ids in selected_folds.values() for game_id in ids}
+    fold_by_game = {game_id: fold for fold, ids in selected_folds.items() for game_id in ids}
+    selected_games = set(fold_by_game)
     members = {game["game_id"]: game for game in pm["development_games"] if game["game_id"] in selected_games}
     by_pre = _frozen_q(pm, selected_games)
     game_ids = tuple(members)
@@ -213,6 +214,9 @@ def load_development(folds, *, build_samples=pre_samples):
             if game.bundle_digest != member["bundle_digest"] or not member["attempt_id"]:
                 raise ValueError(f"游戏尝试或 Bundle 身份不符：{game.game_id}")
             wolves = teams[game.game_id, game.bundle_digest]
+            if visit_game is not None:
+                visit_game(fold_by_game[game.game_id], game, wolves,
+                           publication_digest=publication.manifest_digest, attempt_id=member["attempt_id"])
             reports = {report.observation_id: report for report in game.belief_observations}
             if len(reports) != len(game.belief_observations):
                 raise ValueError(f"原始报告重复：{game.game_id}")
