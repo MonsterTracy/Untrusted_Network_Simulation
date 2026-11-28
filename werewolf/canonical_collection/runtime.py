@@ -311,7 +311,7 @@ class CanonicalGameRecorder:
             raise RuntimeError("runtime action has no unique pending slot")
         self._pending.raw_action = deepcopy(action)
 
-    def commit_verified_speech(self, env, envelope, *, expected_event=None):
+    def commit_verified_speech(self, env, envelope, *, expected_event=None, candidate_index=None):
         """Publish a verified speech against an already collected real PRE.
 
         No recorder evidence is added unless the whole staged step validates.
@@ -338,8 +338,14 @@ class CanonicalGameRecorder:
         staged._raw_actions = deepcopy(self._raw_actions)
         staged.after_agent_act((env.phase, envelope.speech))
         staged.after_env_step(staged_env, observation_after=result[0], terminal_after=result[2])
-        env._mark_speech_annotation(staged_env.speech_annotations[-1])
-        env._publish_verified_speech(staged_env)
+        annotation = staged_env.speech_annotations[-1]
+        if candidate_index is None:
+            env._mark_speech_annotation(annotation)
+            env._publish_verified_speech(staged_env)
+        else:
+            with self.call_audit.bind_candidate_perception(boundary_id=pending.prefix.boundary_id,
+                    candidate_index=candidate_index, speech=envelope.speech, annotation=annotation):
+                env._publish_verified_speech(staged_env)
         self._pending = staged._pending
         self.submitted_gameplay_actions = staged.submitted_gameplay_actions
         self._raw_actions = staged._raw_actions

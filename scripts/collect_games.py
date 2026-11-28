@@ -252,11 +252,13 @@ def publish_plan(path, plan):
 
 
 def run_campaign(campaign_path=None, *, resume=False, split_protocol_path=None, split_protocol_digest=None,
-                 storage_profile=None):
+                 storage_profile=None, online_policy=None):
     storage_profile = STORAGE if storage_profile is None else Path(storage_profile)
     root = cli._storage_root(storage_profile)
     campaign_path = campaign_path or root / "operator/collection_campaign.json"
     campaign = validate_campaign(read_json(campaign_path))
+    if online_policy is not None and (resume or campaign["seed_pool_size"] != campaign["target_games"]):
+        raise ValueError("ToM+3WD 新运行逐个尝试固定种子；seed_pool_size 须等于 target_games")
     identity = campaign["collection_id"]
     plan_path = cli._artifact_path(root, f"plans/{identity}.json")
     destination = cli._artifact_path(root, identity, "canonical")
@@ -276,6 +278,9 @@ def run_campaign(campaign_path=None, *, resume=False, split_protocol_path=None, 
         split_protocol = open_split_protocol(split_protocol_path, expected_digest=split_protocol_digest)
     head = clean_head()
     provenance, base_url = inspect_inputs()
+    if online_policy is not None:
+        policy_factory, method = online_policy
+        provenance["speech_method_sha256"] = sha256_bytes(canonical_json_bytes(method))
     fields = plan_fields(campaign, head, provenance, split_protocol=split_protocol)
     if resume:
         for field, expected in fields.items():
@@ -306,6 +311,24 @@ def run_campaign(campaign_path=None, *, resume=False, split_protocol_path=None, 
                       "plan_digest": plan.plan_digest, "plan_path": str(plan_path),
                       "canonical_destination": str(destination), "mode": "resume" if resume else "new"},
                      sort_keys=True), flush=True)
+    if online_policy is not None:
+        from collections import Counter
+
+        from werewolf.backends import load_named_backends
+        from werewolf.canonical_collection.production_runtime import Classic7RuntimeFactory
+        from werewolf.interventions.gameplay_server import execute_three_way_games
+
+        config = cli._runtime(RUNTIME)
+        if sha256_bytes(canonical_json_bytes(config)) != bound["runtime_config_sha256"]:
+            raise ValueError("ToM+3WD runtime config differs from the frozen Collection Plan")
+        result = execute_three_way_games(plan=plan, destination=destination, policy_factory=policy_factory, method=method,
+            runtime_factory=Classic7RuntimeFactory(runtime_config=config, backends=load_named_backends(config, max_retries=0),
+                                                   configured_call_limit=int(bound["configured_call_limit"])))
+        state = result.ledger_state
+        print(json.dumps({"path": str(result.collection_directory), "plan_digest": plan.plan_digest,
+                          "attempted": len(state.claims), "outcomes": dict(Counter(t.outcome.value for t in state.terminals))}),
+              flush=True)
+        return int(not state.target_reached)
     args = ["--storage-profile", str(storage_profile), "collect", "--plan", str(plan_path),
             "--runtime-config", str(RUNTIME), "--call-limit", bound["configured_call_limit"],
             "--destination", plan.collection_id]

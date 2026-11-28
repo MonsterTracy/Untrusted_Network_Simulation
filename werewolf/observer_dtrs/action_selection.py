@@ -1,4 +1,4 @@
-"""共用发言依据核验与确定性双价值离线选择。"""
+"""共用发言依据核验与确定性双价值选择。"""
 
 from dataclasses import asdict
 from fractions import Fraction
@@ -152,7 +152,8 @@ def _social_scores(candidates, indices):
     return {i: Fraction(str(candidates[i]["V_soc"])) for i in indices if candidates[i]["V_soc"] is not None}
 
 
-def select_with_sensitivity(candidates, feasible, delta, *, shared_best=None, certified_best=None, blocked=False):
+def select_with_sensitivity(candidates, feasible, delta, *, shared_best=None, certified_best=None, blocked=False,
+                            sensitivity=True):
     """只在完整可算的容忍集合比较，闭端点按精确社会差距判断。"""
     delta = parse_delta(delta)
     scores = _social_scores(candidates, feasible)
@@ -184,10 +185,12 @@ def select_with_sensitivity(candidates, feasible, delta, *, shared_best=None, ce
                 "gap_to_unfiltered_best": float(shared_best - selected_score) if shared_best is not None else None,
                 "gap_to_basis_certified_best": float(certified_best - selected_score) if certified_best is not None else None}
 
-    points = sorted(set(gaps.values()))
-    result.update(at(delta), sensitivity=[{"delta_from_exact": str(point),
-        "delta_until_exact": str(points[i + 1]) if i + 1 < len(points) else None, **at(point)}
-        for i, point in enumerate(points)])
+    result.update(at(delta))
+    if sensitivity:
+        points = sorted(set(gaps.values()))
+        result["sensitivity"] = [{"delta_from_exact": str(point),
+            "delta_until_exact": str(points[i + 1]) if i + 1 < len(points) else None, **at(point)}
+            for i, point in enumerate(points)]
     return result
 
 
@@ -196,8 +199,7 @@ def _match_identity(record, expected):
         raise ValueError("候选比较的 PRE、候选索引、原文摘要或观察者上下文不匹配")
 
 
-def compare_actions(batch, panel, rule, verification, social, cognitive, *, delta):
-    """在同一批声明候选、核验和价值上只切换三种方向许可。"""
+def _selection_inputs(batch, panel, verification, social, cognitive):
     if not has_declarations(batch) or verification["origin"] != "declared":
         raise ValueError("配对选择只接受具有原始依据声明的新候选")
     parent = _pre_identity(batch.pre)
@@ -208,14 +210,6 @@ def compare_actions(batch, panel, rule, verification, social, cognitive, *, delt
     observer_ids = tuple(panel["observers"])
     if tuple(social["observer_ids"]) != observer_ids:
         raise ValueError("两项价值未使用同一起点观察者人口")
-
-    decisions = decide_pre(panel, rule)
-    binary, three_way = set(), set()
-    for seat, row in decisions["observers"].items():
-        binary.update(PredictionPremise(seat, event, POS if row[p] > .5 else NEG)
-                      for event, p in zip(EVENTS, ("ps", "pT"), strict=True))
-        three_way.update(PredictionPremise(seat, event, POS if positive else NEG)
-                         for event, positive in row["permitted_premises"].items())
 
     entries, certified = [], []
     for i, (candidate, basis, soc, info) in enumerate(zip(batch.candidates, verification["candidates"], social["candidates"],
@@ -241,14 +235,48 @@ def compare_actions(batch, panel, rule, verification, social, cognitive, *, delt
     unfiltered = _social_scores(entries, range(len(entries)))
     shared_best = max(unfiltered.values()) if entries and len(unfiltered) == len(entries) else None
     certified_best = max(unfiltered[i] for i in certified) if certified and all(i in unfiltered for i in certified) else None
-    arms = {}
-    for name, allowed in zip(ARMS, (None, binary, three_way), strict=True):
-        feasible = [i for i in certified if allowed is None or set(batch.candidates[i].required_premises) <= allowed]
-        arms[name] = {**select_with_sensitivity(entries, feasible, delta, shared_best=shared_best,
-                                                certified_best=certified_best, blocked=not independent),
-                      "premise_not_permitted_indices": [i for i in certified if i not in feasible],
-                      "allowed_premises": None if allowed is None else
-                      [asdict(p) for p in sorted(allowed, key=lambda p: (p.observer_id, p.event, p.direction))]}
+    inputs = {**context, "status": "compared" if independent else "independent_candidate_not_certified", "topic": batch.topic,
+              "observer_ids": observer_ids, "candidate_count": len(entries), "certified_candidate_count": len(certified),
+              "determinate_candidate_count": sum(e["basis_verification"]["status"] != "undetermined" for e in entries),
+              "certified_independent_indices": independent, "candidate_basis_verification": verification,
+              "cognitive_head_statuses": cognitive["head_statuses"], "candidates": entries,
+              "unfiltered_V_soc_star": float(shared_best) if shared_best is not None else None,
+              "basis_certified_V_soc_star": float(certified_best) if certified_best is not None else None,
+              "unfiltered_missing_social_indices": [i for i in range(len(entries)) if i not in unfiltered]}
+    return inputs, certified, shared_best, certified_best
+
+
+def _three_way_premises(decisions):
+    return {PredictionPremise(seat, event, POS if positive else NEG)
+            for seat, row in decisions["observers"].items() for event, positive in row["permitted_premises"].items()}
+
+
+def _select_with_permission(batch, prepared, allowed, delta, *, sensitivity):
+    inputs, certified, shared_best, certified_best = prepared
+    feasible = [i for i in certified if allowed is None or set(batch.candidates[i].required_premises) <= allowed]
+    selection = select_with_sensitivity(inputs["candidates"], feasible, delta, shared_best=shared_best,
+                                        certified_best=certified_best, blocked=not inputs["certified_independent_indices"],
+                                        sensitivity=sensitivity)
+    return {**selection, "premise_not_permitted_indices": [i for i in certified if i not in feasible],
+            "allowed_premises": None if allowed is None else
+            [asdict(p) for p in sorted(allowed, key=lambda p: (p.observer_id, p.event, p.direction))]}
+
+
+def select_three_way(batch, decisions, verification, social, cognitive, *, delta):
+    """正式在线方法只在已计算的 Shared-risk 许可下选择一次。"""
+    prepared = _selection_inputs(batch, decisions, verification, social, cognitive)
+    selection = _select_with_permission(batch, prepared, _three_way_premises(decisions), delta, sensitivity=False)
+    return {**prepared[0], "status": selection["status"], "selection": selection}
+
+
+def compare_actions(batch, panel, rule, verification, social, cognitive, *, delta):
+    """离线对照在同一批声明候选、核验和价值上切换三种方向许可。"""
+    prepared = _selection_inputs(batch, panel, verification, social, cognitive)
+    decisions = decide_pre(panel, rule)
+    binary = {PredictionPremise(seat, event, POS if row[p] > .5 else NEG)
+              for seat, row in decisions["observers"].items() for event, p in zip(EVENTS, ("ps", "pT"), strict=True)}
+    arms = {name: _select_with_permission(batch, prepared, allowed, delta, sensitivity=True)
+            for name, allowed in zip(ARMS, (None, binary, _three_way_premises(decisions)), strict=True)}
     reference, two, three = (set(arms[name]["feasible_indices"]) for name in ARMS)
     if not three <= two <= reference:
         raise ValueError("三臂认知可行集合的包含关系遭到破坏")
@@ -256,12 +284,4 @@ def compare_actions(batch, panel, rule, verification, social, cognitive, *, delt
     for first, second in combinations(ARMS, 2):
         a, b = (arms[name]["selected_index"] for name in (first, second))
         differences[f"{first}/{second}"] = a != b if a is not None and b is not None else None
-    return {**context, "status": "compared" if independent else "independent_candidate_not_certified", "topic": batch.topic,
-            "observer_ids": observer_ids, "candidate_count": len(entries), "certified_candidate_count": len(certified),
-            "determinate_candidate_count": sum(e["basis_verification"]["status"] != "undetermined" for e in entries),
-            "certified_independent_indices": independent, "candidate_basis_verification": verification,
-            "cognitive_head_statuses": cognitive["head_statuses"], "candidates": entries,
-            "unfiltered_V_soc_star": float(shared_best) if shared_best is not None else None,
-            "basis_certified_V_soc_star": float(certified_best) if certified_best is not None else None,
-            "unfiltered_missing_social_indices": [i for i in range(len(entries)) if i not in unfiltered],
-            "arms": arms, "feasible_nesting": True, "selection_differences": differences}
+    return {**prepared[0], "arms": arms, "feasible_nesting": True, "selection_differences": differences}

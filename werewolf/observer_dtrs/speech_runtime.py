@@ -1,8 +1,4 @@
-"""在已有 pending PRE 上执行显式启用的研究发言。
-
-旧情境入口保留命中任一存活狼的事件。新受控入口使用原始报告包含当前
-发言狼的事件。两者都复用公开 V1 证据、Actor、Parser 和原子提交。
-"""
+"""通过现有 pending PRE 与原生提交执行三支认知及历史研究发言。"""
 from dataclasses import asdict, dataclass
 from enum import Enum
 import json
@@ -11,7 +7,7 @@ from time import perf_counter
 from types import SimpleNamespace
 
 from werewolf.strategy.speech_planning import generate_candidates
-from werewolf.speech.commit_workflow import realize_and_commit
+from werewolf.speech.commit_workflow import commit_public_speech, realize_and_commit
 from werewolf.speech.realization import expected_action
 from werewolf.artifact_io import canonical_json_bytes, sha256_bytes
 from werewolf.canonical_collection.call_audit import AuditedBackend
@@ -430,3 +426,105 @@ class ReportEventGamePolicy:
                                  'q_seconds': self._q_seconds,
                                  'tom_integration': summarize_tom_integration(self._tom_integration),
                                  'backend_calls': summary.used_calls, 'backend_retries': summary.retry_calls})
+
+
+class SpeechDecisionUnavailable(RuntimeError):
+    """当前狼人发言没有可执行的正式选择。"""
+
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f"ToM+3WD 无法完成发言决策：{status}")
+
+
+class ThreeWaySpeechPolicy:
+    """仅在合法狼人发言接入五层方法，交回原生步结果。"""
+
+    def __init__(self, *, agents, predictor, model, rule, cognitive, delta, record_evidence):
+        from werewolf.observer_dtrs.action_selection import parse_delta
+
+        self._delta = parse_delta(delta)
+        if any(component is None for component in (predictor, model, rule, cognitive)):
+            raise SpeechDecisionUnavailable("frozen_model_missing")
+        self._agents = tuple(agents)
+        self._predictor = predictor
+        self._model = model
+        self._rule = rule
+        self._cognitive = cognitive
+        self._record = record_evidence
+
+    def handle_pre(self, *, env, recorder, call_audit, observation, handoff):
+        if env.phase not in ('speech', 'speech_pk') or observation.get('identity') != 'Werewolf':
+            return None
+
+        from werewolf.observer_dtrs.action_selection import select_three_way
+        from werewolf.observer_dtrs.report_state_decision import decide_pre
+        from werewolf.observer_dtrs.report_state_probability import predict_pre
+        from werewolf.observer_dtrs.speech_consequences import score_candidates
+
+        if call_audit is not recorder.call_audit or recorder._env is not env:
+            raise ValueError('正式三支发言要求当前 Canonical Recorder 与调用记录')
+        pre = recorder.public_pre_for_handoff(handoff)
+        audit = {'method': ReportEventArm.THREE_WAY.value, 'game_id': pre.game_id, 'attempt_id': recorder.claim.attempt_id,
+                 'boundary_id': pre.boundary_id, 'prefix_digest': pre.prefix_digest, 'step_index': pre.step_index,
+                 'acting_wolf': pre.current_speaker, 'stage': 'pre', 'delta_exact': str(self._delta)}
+        try:
+            if freeze_public_event_history(env.public_events).digest != pre.public_event_digest:
+                raise ValueError('正式三支发言的 pending PRE 已变化')
+            team = _legal_team(pre, observation)
+            seat = observation['current_act_idx']
+            actor = self._agents[seat - 1]
+            audit['stage'] = 'current_final_tom'
+            prediction = self._predictor.predict(pre)
+            q = ProbabilityMatrix(prediction.game_id, prediction.boundary_id, prediction.prefix_digest,
+                                  prediction.probabilities)
+            audit['stage'] = 'cognition'
+            decisions = decide_pre(predict_pre(pre, team, q, self._model), self._rule)
+            audit.update(current_q=q.values, cognition=decisions)
+
+            audit['stage'] = 'candidate_generation'
+            with call_audit.action_context(acting_player_id=seat, boundary_id=pre.boundary_id, is_public_speech=True):
+                batch = actor.generate_speech_candidates(pre, known_wolf_ids=team, q=q)
+            audit.update(topic=batch.topic, generated_candidates=[asdict(candidate) for candidate in batch.candidates])
+            audit['stage'] = 'basis_verification'
+            with call_audit.context(purpose=BackendCallPurpose.RUNTIME, operation_id=f'{pre.boundary_id}-candidate-bases',
+                                    boundary_id=pre.boundary_id, observer_id=pre.current_speaker):
+                verification = actor.verify_speech_candidate_bases(batch, known_wolf_ids=team)
+            audit['basis_verification'] = verification
+
+            def candidate_perception(index, speech):
+                return call_audit.candidate_perception_context(boundary_id=pre.boundary_id, speaker_id=seat,
+                                                               candidate_index=index, speech=speech)
+
+            audit['stage'] = 'social_value'
+            social = score_candidates(batch, team, q, self._model, perceiver=env.speech_perceiver,
+                                      predictor=self._predictor, perception_context=candidate_perception)
+            audit['stage'] = 'cognitive_value'
+            information = self._cognitive.predict_candidates(batch, team, q)
+            audit['stage'] = 'selection'
+            decision = select_three_way(batch, decisions, verification, social, information, delta=self._delta)
+            audit['decision'] = decision
+            selection = decision['selection']
+            if selection['status'] != 'selected':
+                raise SpeechDecisionUnavailable(selection['status'])
+            selected = decision['candidates'][selection['selected_index']]
+
+            audit['stage'] = 'commit'
+            step = commit_public_speech(selected['text'], pre=pre, env=env, recorder=recorder, handoff=handoff,
+                                        scored_candidate=selected)
+            annotation = env.speech_annotations[-1]
+            audit['commit'] = {'action_id': recorder.submitted_gameplay_actions[-1].action_id,
+                               'event_id': annotation.event_id, 'annotation_digest': annotation.annotation_digest}
+            audit['stage'] = 'post_speech_final_tom'
+            audit['post_speech'] = self._predictor.observe_after_speech(
+                freeze_public_event_history(env.public_events), env.speech_annotations, selected['social_prediction'],
+            )
+        except Exception as error:
+            audit.update(status='failed', error_type=type(error).__name__, error_message=str(error))
+            self._record(audit)
+            raise
+        audit.update(status='committed', stage='complete')
+        self._record(audit)
+        return step
+
+    def after_step(self, *, env, done, info):
+        """公开轨迹由原生环境更新，后续狼人 PRE 会重新读取。"""

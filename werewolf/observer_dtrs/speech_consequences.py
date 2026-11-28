@@ -1,5 +1,6 @@
 """独立的发言后果预测，使用父 PRE 上可推导的公开调度。"""
 
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, replace
 from math import fsum
 
@@ -12,7 +13,7 @@ from werewolf.observer_dtrs import report_state_probability as probability
 from werewolf.observer_dtrs.final_tom_capsule import CapsulePredictor
 from werewolf.observer_dtrs.probabilities import ProbabilityMatrix
 from werewolf.strategy.counterfactual_tom import derive_public_phase_speaker_order
-from werewolf.structured_history import StructuredTokenDescriptor, StructuredTokenPlan
+from werewolf.structured_history import StructuredTokenDescriptor, StructuredTokenPlan, plan_public_history
 from werewolf.tom.evaluation import predict_structured_observers
 from werewolf.tom.final_capacity import derived_capacity, validate_final_pre
 
@@ -43,6 +44,10 @@ class ConsequencePlan:
 
 def _model_tokens(plan):
     return [tuple(getattr(t, field) for field in MODEL_FIELDS) for t in plan.tokens]
+
+
+def _model_input_digest(plan):
+    return sha256_bytes(canonical_json_bytes(_model_tokens(plan)))
 
 
 def model_input_differences(left, right):
@@ -88,8 +93,7 @@ def build_consequence_plan(pre, text, actions):
     record = plan.to_record()
     del record["plan_digest"]
     plan = replace(plan, plan_digest=sha256_bytes(canonical_json_bytes(record)))
-    return ConsequencePlan(pre.game_id, pre.boundary_id, pre.prefix_digest, text_sha256, plan,
-                           sha256_bytes(canonical_json_bytes(_model_tokens(plan))))
+    return ConsequencePlan(pre.game_id, pre.boundary_id, pre.prefix_digest, text_sha256, plan, _model_input_digest(plan))
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,16 @@ class SpeechConsequencePredictor(CapsulePredictor):
         log_q = torch.full((7, 7), -torch.inf)
         log_q[nonself] = torch.tensor(nonself_log_q).flatten()
         return Forecast(matrix, log_q)
+
+    def observe_after_speech(self, history, annotations, selected_forecast):
+        """在真实发言后公开边界更新 Q，包括投票开始且尚未提交选票的时点。"""
+        plan = plan_public_history(history, {annotation.event_id: annotation.actions for annotation in annotations},
+                                   boundary_digest=history.digest)
+        digest = _model_input_digest(plan)
+        matched = digest == selected_forecast["model_input_digest"]
+        q = selected_forecast["q"] if matched else predict_structured_observers(plan, self._model, self._device)[0]
+        return {"boundary_event_id": history.events[-1].event_id, "public_history_digest": history.digest,
+                "model_input_digest": digest, "reused_selected_prediction": matched, "q": q}
 
 
 @dataclass(frozen=True)
@@ -155,15 +169,16 @@ def forecast_record(plan, forecast, updated, current):
             "q": forecast.matrix.values, "exposure": asdict(updated), **social_values(current, updated)}
 
 
-def score_candidates(batch, known_wolf_ids, matrix, model, *, perceiver, predictor):
+def score_candidates(batch, known_wolf_ids, matrix, model, *, perceiver, predictor, perception_context=None):
     """解析既有候选，重复输入共享同一预测，候选身份分别保留。"""
     pre = batch.pre
     contexts, current = current_exposure(pre, known_wolf_ids, matrix, model)
     cache, records = {}, []
     for i, candidate in enumerate(batch.candidates):
-        audit = perceiver.parse_with_audit(speaker=PLAYER_IDS.index(pre.current_speaker) + 1,
-                                          speech=candidate.text, day=pre.public_temporal_state.day,
-                                          phase=PARSER_PHASE[pre.public_temporal_state.phase.value])
+        with perception_context(i, candidate.text) if perception_context is not None else nullcontext():
+            audit = perceiver.parse_with_audit(speaker=PLAYER_IDS.index(pre.current_speaker) + 1,
+                                              speech=candidate.text, day=pre.public_temporal_state.day,
+                                              phase=PARSER_PHASE[pre.public_temporal_state.phase.value])
         record = {"index": i, **asdict(candidate), "text_sha256": sha256_bytes(candidate.text.encode()),
                   "parse": asdict(audit), "prediction": None}
         records.append(record)

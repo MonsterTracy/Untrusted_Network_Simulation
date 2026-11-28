@@ -8,8 +8,10 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
+from werewolf.artifact_io import sha256_bytes
 from werewolf.backends.openai_compatible import model_request_context
 from werewolf.canonical_collection.attempt_ledger import CollectionPlan
+from werewolf.canonical_collection.speech import V1AnnotationStatus
 from werewolf.canonical_collection.trajectory_evidence import (
     BackendCallEvidence,
     BackendCallPurpose,
@@ -138,6 +140,52 @@ class CanonicalCallAudit:
             boundary_id=boundary_id,
             observer_id=normalize_player(speaker_id),
         )
+
+    @staticmethod
+    def _candidate_perception_operation(boundary_id, candidate_index, speech):
+        return f"{boundary_id}-candidate-{candidate_index}-{sha256_bytes(speech.encode('utf-8'))}"
+
+    def candidate_perception_context(self, *, boundary_id, speaker_id, candidate_index, speech):
+        """候选解析是私有运行调用，公开事件 ID 尚未产生。"""
+        return self.context(
+            purpose=BackendCallPurpose.RUNTIME,
+            operation_id=self._candidate_perception_operation(boundary_id, candidate_index, speech),
+            boundary_id=boundary_id, observer_id=normalize_player(speaker_id), isolate_dispatches=True,
+        )
+
+    @contextmanager
+    def bind_candidate_perception(self, *, boundary_id, candidate_index, speech, annotation):
+        """在暂存时核对原始解析，在原生发布完成后绑定公开事件。"""
+        operation = self._candidate_perception_operation(boundary_id, candidate_index, speech)
+        records = [(i, record) for i, record in enumerate(self._records)
+                   if record.purpose is BackendCallPurpose.RUNTIME and record.operation_id.startswith(f"{operation}-dispatch-")]
+        if (not records or len(records) != len(annotation.attempts)
+                or annotation.status is V1AnnotationStatus.ERROR
+                or any(record.operation_id == annotation.event_id for record in self._records)):
+            raise ValueError("选中候选缺少唯一的真实解析调用证据")
+        bound = []
+        for (index, record), attempt in zip(records, annotation.attempts, strict=True):
+            payload = record.private_payload.to_value()
+            success = attempt.status is not V1AnnotationStatus.ERROR
+            if ((record.boundary_id, record.observer_id, payload["method"], payload["response"])
+                    != (boundary_id, annotation.speaker, "chat", attempt.raw_response)
+                    or (success and record.status is not BackendCallStatus.SUCCESS)):
+                raise ValueError("候选解析调用、PRE、发言人或响应与暂存 V1 不一致")
+            payload.update(candidate_call_id=record.call_id, candidate_operation_id=record.operation_id,
+                           candidate_call_digest=record.call_digest, semantic_status="success" if success else "error",
+                           semantic_error_category=attempt.error_category, semantic_error_message=attempt.error_message)
+            bound.append((index, construct_backend_call_evidence(
+                call_id=attempt.call_id, operation_id=annotation.event_id, purpose=BackendCallPurpose.SPEECH_PERCEPTION,
+                status=BackendCallStatus.SUCCESS if success else BackendCallStatus.ERROR, boundary_id=boundary_id,
+                observer_id=record.observer_id, attempt_index=attempt.attempt_index,
+                backend_identity=record.backend_identity, model_identity=record.model_identity,
+                parser_identity=record.parser_identity, prompt_identity=record.prompt_identity,
+                retry_policy_identity=record.retry_policy_identity, call_budget_identity=record.call_budget_identity,
+                private_payload=payload,
+            )))
+        yield
+        for index, record in bound:
+            self._records[index] = record
 
     def prepare_report(
         self,

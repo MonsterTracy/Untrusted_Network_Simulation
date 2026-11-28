@@ -26,6 +26,35 @@ from werewolf.interventions.online.plan import probe_candidate_pool, router_assi
 from werewolf.interventions.online.records import validate_probe_lifecycle_record
 
 
+def execute_three_way_games(*, plan, destination, runtime_factory, policy_factory, method):
+    """在固定种子上执行唯一的 ToM+3WD 策略并保留所有尝试。"""
+    from werewolf.canonical_collection.attempt_ledger import CollectionSeedPoolExhausted, validate_attempt_ledger
+    from werewolf.canonical_collection.collector import CollectionResult, collect
+    from werewolf.canonical_collection.production_runtime import classic7_full_game_replay_executor
+
+    dest = safe_path(destination)
+    if (plan.target_canonical_success_count != len(plan.ordered_seed_pool)
+            or dict(plan.environment_provenance).get('speech_method_sha256') != digest(method)):
+        raise ValueError('正式 ToM+3WD 要求固定尝试人口及匹配的发言方法来源')
+    write_once(dest / 'speech-method.json', {'plan_digest': plan.plan_digest, **method})
+
+    def with_policy(*, plan, claim):
+        runtime = runtime_factory(plan=plan, claim=claim)
+        evidence = dest / 'restricted' / 'speech-evidence' / claim.attempt_id
+
+        def record(row):
+            write_once(evidence / f"{row['step_index']:06d}.json", row)
+
+        runtime.online_pilot = policy_factory(agents=runtime.agents, record_evidence=record)
+        runtime.replay_executor = classic7_full_game_replay_executor(runtime.recorder.runtime_configuration)
+        return runtime
+
+    try:
+        return collect(plan=plan, runtime_factory=with_policy, destination=dest)
+    except CollectionSeedPoolExhausted:
+        return CollectionResult(dest, validate_attempt_ledger(dest / 'attempt_ledger', plan))
+
+
 def execute_report_event_games(*, plan, reference_collection, assignment_seed,
                                destination, runtime_factory, predictor):
     """按局预先分配三臂，同局所有合法狼人发言使用同一策略。"""

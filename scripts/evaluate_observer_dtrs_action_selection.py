@@ -1,4 +1,4 @@
-"""共享候选依据与价值的三臂配对评价，及归档候选依据诊断。"""
+"""三臂离线配对、候选依据诊断及正式 ToM+3WD 在线执行。"""
 
 import argparse
 from collections import Counter
@@ -101,22 +101,35 @@ def summarize(rows):
     return result
 
 
-def _comparison(args, publication):
+def _decision_models(args, publication):
     model, source = replay.load_probability_model(args.probability_artifact, publication)
     rule = report_state_decision.load_shared_rule(args.risk_artifact,
                                                   probability_manifest_digest=source["probability_manifest_digest"])
     active = cognitive_value.load_predictor(args.cognitive_artifact, args.probability_artifact)
     archive = open_artifact_envelope(args.cognitive_artifact, expected_artifact_type=cognitive_value.ARTIFACT_TYPE,
                                      expected_schema_version=cognitive_value.ARTIFACT_TYPE)
-    perceiver, parser_identity = replay.load_perceiver(args.runtime_config)
     torch.set_num_threads(1)
     predictor = speech_consequences.SpeechConsequencePredictor(args.capsule, expected_manifest_digest=args.capsule_digest,
                                                                expected_scope="PINNED_FINAL_INFERENCE_UNQUALIFIED", device="cpu")
-    compare = partial(compare_pre, model=model, rule=rule, cognitive=active, perceiver=perceiver, predictor=predictor,
-                      delta=args.delta)
-    return compare, {"probability_source": source, "risk_manifest_digest": rule.rule_manifest_digest,
-                     "cognitive_manifest_digest": archive.manifest_digest, "final_tom": predictor.identity,
-                     "candidate_parser": parser_identity, "delta_exact": str(args.delta)}
+    return {"model": model, "rule": rule, "cognitive": active, "predictor": predictor, "delta": args.delta}, {
+        "probability_source": source, "risk_manifest_digest": rule.rule_manifest_digest,
+        "cognitive_manifest_digest": archive.manifest_digest, "final_tom": predictor.identity, "delta_exact": str(args.delta),
+    }
+
+
+def _comparison(args, publication):
+    components, sources = _decision_models(args, publication)
+    perceiver, parser_identity = replay.load_perceiver(args.runtime_config)
+    return partial(compare_pre, perceiver=perceiver, **components), {**sources, "candidate_parser": parser_identity}
+
+
+def _frozen_publication():
+    frozen = replay.frozen
+    publication = open_artifact_envelope(frozen.DEVELOPMENT, expected_artifact_type=frozen.PUBLICATION_TYPE,
+                                         expected_schema_version=frozen.PUBLICATION_VERSION)
+    if publication.manifest_digest != frozen.PUBLICATION_DIGEST or publication.manifest["split_manifest_digest"] != frozen.SPLIT_DIGEST:
+        raise ValueError("冻结 Development 或 Split 不匹配")
+    return publication
 
 
 def main(argv=None):
@@ -124,26 +137,35 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="mode", required=True)
     compare = commands.add_parser("compare", help="评价有原始声明的新候选")
     diagnose = commands.add_parser("diagnose", help="只做既有候选依据诊断")
+    online = commands.add_parser("online", help="以正式 ToM+3WD 执行固定种子的 Classic7 运行")
     for command in (compare, diagnose):
         command.add_argument("--candidate-jsonl", type=Path, required=True)
         command.add_argument("--runtime-config", type=Path, required=True)
-    compare.add_argument("--delta", type=action_selection.parse_delta, required=True)
-    compare.add_argument("--capsule", type=Path, required=True)
-    compare.add_argument("--capsule-digest", required=True)
-    compare.add_argument("--probability-artifact", type=Path, default=probability_study.DESTINATION)
-    compare.add_argument("--risk-artifact", type=Path, default=risk_study.DESTINATION)
-    compare.add_argument("--cognitive-artifact", type=Path, default=cognitive_study.DESTINATION)
+    for command in (compare, online):
+        command.add_argument("--delta", type=action_selection.parse_delta, required=True)
+        command.add_argument("--capsule", type=Path, required=True)
+        command.add_argument("--capsule-digest", required=True)
+        command.add_argument("--probability-artifact", type=Path, default=probability_study.DESTINATION)
+        command.add_argument("--risk-artifact", type=Path, default=risk_study.DESTINATION)
+        command.add_argument("--cognitive-artifact", type=Path, default=cognitive_study.DESTINATION)
+    online.add_argument("--campaign", type=Path, required=True, help="使用现有 Classic7 campaign JSON")
+    online.add_argument("--storage-profile", type=Path, help="默认使用现有服务器科研数据目录")
     args = parser.parse_args(argv)
+
+    if args.mode == "online":
+        from scripts import collect_games
+        from werewolf.observer_dtrs.speech_runtime import ReportEventArm, ThreeWaySpeechPolicy
+
+        components, sources = _decision_models(args, _frozen_publication())
+        method = {"method": ReportEventArm.THREE_WAY.value, "thresholds": components["rule"].thresholds.to_record(), **sources}
+        return collect_games.run_campaign(args.campaign, storage_profile=args.storage_profile,
+                                          online_policy=(partial(ThreeWaySpeechPolicy, **components), method))
 
     destination = DESTINATIONS[args.mode]
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"已有候选行动评价产物：{destination}")
     plan, candidate_settings, generated, candidate_digest = replay.read_candidate_study(args.candidate_jsonl)
-    frozen = replay.frozen
-    publication = open_artifact_envelope(frozen.DEVELOPMENT, expected_artifact_type=frozen.PUBLICATION_TYPE,
-                                         expected_schema_version=frozen.PUBLICATION_VERSION)
-    if publication.manifest_digest != frozen.PUBLICATION_DIGEST or publication.manifest["split_manifest_digest"] != frozen.SPLIT_DIGEST:
-        raise ValueError("冻结 Development 或 Split 不匹配")
+    publication = _frozen_publication()
     inputs = replay.load_candidate_inputs(plan, publication)
     agent, agent_settings = generation.load_agent(args.runtime_config)
     selector, models = _comparison(args, publication) if args.mode == "compare" else (None, {})
@@ -167,4 +189,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
