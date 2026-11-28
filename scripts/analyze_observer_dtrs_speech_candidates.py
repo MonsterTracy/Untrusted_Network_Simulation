@@ -266,7 +266,7 @@ def load_agent(runtime_path):
         "source_sha256": {str(path.relative_to(ROOT)): sha256_bytes(path.read_bytes()) for path in source_files},
         "profile": PROFILE, "backend": PROFILE, "base_url": backend_config["base_url"], "model": profile["model"],
         "temperature": params["temperature"], "max_tokens": params["gameplay_max_tokens"], "max_retries": 0,
-        "prompt_prefix": SPEECH_CANDIDATE_PROMPT, "response_schema": "speech_candidates",
+        "prompt_prefix": SPEECH_CANDIDATE_PROMPT, "response_schema": "speech_candidates", "declared_basis_fields": True,
         "chat_template_kwargs": {"enable_thinking": False}, "semantic_quality": "human_review_pending",
     }
     return agent, settings

@@ -396,7 +396,6 @@ class GPTAgent(LLMAgent):
         )
 
         context = build_candidate_context(pre, known_wolf_ids, q)
-        replyable = context["replyable_observers"]
         prompt = SPEECH_CANDIDATE_PROMPT + "\n\n" + json.dumps(context, ensure_ascii=False)
         temperature, max_tokens = self._request_limits()
         content, metadata = self._chat_with_metadata(
@@ -404,13 +403,34 @@ class GPTAgent(LLMAgent):
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=self._decision_response_format(
-                "speech_candidates", **candidate_response_properties(replyable),
+                "speech_candidates", **candidate_response_properties(context),
             ),
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         if metadata["finish_reason"] == "length":
             raise GameplayActionValidationError("发言候选响应被截断")
-        return parse_speech_candidates(content, pre=pre, replyable_observers=replyable)
+        return parse_speech_candidates(content, pre=pre, context=context)
+
+    def verify_speech_candidate_bases(self, batch, *, known_wolf_ids):
+        """一次核验整批候选的预测前提及公开引用。"""
+        from werewolf.observer_dtrs.action_selection import (
+            BASIS_VERIFICATION_PROMPT, basis_verification_context, basis_verification_properties, parse_basis_verification,
+        )
+
+        context = basis_verification_context(batch, known_wolf_ids)
+        temperature, max_tokens = self._request_limits()
+        content, metadata = self._chat_with_metadata(
+            [{"role": "user", "content": BASIS_VERIFICATION_PROMPT + "\n\n" + json.dumps(context, ensure_ascii=False)}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=self._decision_response_format(
+                "speech_candidate_bases", **basis_verification_properties(context),
+            ),
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        if metadata["finish_reason"] == "length":
+            raise GameplayActionValidationError("候选依据核验响应被截断")
+        return parse_basis_verification(content, batch, context)
 
     def select_report_event_plan(self, context, *, basis_refs):
         """在私有策略调用中选一个合法发言计划，返回索引和显式依据。"""

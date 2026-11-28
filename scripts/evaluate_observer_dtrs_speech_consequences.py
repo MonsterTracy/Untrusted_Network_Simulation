@@ -110,6 +110,18 @@ def load_perceiver(config_path):
     }
 
 
+def bind_archived_candidates(row, inputs):
+    pre, team, raw_q = inputs[candidate_study.pre_key(row)]
+    q = candidate_study.bind_q(pre, raw_q)
+    # 核对原调用消费了同一席位 Q、队伍与完整公开前缀。
+    canonical = candidate_study.build_candidate_context(pre, team, q)
+    if canonical_json_bytes(row["input"]) != canonical_json_bytes(canonical):
+        raise ValueError(f"已生成候选的输入与冻结 PRE 不符：{pre.boundary_id}")
+    batch = parse_speech_candidates(json.dumps({"topic": row["topic"], "candidates": row["candidates"]}),
+                                    pre=pre, context=canonical, archived=True)
+    return batch, team, q
+
+
 def evaluate_candidates(generated, inputs, model, *, perceiver, predictor):
     results = []
     for row in generated:
@@ -117,14 +129,7 @@ def evaluate_candidates(generated, inputs, model, *, perceiver, predictor):
         if row["status"] != "ok":
             results.append({**identity, "status": row["status"], "error": row["error"], "candidates": []})
             continue
-        pre, team, raw_q = inputs[candidate_study.pre_key(row)]
-        q = candidate_study.bind_q(pre, raw_q)
-        # 核对原调用确实消费了同一席位 Q、队伍及完整公开前缀。
-        canonical = candidate_study.build_candidate_context(pre, team, q)
-        if canonical_json_bytes(row["input"]) != canonical_json_bytes(canonical):
-            raise ValueError(f"已生成候选的输入与冻结 PRE 不符：{pre.boundary_id}")
-        batch = parse_speech_candidates(json.dumps({"topic": row["topic"], "candidates": row["candidates"]}),
-                                        pre=pre, replyable_observers=canonical["replyable_observers"])
+        batch, team, q = bind_archived_candidates(row, inputs)
         result = consequences.score_candidates(batch, team, q, model, perceiver=perceiver, predictor=predictor)
         results.append({**identity, "status": "evaluated", **result})
     return results

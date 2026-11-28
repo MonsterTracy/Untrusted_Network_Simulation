@@ -1,5 +1,5 @@
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -19,8 +19,9 @@ from werewolf.speech.commit_workflow import commit_public_speech
 TOPIC = "如何处理当前公开讨论中的证据分歧"
 
 
-def candidate(function, text, addressee=None):
-    return {"function": function, "text": text, "addressee": addressee}
+def candidate(function, text, addressee=None, *, premises=(), evidence=()):
+    return {"function": function, "text": text, "addressee": addressee,
+            "required_premises": list(premises), "public_evidence_refs": list(evidence)}
 
 
 def mock_agent(rows, *, raw=None, finish_reason="stop"):
@@ -154,7 +155,7 @@ def test_one_supplement_can_belong_to_any_function(extra, omit):
     agent, chat = mock_agent(rows)
     batch = agent.generate_speech_candidates(pre, known_wolf_ids=P[:2], q=frozen_q(pre))
     chat.assert_called_once()
-    assert [vars(item) for item in batch.candidates] == rows
+    assert json.loads(json.dumps([asdict(item) for item in batch.candidates])) == rows
 
 
 @pytest.mark.parametrize("functions", [("INFORM", "INFORM", "ADVOCATE", "ADVOCATE"),

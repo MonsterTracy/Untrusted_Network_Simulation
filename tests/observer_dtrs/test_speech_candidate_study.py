@@ -148,6 +148,7 @@ def test_run_emits_fixed_sample_before_one_request_and_reconstructs_its_exact_pa
     assert before_request[0] == plan
     settings = before_request[1]
     assert settings["type"] == "settings" and settings["semantic_quality"] == "human_review_pending"
+    assert settings["declared_basis_fields"] is True
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "ok" and result["candidates"] == payload["candidates"]
     assert result["phase_speaker_order"] == [P[-1], *P[:-1]]
@@ -157,7 +158,7 @@ def test_run_emits_fixed_sample_before_one_request_and_reconstructs_its_exact_pa
     request = create.call_args.kwargs
     assert request["messages"] == [{"role": "user", "content": settings["prompt_prefix"] + "\n\n"
                                     + json.dumps(result["input"], ensure_ascii=False)}]
-    expected_properties = candidate_response_properties(result["input"]["replyable_observers"])
+    expected_properties = candidate_response_properties(result["input"])
     assert request["response_format"]["json_schema"]["schema"]["properties"] == expected_properties
     assert request["model"] == settings["model"] == "qwen35-9b"
     assert request["temperature"] == settings["temperature"] == 0.7
